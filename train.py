@@ -160,8 +160,6 @@ class GPT(nn.Module):
             }
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
-        self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
         # Value embeddings
         head_dim = config.n_embd // config.n_head
         kv_dim = config.n_kv_head * head_dim
@@ -193,9 +191,6 @@ class GPT(nn.Module):
             torch.nn.init.zeros_(block.attn.c_proj.weight)
             torch.nn.init.uniform_(block.mlp.c_fc.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
-        # Per-layer scalars
-        self.resid_lambdas.fill_(1.0)
-        self.x0_lambdas.fill_(0.1)
         # Value embeddings
         for ve in self.value_embeds.values():
             torch.nn.init.uniform_(ve.weight, -s, s)
@@ -241,12 +236,7 @@ class GPT(nn.Module):
         """Estimated FLOPs per token (forward + backward)."""
         nparams = sum(p.numel() for p in self.parameters())
         value_embeds_numel = sum(ve.weight.numel() for ve in self.value_embeds.values())
-        nparams_exclude = (
-            self.transformer.wte.weight.numel()
-            + value_embeds_numel
-            + self.resid_lambdas.numel()
-            + self.x0_lambdas.numel()
-        )
+        nparams_exclude = self.transformer.wte.weight.numel() + value_embeds_numel
         h = self.config.n_head
         q = self.config.n_embd // self.config.n_head
         t = self.config.sequence_len
@@ -262,14 +252,12 @@ class GPT(nn.Module):
         value_embeds = sum(p.numel() for p in self.value_embeds.parameters())
         lm_head = sum(p.numel() for p in self.lm_head.parameters())
         transformer_matrices = sum(p.numel() for p in self.transformer.h.parameters())
-        scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel()
-        total = wte + value_embeds + lm_head + transformer_matrices + scalars
+        total = wte + value_embeds + lm_head + transformer_matrices
         return {
             "wte": wte,
             "value_embeds": value_embeds,
             "lm_head": lm_head,
             "transformer_matrices": transformer_matrices,
-            "scalars": scalars,
             "total": total,
         }
 
@@ -280,22 +268,17 @@ class GPT(nn.Module):
         matrix_lr=0.02,
         weight_decay=0.0,
         adam_betas=(0.8, 0.95),
-        scalar_lr=0.5,
     ):
         model_dim = self.config.n_embd
         matrix_params = list(self.transformer.h.parameters())
         value_embeds_params = list(self.value_embeds.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         lm_head_params = list(self.lm_head.parameters())
-        resid_params = [self.resid_lambdas]
-        x0_params = [self.x0_lambdas]
         assert len(list(self.parameters())) == (
             len(matrix_params)
             + len(embedding_params)
             + len(lm_head_params)
             + len(value_embeds_params)
-            + len(resid_params)
-            + len(x0_params)
         )
         # Scale LR ∝ 1/√dmodel (tuned at 768 dim)
         dmodel_lr_scale = (model_dim / 768) ** -0.5
@@ -325,22 +308,6 @@ class GPT(nn.Module):
                 eps=1e-10,
                 weight_decay=0.0,
             ),
-            dict(
-                kind="adamw",
-                params=resid_params,
-                lr=scalar_lr * 0.01,
-                betas=adam_betas,
-                eps=1e-10,
-                weight_decay=0.0,
-            ),
-            dict(
-                kind="adamw",
-                params=x0_params,
-                lr=scalar_lr,
-                betas=(0.96, 0.95),
-                eps=1e-10,
-                weight_decay=0.0,
-            ),
         ]
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
@@ -367,9 +334,7 @@ class GPT(nn.Module):
 
         x = self.transformer.wte(idx)
         x = norm(x)
-        x0 = x
         for i, block in enumerate(self.transformer.h):
-            x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
             ve = self.value_embeds[str(i)](idx) if str(i) in self.value_embeds else None
             x = block(x, ve, cos_sin, self.window_sizes[i])
         x = norm(x)
@@ -584,7 +549,6 @@ TOTAL_BATCH_SIZE = 2**17  # ~131K tokens per optimizer step
 EMBEDDING_LR = 0.6  # learning rate for token embeddings (Adam)
 UNEMBEDDING_LR = 0.004  # learning rate for lm_head (Adam)
 MATRIX_LR = 0.04  # learning rate for matrix parameters (Muon)
-SCALAR_LR = 0.5  # learning rate for per-layer scalars (Adam)
 WEIGHT_DECAY = 0.2  # cautious weight decay for Muon
 ADAM_BETAS = (0.8, 0.95)  # Adam beta1, beta2
 WARMUP_RATIO = 0.0  # fraction of time budget for LR warmup
@@ -674,7 +638,6 @@ grad_accum_steps = TOTAL_BATCH_SIZE // tokens_per_fwdbwd
 optimizer = model.setup_optimizer(
     unembedding_lr=UNEMBEDDING_LR,
     embedding_lr=EMBEDDING_LR,
-    scalar_lr=SCALAR_LR,
     adam_betas=ADAM_BETAS,
     matrix_lr=MATRIX_LR,
     weight_decay=WEIGHT_DECAY,
