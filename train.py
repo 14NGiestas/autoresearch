@@ -376,7 +376,6 @@ class GPT(nn.Module):
 
         softcap = 15
         logits = self.lm_head(x)
-        logits = logits.float()
         logits = softcap * torch.tanh(logits / softcap)
 
         if targets is not None:
