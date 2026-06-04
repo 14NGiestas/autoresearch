@@ -105,7 +105,6 @@ class CausalSelfAttention(nn.Module):
 
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
-        q, k = norm(q), norm(k)
 
         if IS_ROCM:
             # PyTorch SDPA on ROCm dispatches to AOTriton
