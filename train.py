@@ -768,6 +768,31 @@ with autocast_ctx:
     val_bpb = evaluate_bpb(model, tokenizer, eval_batch_size)
 _p.EVAL_TOKENS = _original_tokens
 
+# Generate some text
+from prepare import BOS_TOKEN as _BOS
+bos_id = tokenizer.encode(_BOS)[0]
+
+@torch.no_grad()
+def gen(prompt, temp=0.9, max_new=128):
+    model.eval()
+    tokens = tokenizer.encode(prompt, prepend=bos_id)
+    inp = torch.tensor([tokens], dtype=torch.long, device=device)
+    for _ in range(max_new):
+        with autocast_ctx:
+            logits = model(inp[:, -2048:])
+        logits = logits[:, -1, :] / temp
+        probs = torch.softmax(logits, dim=-1)
+        top_idx = torch.multinomial(probs, 1)
+        inp = torch.cat([inp, top_idx], dim=1)
+        if top_idx.item() == 0:
+            break
+    return tokenizer.decode(inp[0].tolist())
+
+print("---")
+for p, t in [("O universo é", 1.0), ("O significado da vida é", 0.8), ("No princípio", 1.2)]:
+    print(f"[temp={t}] {p} {gen(p, temp=t).split(p, 1)[-1].strip()[:200]}")
+    print()
+
 # Final summary
 t_end = time.time()
 startup_time = t_start_training - t_start
