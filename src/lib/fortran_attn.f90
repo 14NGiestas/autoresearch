@@ -66,6 +66,54 @@ contains
     !$omp end parallel do
   end subroutine causal_attn
 
+  ! Single-query attention over a KV cache (decoding step).
+  ! q: (B, H, D) current query (already RoPE'd)  K, V: (B, Tc, K_H, D)
+  ! y: (B, H, D). No causal mask: the cache holds only past positions.
+  ! Must match causal_attn's last row bit-exactly (same op order).
+  subroutine attn_step(q, K, V, y, BB, HH, K_HH, DD, TC) bind(c, name='attn_step')
+    integer(c_int), intent(in) :: BB, HH, K_HH, DD, TC
+    real(c_float), intent(in)  :: q(BB*HH*DD)
+    real(c_float), intent(in)  :: K(BB*TC*K_HH*DD), V(BB*TC*K_HH*DD)
+    real(c_float), intent(out) :: y(BB*HH*DD)
+    integer :: ia, ib, ss, id, kb, rep
+    real(c_float) :: scale, sm, inv, acc
+    real(c_float) :: sc(TC), m
+
+    scale = 1.0_c_float / sqrt(real(DD))
+    rep = HH / K_HH
+
+    !$omp parallel do collapse(2) private(ia, ib, ss, id, kb, sc, m, sm, inv, acc)
+    do ia = 1, BB
+      do ib = 1, HH
+        kb = (ib - 1) / rep + 1
+        m = -huge(1.0_c_float)
+        do ss = 1, TC
+          acc = 0.0_c_float
+          do id = 1, DD
+            acc = acc + q(((ia-1)*HH + (ib-1))*DD + id) &
+                       * K(((ia-1)*TC + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+          end do
+          sc(ss) = acc * scale
+          if (sc(ss) > m) m = sc(ss)
+        end do
+        sm = 0.0_c_float
+        do ss = 1, TC
+          sc(ss) = exp(sc(ss) - m)
+          sm = sm + sc(ss)
+        end do
+        inv = 1.0_c_float / sm
+        do id = 1, DD
+          acc = 0.0_c_float
+          do ss = 1, TC
+            acc = acc + sc(ss) * inv * V(((ia-1)*TC + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+          end do
+          y(((ia-1)*HH + (ib-1))*DD + id) = acc
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine attn_step
+
   ! ReLU^2 activation:  y = max(0, x)^2
   subroutine relu2(x, N) bind(c, name='relu2')
     integer(c_int), intent(in) :: N

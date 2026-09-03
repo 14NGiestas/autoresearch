@@ -16,15 +16,19 @@ program repl
   use tokenizer_tables_mod
   use tokenizer_encode_mod
   use sample_mod, only: sample_token
+  use fortran_kv_mod, only: gpt_step
   implicit none
 
   integer, parameter :: sp = c_float
   integer, parameter :: B = 1, D = 768, N_HEAD = 6, N_KV = 6, HD = 128
   integer, parameter :: N_LAYER = 12, VV = 8192, BOS = 8188
+  integer, parameter :: MAXT = 2048   ! checkpoint sequence_len; cache cap
 
   character(len=512) :: tdir, wdir, arg
   character(len=8192) :: linebuf
   integer :: n_gen, u, ios, i, j, best, tc, step, nprompt, nbytes, nlen
+  integer :: ntot, d2, clen
+  real(sp), allocatable :: ckv(:), cvv(:), out1(:)
   integer(c_int64_t) :: rng = 12345_c_int64_t
   real(sp) :: temp = 0.0_sp
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:)
@@ -58,6 +62,7 @@ program repl
   call load_tables(trim(tdir))
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
+  d2 = HD / 2
   write (0, '(A)') "ready. Empty line quits."
 
   do
@@ -74,36 +79,48 @@ program repl
     call encode(pbytes, nlen, pids)
     deallocate(pbytes)
     nprompt = size(pids) + 1
-    allocate(idx(nprompt + n_gen))
+    ntot = nprompt + n_gen
+    if (ntot > MAXT) then
+      write (0, '(A,I0,A)') "prompt+gen ", ntot, " exceeds 2048; shorten input"
+      deallocate(pids)
+      cycle
+    end if
+    allocate(idx(ntot))
     idx(1) = BOS
     idx(2:nprompt) = pids
     deallocate(pids)
 
-    do step = 1, n_gen
-      tc = nprompt + step - 1
-      if (allocated(cos_b)) deallocate(cos_b, sin_b)
-      allocate(cos_b(tc*(HD/2)), sin_b(tc*(HD/2)))
-      do i = 1, tc
-        do j = 1, HD/2
-          theta = 10000.0_sp ** (-2.0_sp * real(j-1, sp) / real(HD, sp))
-          ang = real(i-1, sp) * theta
-          cos_b((i-1)*(HD/2)+j) = cos(ang)
-          sin_b((i-1)*(HD/2)+j) = sin(ang)
-        end do
+    if (allocated(cos_b)) deallocate(cos_b, sin_b)
+    allocate(cos_b(ntot*(HD/2)), sin_b(ntot*(HD/2)))
+    do i = 1, ntot
+      do j = 1, HD/2
+        theta = 10000.0_sp ** (-2.0_sp * real(j-1, sp) / real(HD, sp))
+        ang = real(i-1, sp) * theta
+        cos_b((i-1)*(HD/2)+j) = cos(ang)
+        sin_b((i-1)*(HD/2)+j) = sin(ang)
       end do
-      if (allocated(outp)) deallocate(outp)
-      allocate(outp(B*tc*VV))
+    end do
+    if (allocated(ckv)) deallocate(ckv, cvv, out1)
+    allocate(ckv(N_LAYER*MAXT*N_KV*HD))
+    ckv = 0.0_sp
+    allocate(cvv(N_LAYER*MAXT*N_KV*HD))
+    cvv = 0.0_sp
+    clen = 0
+    allocate(out1(B*VV))
 
-      call gpt_forward(idx(1:tc), cos_b, sin_b, &
+    do step = 1, ntot
+      tc = step
+      call gpt_step(idx(tc:tc), cos_b((tc-1)*d2+1:), sin_b((tc-1)*d2+1:), &
           wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
-          outp, B, tc, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
-
-      mchk = maxval(outp((tc-1)*VV+1:tc*VV))
+          ckv, cvv, clen, MAXT, out1, &
+          B, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
+      if (step < nprompt) cycle
+      mchk = maxval(out1)
       if (.not. (mchk == mchk)) then
         write (0, '(A)') "NaN logit — abort"
         call exit(1)
       end if
-      best = sample_token(outp((tc-1)*VV+1:), VV, temp, rng)
+      best = sample_token(out1, VV, temp, rng)
       idx(tc+1) = best - 1
     end do
     deallocate(cos_b, sin_b, outp)

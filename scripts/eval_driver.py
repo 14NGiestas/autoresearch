@@ -106,19 +106,25 @@ def main():
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--seq", type=int, default=2048)
     ap.add_argument("--bin", default=None)
+    ap.add_argument("--chunk", type=int, default=4)
+    ap.add_argument("--start", type=int, default=0)
+    ap.add_argument("--chunk-timeout", type=int, default=1500)
     args = ap.parse_args()
 
     enc = load_enc()
     bos = enc.encode_single_token("<|reserved_0|>")
     tbytes = token_bytes(enc)
-    rows = pack_rows(enc, bos, args.seq, args.rows)
-    print(f"packed {len(rows)} rows of {args.seq + 1} ids", flush=True)
+    rows = pack_rows(enc, bos, args.seq, args.start + args.rows)[args.start:]
+    print(f"packed {len(rows)} rows of {args.seq + 1} ids" +
+          (f" (offset {args.start})" if args.start else ""), flush=True)
+    if not rows:
+        raise SystemExit("nothing to do")
 
-    rows_file = "/tmp/eval_rows.txt"
     try:
-        with open(rows_file, "w") as f:
-            for r in rows:
-                f.write(" ".join(map(str, r)) + "\n")
+        for ci in range(0, len(rows), args.chunk):
+            with open(f"/tmp/eval_rows_{ci}.txt", "w") as f:
+                for r in rows[ci:ci + args.chunk]:
+                    f.write(" ".join(map(str, r)) + "\n")
     except OSError as e:
         raise SystemExit(f"cannot write rows: {e}")
 
@@ -128,30 +134,37 @@ def main():
         raise SystemExit("fortran-fpm not on PATH; run inside nix develop")
     env = dict(os.environ)
     env.setdefault("OMP_NUM_THREADS", "8")
-    try:
-        if args.bin:
-            cmd = [fpm, os.path.join(CACHE, "weights_depth12"), rows_file]
-        else:
-            cmd = [fpm, "run", "eval_bpb", "--",
-                   os.path.join(CACHE, "weights_depth12"), rows_file]
-        p = subprocess.run(
-            cmd, capture_output=True, text=True, env=env, cwd="src",
-            timeout=3600)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise SystemExit(f"eval binary failed: {e}")
-    if p.returncode != 0:
-        raise SystemExit(f"eval_bpb exit {p.returncode}:\n{p.stderr[-2000:]}")
-
-    # fpm prints <WARNING>/status lines to stdout; only NLL rows have
-    # exactly T floats. Extra/missing lines are a hard error.
     nll_lines = []
-    for line in p.stdout.strip().split("\n"):
+    for ci in range(0, len(rows), args.chunk):
+        rows_file = f"/tmp/eval_rows_{ci}.txt"
         try:
-            vals = list(map(float, line.split()))
-        except ValueError:
-            continue
-        if len(vals) == args.seq:
-            nll_lines.append(vals)
+            if args.bin:
+                cmd = [fpm, os.path.join(CACHE, "weights_depth12"),
+                       rows_file]
+            else:
+                cmd = [fpm, "run", "eval_bpb", "--",
+                       os.path.join(CACHE, "weights_depth12"), rows_file]
+            p = subprocess.run(
+                cmd, capture_output=True, text=True, env=env, cwd="src",
+                timeout=args.chunk_timeout)
+        except OSError as e:
+            raise SystemExit(f"eval binary failed: {e}")
+        except subprocess.TimeoutExpired:
+            raise SystemExit(
+                f"chunk rows {args.start + ci}-" +
+                f"{args.start + ci + args.chunk} timed out; resume with " +
+                f"--start {args.start + ci}")
+        if p.returncode != 0:
+            raise SystemExit(
+                f"eval_bpb exit {p.returncode}:\n{p.stderr[-2000:]}")
+        for line in p.stdout.strip().split("\n"):
+            try:
+                vals = list(map(float, line.split()))
+            except ValueError:
+                continue
+            if len(vals) == args.seq:
+                nll_lines.append(vals)
+        print(f"chunk done: {len(nll_lines)}/{len(rows)} rows", flush=True)
     if len(nll_lines) != len(rows):
         raise SystemExit(
             f"expected {len(rows)} NLL rows, got {len(nll_lines)}")

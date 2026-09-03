@@ -17,6 +17,7 @@ program chat_text
   use tokenizer_tables_mod
   use tokenizer_encode_mod
   use sample_mod, only: sample_token
+  use fortran_kv_mod, only: gpt_step
   implicit none
 
   integer, parameter :: sp = c_float
@@ -26,6 +27,8 @@ program chat_text
   character(len=512) :: tdir, wdir, arg
   character(len=:), allocatable :: raw
   integer :: n_gen, u, ios, fsize, i, j, best, tc, step, nprompt
+  integer :: ntot, d2, clen
+  real(sp), allocatable :: ckv(:), cvv(:), out1(:)
   integer(c_int64_t) :: rng = 12345_c_int64_t
   real(sp) :: temp = 0.0_sp
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:)
@@ -35,6 +38,7 @@ program chat_text
   real(sp), allocatable :: c_q(:), c_k(:), c_v(:), c_pr(:), c_fc(:), c_pr2(:)
   real(sp), allocatable :: outp(:)
   real(sp) :: theta, ang, mchk
+  d2 = HD / 2
 
   if (command_argument_count() < 3) then
     print '(A)', "usage: chat_text <tables_dir> <weights_dir> <n_gen> [temp] [seed] < stdin"
@@ -81,30 +85,37 @@ program chat_text
   idx(2:nprompt) = pids
   deallocate(pbytes, pids)
 
-  do step = 1, n_gen
-    tc = nprompt + step - 1
-    if (allocated(cos_b)) deallocate(cos_b, sin_b)
-    allocate(cos_b(tc*(HD/2)), sin_b(tc*(HD/2)))
-    do i = 1, tc
-      do j = 1, HD/2
-        theta = 10000.0_sp ** (-2.0_sp * real(j-1, sp) / real(HD, sp))
-        ang = real(i-1, sp) * theta
-        cos_b((i-1)*(HD/2)+j) = cos(ang)
-        sin_b((i-1)*(HD/2)+j) = sin(ang)
-      end do
+  ! RoPE tables once for the full (prompt+gen) span; KV cache sized exact.
+  ntot = nprompt + n_gen
+  allocate(cos_b(ntot*(HD/2)), sin_b(ntot*(HD/2)))
+  do i = 1, ntot
+    do j = 1, HD/2
+      theta = 10000.0_sp ** (-2.0_sp * real(j-1, sp) / real(HD, sp))
+      ang = real(i-1, sp) * theta
+      cos_b((i-1)*(HD/2)+j) = cos(ang)
+      sin_b((i-1)*(HD/2)+j) = sin(ang)
     end do
-    if (allocated(outp)) deallocate(outp)
-    allocate(outp(B*tc*VV))
+  end do
+  allocate(ckv(N_LAYER*ntot*N_KV*HD))
+  ckv = 0.0_sp
+  allocate(cvv(N_LAYER*ntot*N_KV*HD))
+  cvv = 0.0_sp
+  clen = 0
+  allocate(out1(B*VV))
 
-    call gpt_forward(idx(1:tc), cos_b, sin_b, &
+  ! prefill prompt + generate, one cached step per token
+  do step = 1, ntot
+    tc = step
+    call gpt_step(idx(tc:tc), cos_b((tc-1)*d2+1:), sin_b((tc-1)*d2+1:), &
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
-        outp, B, tc, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
-
-    mchk = maxval(outp((tc-1)*VV+1:tc*VV))
+        ckv, cvv, clen, ntot, out1, &
+        B, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
+    if (step < nprompt) cycle   ! prompt steps only fill the cache
+    mchk = maxval(out1)
     if (.not. (mchk == mchk)) then
       print '(A)', "NaN logit — abort"; call exit(1)
     end if
-    best = sample_token(outp((tc-1)*VV+1:), VV, temp, rng)
+    best = sample_token(out1, VV, temp, rng)
     idx(tc+1) = best - 1
   end do
 

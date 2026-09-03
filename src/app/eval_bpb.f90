@@ -24,7 +24,7 @@ program eval_bpb
   integer, parameter :: N_LAYER = 12, VV = 8192, TT = 2048
 
   character(len=512) :: wdir, rowsfile, line
-  integer :: ios, unit, tc, i, j, tgt
+  integer :: ios, unit, tc, i, j, tgt, rownum
   integer :: idx(TT)
   integer, allocatable :: full(:)
   real(sp), allocatable :: cos_b(:), sin_b(:)
@@ -46,6 +46,7 @@ program eval_bpb
 
   allocate(full(TT + 1))
   open (newunit=unit, file=trim(rowsfile), status='old', action='read')
+  rownum = 0
   do
     read (unit, '(A)', iostat=ios) buf
     if (ios /= 0) exit
@@ -88,6 +89,9 @@ program eval_bpb
       write (*, '(ES14.7)', advance='no') nll
     end do
     print *
+    ! progress on stderr (unbuffered): the only monitor for hour-long runs
+    rownum = rownum + 1
+    write (0, '(A,I0)') "row done: ", rownum
     deallocate(cos_b, sin_b, outp)
   end do
   close (unit)

@@ -79,6 +79,21 @@ program test_kernels
       real, intent(out) :: outp(*)
       real, value :: eps
     end subroutine
+    subroutine gpt_step(idx1, cos1, sin1, &
+        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+        cache_k, cache_v, cache_len, maxT, out1, &
+        B, V, D, n_head, n_kv_head, head_dim, n_layer, eps) &
+        bind(c, name='gpt_step')
+      integer, intent(in) :: idx1(*), B, V, D, maxT
+      integer, intent(inout) :: cache_len
+      integer, intent(in) :: n_head, n_kv_head, head_dim, n_layer
+      real, intent(in) :: cos1(*), sin1(*), wte(*)
+      real, intent(in) :: c_q(*), c_k(*), c_v(*), c_proj(*)
+      real, intent(in) :: c_fc(*), c_proj2(*), lm_head(*)
+      real, intent(inout) :: cache_k(*), cache_v(*)
+      real, intent(out) :: out1(*)
+      real, value :: eps
+    end subroutine
     subroutine rmsnorm(x, w, y, N, C, eps) bind(c, name='rmsnorm')
       integer, intent(in) :: N, C
       real, intent(in) :: x(*), w(*)
@@ -112,6 +127,7 @@ program test_kernels
   call test_recurrent_equiv()
   call test_recurrent_loops()
   call test_sample()
+  call test_kv_equiv()
 
   print '(A,I0,A)', "===", fail_count, " failures ==="
   if (fail_count > 0) call exit(1)
@@ -699,6 +715,70 @@ contains
       pos2 = sample_token(logits, 4, 1.0_sp, st)
       call check(pos == pos2, "seeded determinism")
     end block
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! 4 sequential cached gpt_step calls must equal one gpt_forward(T=4)
+  ! on ALL positions, bit-exactly (same kernels, same op order).
+  subroutine test_kv_equiv()
+    integer, parameter :: BR = 1, TC = 4, VV = 16, DD = 8
+    integer, parameter :: n_head = 2, n_kv_head = 2, head_dim = 4
+    integer, parameter :: dkh = n_kv_head*head_dim, MAXT = 4
+    integer :: idx(BR*TC)
+    real(sp) :: cos_buf(TC*(head_dim/2)), sin_buf(TC*(head_dim/2))
+    real(sp) :: wte(VV*DD)
+    real(sp) :: c_q(n_head*head_dim*DD)
+    real(sp) :: c_k(n_kv_head*head_dim*DD)
+    real(sp) :: c_v(n_kv_head*head_dim*DD)
+    real(sp) :: c_proj(DD*n_head*head_dim)
+    real(sp) :: c_fc(4*DD*DD)
+    real(sp) :: c_proj2(DD*4*DD)
+    real(sp) :: lm_head(VV*DD)
+    real(sp) :: out_full(BR*TC*VV), out_steps(BR*TC*VV)
+    real(sp) :: out1(VV)
+    real(sp) :: ck(MAXT*dkh), cv(MAXT*dkh)
+    integer :: i, t, clen
+    real(sp) :: e, max_err
+    integer :: d2
+
+    print '(A)', "=== test_kv_equiv (4 steps vs full forward) ==="
+    d2 = head_dim / 2
+    do i = 1, BR*TC
+      idx(i) = 1 + mod(i, 7)
+    end do
+    call fill(cos_buf, TC*d2)
+    call fill(sin_buf, TC*d2)
+    call fill(wte, VV*DD, 0.1_sp)
+    call fill(c_q, n_head*head_dim*DD, 0.05_sp)
+    call fill(c_k, n_kv_head*head_dim*DD, 0.05_sp)
+    call fill(c_v, n_kv_head*head_dim*DD, 0.05_sp)
+    call fill(c_proj, DD*n_head*head_dim, 0.05_sp)
+    call fill(c_fc, 4*DD*DD, 0.05_sp)
+    call fill(c_proj2, DD*4*DD, 0.05_sp)
+    call fill(lm_head, VV*DD, 0.05_sp)
+
+    call gpt_forward(idx, cos_buf, sin_buf, &
+        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+        out_full, BR, TC, VV, DD, n_head, n_kv_head, head_dim, 1, 1.0e-5_sp)
+
+    ck = 0.0_sp; cv = 0.0_sp; clen = 0
+    do t = 1, TC
+      call gpt_step(idx(t:t), cos_buf((t-1)*d2+1:), sin_buf((t-1)*d2+1:), &
+          wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+          ck, cv, clen, MAXT, out1, &
+          BR, VV, DD, n_head, n_kv_head, head_dim, 1, 1.0e-5_sp)
+      out_steps((t-1)*VV+1:t*VV) = out1
+    end do
+
+    max_err = 0.0_sp
+    do i = 1, BR*TC*VV
+      e = abs(out_full(i) - out_steps(i))
+      if (e > max_err) max_err = e
+    end do
+
+    print '(A,E10.3,A,I0)', "  max err = ", max_err, "  cache_len=", clen
+    call check(clen == TC, "cache holds all positions")
+    call check(max_err == 0.0_sp, "cached steps == full forward")
   end subroutine
 
 end program test_kernels
