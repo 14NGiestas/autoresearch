@@ -1,86 +1,113 @@
-# autoresearch
+# autoresearch (AMD / torch-free fork)
 
-![teaser](progress.png)
+> *One day, frontier AI research used to be done by meat computers… This repo is the story of how it all began. —@karpathy, March 2026.*
 
-*One day, frontier AI research used to be done by meat computers in between eating, sleeping, having other fun, and synchronizing once in a while using sound wave interconnect in the ritual of "group meeting". That era is long gone. Research is now entirely the domain of autonomous swarms of AI agents running across compute cluster megastructures in the skies. The agents claim that we are now in the 10,205th generation of the code base, in any case no one could tell if that's right or wrong as the "code" is now a self-modifying binary that has grown beyond human comprehension. This repo is the story of how it all began. -@karpathy, March 2026*.
+This is a fork of [karpathy/autoresearch](https://github.com/karpathy/autoresearch)
+("give an AI agent a small LLM setup, let it experiment overnight").
+Upstream targets a single NVIDIA GPU with PyTorch (`uv run train.py`,
+5-minute budget, `val_bpb` metric).
 
-The idea: give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and (hopefully) a better model. The training code here is a simplified single-GPU implementation of [nanochat](https://github.com/karpathy/nanochat). The core idea is that you're not touching any of the Python files like you normally would as a researcher. Instead, you are programming the `program.md` Markdown files that provide context to the AI agents and set up your autonomous research org. The default `program.md` in this repo is intentionally kept as a bare bones baseline, though it's obvious how one would iterate on it over time to find the "research org code" that achieves the fastest research progress, how you'd add more agents to the mix, etc. A bit more context on this project is here in this [tweet](https://x.com/karpathy/status/2029701092347630069).
+**This fork diverged:** AMD Ryzen 7 8745HS + Radeon 780M (16 GiB carve-out),
+`nix develop` instead of `uv`, and — as of Sep 2026 — **PyTorch is fully
+ditched**. The model lives in **pure Fortran** (`src/`, fpm package):
+forward pass, BPE tokenizer, and real-weight inference with zero Python
+at runtime. See `program.md` for the current agent instructions and
+`hep/registry.jsonl` for the experiment audit trail (21 hypotheses).
 
-## How it works
+## What was proven here
 
-The repo is deliberately kept small and only really has three files that matter:
-
-- **`prepare.py`** — fixed constants, one-time data prep (downloads training data, trains a BPE tokenizer), and runtime utilities (dataloader, evaluation). Not modified.
-- **`train.py`** — the single file the agent edits. Contains the full GPT model, optimizer (Muon + AdamW), and training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
-- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
-
-By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
-
-If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
-
-## Quick start
-
-**Requirements:** A single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
-
-```bash
-
-# 1. Install uv project manager (if you don't already have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Install dependencies
-uv sync
-
-# 3. Download data and train tokenizer (one-time, ~2 min)
-uv run prepare.py
-
-# 4. Manually run a single training experiment (~5 min)
-uv run train.py
-```
-
-If the above commands all work ok, your setup is working and you can go into autonomous research mode.
-
-## Running the agent
-
-Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
-
-```
-Hi have a look at program.md and let's kick off a new experiment! let's do the setup first.
-```
-
-The `program.md` file is essentially a super lightweight "skill".
+- **Depth-12 from-scratch GPT (97.5M, n_embd=768) hit `val_bpb: 0.375`**
+  (`checkpoints/checkpoint_depth12_step264_0.3750.pt`) — memorization→
+  generalization threshold between 17M and 97M params on agent-chat corpora.
+- **Fortran forward == `train.py` wiring to 2e-7** (numpy parity harness),
+  10/10 kernel tests, GQA + RoPE + ReLU² + RMSNorm all exact.
+- **BPE tokenizer byte-exact vs tiktoken** (200 docs / 778,724 tokens):
+  cracked the pre-splitter rule (possessive single prefix + branch-(f)
+  backtrack) via PCRE2/Viktor oracles.
+- **Real text from real weights, no torch**: `chat_text` generates
+  coherent English from the depth-12 checkpoint; Fortran val-bpb ≈ 0.58
+  interim vs torch tag 0.375 (48-row confirmation pending).
+- **Refuted along the way:** WRAP trash→gold (format memorization +
+  collapse), Muon refinement, pretokenized bin-dataloader, Chinese-literacy
+  regime, CS-roleplay-15M. All recorded in HEP with belief updates.
 
 ## Project structure
 
 ```
-prepare.py      — constants, data prep + runtime utilities (do not modify)
-train.py        — model, optimizer, training loop (agent modifies this)
-program.md      — agent instructions
-pyproject.toml  — dependencies
+src/                — fpm package "fortran_gpt" (the implementation)
+  lib/                RMSNorm, matmul, RoPE, causal+GQA attention, ReLU^2,
+                      gpt_forward, weight loader, BPE tokenizer tables+encode
+  app/                infer (random demo), chat (ids in/out), chat_text
+                      (stdin text -> stdout text), eval_bpb, tokdiff
+  test/               kernel + wiring tests (fortran-fpm test, 10/10)
+  fpm.toml            [dependencies] openmp="*", stdlib="*"
+scripts/            — torch-free Python (numpy/tiktoken/pyarrow only)
+  export_weights.py   .pt -> .npy via stdlib-only unpickler (bf16-safe)
+  chat_driver.py      one-command inference (encode -> chat -> decode)
+  eval_driver.py      torch-free val_bpb (pinned shard, BOS packing replica)
+  tokdiff_driver.py   Fortran-vs-tiktoken differential test
+  export_tokenizer.py one-time BPE/Unicode table export
+train.py            — retired Python training record (needs torch; kept as
+                      the wiring reference the Fortran engine was verified
+                      against). Do not train with it: no working torch left.
+prepare.py          — upstream data/tokenizer/metric reference (needs torch;
+                      the fixed bpb metric is replicated in eval_driver.py).
+checkpoints/        — .pt files (gitignored, local only)
+hep/registry.jsonl  — hypothesis audit trail (use hep.py to query it)
+flake.nix           — nix dev shell: gfortran + fortran-fpm (torch-free)
 ```
 
-## Design choices
+## Quick start: inference in 3 commands
 
-- **Single file to modify.** The agent only touches `train.py`. This keeps the scope manageable and diffs reviewable.
-- **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
-- **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
+Requirements: Nix with flakes, ~2 GB free (weights are 373 MB + build).
 
-## Platform support
+```bash
+# 1. enter the shell (provides gfortran + fortran-fpm)
+nix develop
 
-This code currently requires that you have a single NVIDIA GPU. In principle it is quite possible to support CPU, MPS and other platforms but this would also bloat the code. I'm not 100% sure that I want to take this on personally right now. People can reference (or have their agents reference) the full/parent nanochat repository that has wider platform support and shows the various solutions (e.g. a Flash Attention 3 kernels fallback implementation, generic device support, autodetection, etc.), feel free to create forks or discussions for other platforms and I'm happy to link to them here in the README in some new notable forks section or etc.
+# 2. weights already exported? if not (needs a .pt checkpoint):
+/usr/bin/python3 scripts/export_weights.py checkpoints/checkpoint_depth12_step264_0.3750.pt ~/.cache/autoresearch/weights_depth12
 
-Seeing as there seems to be a lot of interest in tinkering with autoresearch on much smaller compute platforms than an H100, a few extra words. If you're going to try running autoresearch on smaller computers (Macbooks etc.), I'd recommend one of the forks below. On top of this, here are some recommendations for how to tune the defaults for much smaller models for aspiring forks:
+# 3. talk to the depth-12 model — zero Python processes:
+printf '%s' "Alan Turing theorized that computers" | \
+  ./src/build/*/app/chat_text ~/.cache/autoresearch/tok_tables \
+    ~/.cache/autoresearch/weights_depth12 20
+```
 
-1. To get half-decent results I'd use a dataset with a lot less entropy, e.g. this [TinyStories dataset](https://huggingface.co/datasets/karpathy/tinystories-gpt4-clean). These are GPT-4 generated short stories. Because the data is a lot narrower in scope, you will see reasonable results with a lot smaller models (if you try to sample from them after training).
-2. You might experiment with decreasing `vocab_size`, e.g. from 8192 down to 4096, 2048, 1024, or even - simply byte-level tokenizer with 256 possibly bytes after utf-8 encoding.
-3. In `prepare.py`, you'll want to lower `MAX_SEQ_LEN` a lot, depending on the computer even down to 256 etc. As you lower `MAX_SEQ_LEN`, you may want to experiment with increasing `DEVICE_BATCH_SIZE` in `train.py` slightly to compensate. The number of tokens per fwd/bwd pass is the product of these two.
-4. Also in `prepare.py`, you'll want to decrease `EVAL_TOKENS` so that your validation loss is evaluated on a lot less data.
-5. In `train.py`, the primary single knob that controls model complexity is the `DEPTH` (default 8, here). A lot of variables are just functions of this, so e.g. lower it down to e.g. 4.
-6. You'll want to most likely use `WINDOW_PATTERN` of just "L", because "SSSL" uses alternating banded attention pattern that may be very inefficient for you. Try it.
-7. You'll want to lower `TOTAL_BATCH_SIZE` a lot, but keep it powers of 2, e.g. down to `2**14` (~16K) or so even, hard to tell.
+Or the guided version (encode/decode handled):
 
-I think these would be the reasonable hyperparameters to play with. Ask your favorite coding agent for help and copy paste them this guide, as well as the full source code.
+```bash
+nix develop --command bash -c 'export OMP_NUM_THREADS=8;
+  .venv-numpy/bin/python3 scripts/chat_driver.py "The capital of France is" --n 20'
+```
 
-trouble with pi harnes? export PATH="/home/pauli/.local/share/pi-node/node-v22.23.2-linux-x64/bin:$PATH"
+Run the proofs: `cd src && fortran-fpm test` (kernels),
+`/tmp/parity.py` (wiring vs train.py), `scripts/eval_driver.py --rows 4` (val bpb).
+
+## Design choices (how this fork differs)
+
+- **Fortran is the implementation, not a port.** New math goes in
+  `src/lib/` with a parity test; Python/Torch is retired, not maintained.
+- **Hypothesis-Evolution Protocol (HEP).** Every experiment is registered
+  (`python3 hep.py propose`), evidenced, and transitioned — 21 hypotheses,
+  beliefs 0.15–0.96. The registry is the lab notebook; read it before
+  starting anything.
+- **No-torch-chat protocol.** Never reinstall torch to "quickly check"
+  something — the torch-free path (numpy harness, stdlib unpickler,
+  tiktoken-only drivers) exists precisely so the dependency stays dead.
+- **`(b)`-branch discipline.** The BPE pre-splitter rule above is load-bearing;
+  touch `tokenizer_encode.f90` only with `tokdiff_driver.py --n 200` green.
+- **Small files.** Each Fortran module stays under 300 lines; split before
+  growing. Tests live next to the code (`src/test/`), not in notebooks.
+
+## Upstream docs worth keeping
+
+Karpathy's small-compute tuning guide (TinyStories, smaller vocabs/seq-lens,
+`WINDOW_PATTERN "L"`, depth as the main knob) still applies to any future
+Python-side training. The 5-minute fixed-budget methodology is what produced
+the depth-12 checkpoint this fork now runs natively.
+
+trouble with pi harness? export PATH="/home/pauli/.local/share/pi-node/node-v22.23.2-linux-x64/bin:$PATH"
 
 ## Notable forks
 
