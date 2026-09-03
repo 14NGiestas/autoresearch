@@ -84,6 +84,18 @@ program test_kernels
       real, intent(out) :: y(*)
       real, value :: eps
     end subroutine
+    subroutine recurrent_forward(idx, cos, sin, &
+        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+        outp, B, T, V, D, n_head, n_kv_head, head_dim, n_loops, eps) &
+        bind(c, name='recurrent_forward')
+      integer, intent(in) :: idx(*), B, T, V, D
+      integer, intent(in) :: n_head, n_kv_head, head_dim, n_loops
+      real, intent(in) :: cos(*), sin(*), wte(*)
+      real, intent(in) :: c_q(*), c_k(*), c_v(*), c_proj(*)
+      real, intent(in) :: c_fc(*), c_proj2(*), lm_head(*)
+      real, intent(out) :: outp(*)
+      real, value :: eps
+    end subroutine
   end interface
 
   call test_rmsnorm()
@@ -96,6 +108,8 @@ program test_kernels
   call test_causal_attn()
   call test_causal_attn_gqa()
   call test_gpt_forward_shape()
+  call test_recurrent_equiv()
+  call test_recurrent_loops()
 
   print '(A,I0,A)', "===", fail_count, " failures ==="
   if (fail_count > 0) call exit(1)
@@ -535,6 +549,113 @@ contains
     print '(A,ES10.3,A,ES10.3)', "  range [", mn, ", ", mx, "]"
     call check(finite, "gpt_forward no NaN")
     call check((mx - mn) > 0.0_sp, "gpt_forward non-trivial output")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! recurrent_forward(n_loops=1) must equal gpt_forward(n_layer=1)
+  ! bit-exactly: same kernels, same order, same single-layer weights.
+  subroutine test_recurrent_equiv()
+    integer, parameter :: BR = 1, TC = 4, VV = 16, DD = 8
+    integer, parameter :: n_head = 2, n_kv_head = 2, head_dim = 4
+    integer :: idx(BR*TC)
+    real(sp) :: cos_buf(TC*(head_dim/2)), sin_buf(TC*(head_dim/2))
+    real(sp) :: wte(VV*DD)
+    real(sp) :: c_q(n_head*head_dim*DD)
+    real(sp) :: c_k(n_kv_head*head_dim*DD)
+    real(sp) :: c_v(n_kv_head*head_dim*DD)
+    real(sp) :: c_proj(DD*n_head*head_dim)
+    real(sp) :: c_fc(4*DD*DD)
+    real(sp) :: c_proj2(DD*4*DD)
+    real(sp) :: lm_head(VV*DD)
+    real(sp) :: out_gpt(BR*TC*VV), out_rec(BR*TC*VV)
+    integer :: i
+    real(sp) :: e, max_err
+
+    print '(A)', "=== test_recurrent_equiv (loops=1 vs gpt layer=1) ==="
+    do i = 1, BR*TC
+      idx(i) = 3 + mod(i, 5)
+    end do
+    call fill(cos_buf, TC*(head_dim/2))
+    call fill(sin_buf, TC*(head_dim/2))
+    call fill(wte, VV*DD, 0.1_sp)
+    call fill(c_q, n_head*head_dim*DD, 0.01_sp)
+    call fill(c_k, n_kv_head*head_dim*DD, 0.01_sp)
+    call fill(c_v, n_kv_head*head_dim*DD, 0.01_sp)
+    call fill(c_proj, DD*n_head*head_dim, 0.01_sp)
+    call fill(c_fc, 4*DD*DD, 0.01_sp)
+    call fill(c_proj2, DD*4*DD, 0.01_sp)
+    call fill(lm_head, VV*DD, 0.01_sp)
+
+    call gpt_forward(idx, cos_buf, sin_buf, &
+        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+        out_gpt, BR, TC, VV, DD, n_head, n_kv_head, head_dim, 1, 1.0e-5_sp)
+    call recurrent_forward(idx, cos_buf, sin_buf, &
+        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+        out_rec, BR, TC, VV, DD, n_head, n_kv_head, head_dim, 1, 1.0e-5_sp)
+
+    max_err = 0.0_sp
+    do i = 1, BR*TC*VV
+      e = abs(out_gpt(i) - out_rec(i))
+      if (e > max_err) max_err = e
+    end do
+
+    print '(A,E10.3)', "  max err = ", max_err
+    call check(max_err == 0.0_sp, "recurrent(1) == gpt(1) bit-exact")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! More loops must move the logits (iteration does work) and stay finite.
+  subroutine test_recurrent_loops()
+    integer, parameter :: BR = 1, TC = 4, VV = 16, DD = 8
+    integer, parameter :: n_head = 2, n_kv_head = 2, head_dim = 4
+    integer :: idx(BR*TC)
+    real(sp) :: cos_buf(TC*(head_dim/2)), sin_buf(TC*(head_dim/2))
+    real(sp) :: wte(VV*DD)
+    real(sp) :: c_q(n_head*head_dim*DD)
+    real(sp) :: c_k(n_kv_head*head_dim*DD)
+    real(sp) :: c_v(n_kv_head*head_dim*DD)
+    real(sp) :: c_proj(DD*n_head*head_dim)
+    real(sp) :: c_fc(4*DD*DD)
+    real(sp) :: c_proj2(DD*4*DD)
+    real(sp) :: lm_head(VV*DD)
+    real(sp) :: out1(BR*TC*VV), out4(BR*TC*VV)
+    integer :: i
+    real(sp) :: e, max_drift
+    logical :: finite
+
+    print '(A)', "=== test_recurrent_loops (1 vs 4 loops) ==="
+    do i = 1, BR*TC
+      idx(i) = 2 + mod(i, 6)
+    end do
+    call fill(cos_buf, TC*(head_dim/2))
+    call fill(sin_buf, TC*(head_dim/2))
+    call fill(wte, VV*DD, 0.1_sp)
+    call fill(c_q, n_head*head_dim*DD, 0.05_sp)
+    call fill(c_k, n_kv_head*head_dim*DD, 0.05_sp)
+    call fill(c_v, n_kv_head*head_dim*DD, 0.05_sp)
+    call fill(c_proj, DD*n_head*head_dim, 0.05_sp)
+    call fill(c_fc, 4*DD*DD, 0.05_sp)
+    call fill(c_proj2, DD*4*DD, 0.05_sp)
+    call fill(lm_head, VV*DD, 0.05_sp)
+
+    call recurrent_forward(idx, cos_buf, sin_buf, &
+        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+        out1, BR, TC, VV, DD, n_head, n_kv_head, head_dim, 1, 1.0e-5_sp)
+    call recurrent_forward(idx, cos_buf, sin_buf, &
+        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+        out4, BR, TC, VV, DD, n_head, n_kv_head, head_dim, 4, 1.0e-5_sp)
+
+    finite = .true.
+    max_drift = 0.0_sp
+    do i = 1, BR*TC*VV
+      if (.not. (out4(i) == out4(i))) finite = .false.
+      e = abs(out4(i) - out1(i))
+      if (e > max_drift) max_drift = e
+    end do
+
+    print '(A,E10.3)', "  drift(4 vs 1) = ", max_drift
+    call check(finite, "recurrent(4) finite")
+    call check(max_drift > 0.0_sp, "loops move logits")
   end subroutine
 
 end program test_kernels
