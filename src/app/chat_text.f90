@@ -2,7 +2,7 @@
 !
 ! Usage:
 !   printf 'Alan Turing theorized that' | fortran-fpm run chat_text -- \
-!       <tables_dir> <weights_dir> <n_gen>
+!       <tables_dir> <weights_dir> <n_gen> [temp=0] [seed=12345]
 !
 ! Reads prompt bytes from stdin, encodes with the native BPE tokenizer
 ! (tokenizer_tables_mod/tokenizer_encode_mod, byte-exact vs tiktoken),
@@ -16,6 +16,7 @@ program chat_text
   use load_weights_mod, only: load_gpt_weights
   use tokenizer_tables_mod
   use tokenizer_encode_mod
+  use sample_mod, only: sample_token
   implicit none
 
   integer, parameter :: sp = c_float
@@ -25,22 +26,32 @@ program chat_text
   character(len=512) :: tdir, wdir, arg
   character(len=:), allocatable :: raw
   integer :: n_gen, u, ios, fsize, i, j, best, tc, step, nprompt
+  integer(c_int64_t) :: rng = 12345_c_int64_t
+  real(sp) :: temp = 0.0_sp
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:)
   integer :: nbytes
   real(sp), allocatable :: cos_b(:), sin_b(:)
   real(sp), allocatable :: wte(:), lm(:)
   real(sp), allocatable :: c_q(:), c_k(:), c_v(:), c_pr(:), c_fc(:), c_pr2(:)
   real(sp), allocatable :: outp(:)
-  real(sp) :: theta, ang, topv
+  real(sp) :: theta, ang, mchk
 
   if (command_argument_count() < 3) then
-    print '(A)', "usage: chat_text <tables_dir> <weights_dir> <n_gen> < stdin"
+    print '(A)', "usage: chat_text <tables_dir> <weights_dir> <n_gen> [temp] [seed] < stdin"
     call exit(2)
   end if
   call get_command_argument(1, tdir)
   call get_command_argument(2, wdir)
   call get_command_argument(3, arg)
   read (arg, *) n_gen
+  if (command_argument_count() >= 4) then
+    call get_command_argument(4, arg)
+    read (arg, *) temp
+  end if
+  if (command_argument_count() >= 5) then
+    call get_command_argument(5, arg)
+    read (arg, *) rng
+  end if
 
   call load_tables(trim(tdir))
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
@@ -89,15 +100,11 @@ program chat_text
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
         outp, B, tc, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
 
-    best = 1; topv = outp((tc-1)*VV+1)
-    do i = 2, VV
-      if (outp((tc-1)*VV+i) > topv) then
-        topv = outp((tc-1)*VV+i); best = i
-      end if
-    end do
-    if (.not. (topv == topv)) then
+    mchk = maxval(outp((tc-1)*VV+1:tc*VV))
+    if (.not. (mchk == mchk)) then
       print '(A)', "NaN logit — abort"; call exit(1)
     end if
+    best = sample_token(outp((tc-1)*VV+1:), VV, temp, rng)
     idx(tc+1) = best - 1
   end do
 

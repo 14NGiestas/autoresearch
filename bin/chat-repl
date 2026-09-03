@@ -1,0 +1,18 @@
+#!/bin/sh
+# bin/chat-repl — interactive pure-Fortran chat. Zero Python at runtime.
+# Usage: bin/chat-repl [n_gen] [temp]   (defaults: 40 tokens, temp 0 = greedy)
+# Empty line quits. Ctrl-C / Ctrl-D quit.
+set -e
+N_GEN="${1:-40}"
+TEMP="${2:-0}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CACHE="$HOME/.cache/autoresearch"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
+cd "$ROOT/src"
+if [ -n "$IN_NIX_SHELL" ]; then
+  env -u LD_LIBRARY_PATH -u LD_PRELOAD \
+    fortran-fpm run repl -- "$CACHE/tok_tables" "$CACHE/weights_depth12" "$N_GEN" "$TEMP"
+else
+  env -u LD_LIBRARY_PATH -u LD_PRELOAD nix develop --command bash -c \
+    "cd '$ROOT/src' && fortran-fpm run repl -- '$CACHE/tok_tables' '$CACHE/weights_depth12' '$N_GEN' '$TEMP'"
+fi

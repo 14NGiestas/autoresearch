@@ -23,6 +23,7 @@
 
 program test_kernels
   use iso_c_binding
+  use sample_mod, only: sample_token
   implicit none
 
   integer, parameter :: sp = c_float
@@ -110,6 +111,7 @@ program test_kernels
   call test_gpt_forward_shape()
   call test_recurrent_equiv()
   call test_recurrent_loops()
+  call test_sample()
 
   print '(A,I0,A)', "===", fail_count, " failures ==="
   if (fail_count > 0) call exit(1)
@@ -656,6 +658,47 @@ contains
     print '(A,E10.3)', "  drift(4 vs 1) = ", max_drift
     call check(finite, "recurrent(4) finite")
     call check(max_drift > 0.0_sp, "loops move logits")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  subroutine test_sample()
+    real(sp) :: logits(4)
+    integer(c_int64_t) :: st
+    integer :: i, pos, hits(4)
+    logical :: ok_range
+
+    print '(A)', "=== test_sample ==="
+    logits = [-1.0_sp, 2.0_sp, 0.5_sp, -0.5_sp]
+
+    ! temp<=0 -> greedy argmax (position 2)
+    st = 1_c_int64_t
+    pos = sample_token(logits, 4, 0.0_sp, st)
+    call check(pos == 2, "greedy argmax")
+
+    ! temp=1: 400 draws stay in range and hit more than one token
+    st = 42_c_int64_t
+    hits = 0
+    ok_range = .true.
+    do i = 1, 400
+      pos = sample_token(logits, 4, 1.0_sp, st)
+      if (pos < 1 .or. pos > 4) ok_range = .false.
+      hits(pos) = hits(pos) + 1
+    end do
+    call check(ok_range, "samples in range")
+    call check(count(hits > 0) > 1, "samples spread")
+    ! token 2 (logit 2.0) must dominate: expect > 200/400 hits
+    print '(A,4I5)', "  hits:", hits
+    call check(hits(2) > 200, "argmax dominates")
+
+    ! determinism: same seed -> same first draw
+    st = 7_c_int64_t
+    pos = sample_token(logits, 4, 1.0_sp, st)
+    block
+      integer :: pos2
+      st = 7_c_int64_t
+      pos2 = sample_token(logits, 4, 1.0_sp, st)
+      call check(pos == pos2, "seeded determinism")
+    end block
   end subroutine
 
 end program test_kernels
