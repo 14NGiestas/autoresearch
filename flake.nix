@@ -21,7 +21,6 @@
           clr
           rocblas
         ] ++ (with pkgs; [
-          stdenv.cc.cc
           zstd
           libxml2
           ncurses
@@ -34,11 +33,14 @@
             buildInputs = with pkgs; [
               uv
               python312
+              gfortran
+              fortran-fpm
             ] ++ rocmLibs;
 
             shellHook = ''
               export ROCM_PATH="${rocmPkgs.rocmPackages.rocm-runtime}"
               export HIP_PATH="${rocmPkgs.rocmPackages.clr}"
+              # não incluir stdenv.cc.cc aqui: sombreava libstdc++ do sistema e quebrava node/pi (CXXABI_1.3.15)
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath rocmLibs}:$LD_LIBRARY_PATH"
               export TORCH_USE_HIP_DSA=1
               export AMD_SERIALIZE_KERNEL=1
@@ -52,24 +54,11 @@
               export HIP_MEMORY_POOL_LIMIT=16000000000
               export PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.9,max_split_size_mb:512
 
-              # Create a venv with ROCm torch if not ready
-              _venv=".venv-rocm"
-              _torch_index="https://download.pytorch.org/whl/rocm6.2"
-              if [ ! -f "$_venv/.ready" ]; then
-                echo "Setting up ROCm venv (one-time)..."
-                rm -rf "$_venv"
-                python3 -m venv "$_venv"
-                "$_venv/bin/pip" install --quiet --upgrade pip
-                "$_venv/bin/pip" install --quiet \
-                  matplotlib numpy pandas pyarrow requests rustbpe tiktoken 2>&1 | tail -3
-                "$_venv/bin/pip" install --quiet "torch==2.5.1" \
-                  --index-url "$_torch_index" 2>&1 | tail -3
-                touch "$_venv/.ready"
-                echo "ROCm venv ready."
-              fi
-              . "$_venv/bin/activate"
+              # torch-free shell: training/inference moved to pure Fortran (src/).
+              # No venv bootstrap — python3 here is for numpy-only tooling (parity
+              # harness, future .pt export reader). See hyp_34ea7c.
 
-              echo "ROCm autoresearch shell ready."
+              echo "ROCm autoresearch shell ready (torch-free)."
             '';
           };
       }

@@ -80,6 +80,8 @@ Seeing as there seems to be a lot of interest in tinkering with autoresearch on 
 
 I think these would be the reasonable hyperparameters to play with. Ask your favorite coding agent for help and copy paste them this guide, as well as the full source code.
 
+trouble with pi harnes? export PATH="/home/pauli/.local/share/pi-node/node-v22.23.2-linux-x64/bin:$PATH"
+
 ## Notable forks
 
 - [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (MacOS)

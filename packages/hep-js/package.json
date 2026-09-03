@@ -1,0 +1,25 @@
+{
+  "name": "hep-protocol",
+  "version": "0.1.1",
+  "description": "Hypothesis Evolution Protocol — auditable event-sourced registry (arXiv:2607.09195v1)",
+  "type": "module",
+  "bin": {
+    "hep": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "test": "node --test dist-test/test.js 2>&1 | head -n 200",
+    "prepublishOnly": "tsc"
+  },
+  "keywords": ["hep", "hypothesis", "auditable", "ai-scientist", "arxiv:2607.09195"],
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

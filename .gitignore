@@ -7,7 +7,7 @@ wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.venv*
 worktrees/
 results/
 queue/
@@ -21,3 +21,27 @@ dev/
 
 # Results file
 results.tsv
+
+# Big/generated artifacts (never commit)
+checkpoints/
+*.pt
+logs/
+*.log
+node_modules/
+archive/
+.direnv/
+.envrc
+.base_done
+.ft_done
+
+# Secrets / local config
+.env
+.env.*
+
+# Hoarded AI-chat training data (downloaded third-party artifacts; not source code)
+hoard/
+hoard_multi/
+hoard_v2/
+ai_chat_hoarder/hoard/
+**/raw/*.html
+**/raw/*.json

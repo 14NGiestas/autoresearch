@@ -1,0 +1,5 @@
+name = "fortran_math"
+version = "0.1.0"
+
+[library]
+source-files = ["fortran_math.f90"]

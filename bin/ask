@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Ask a local LLM a question
+# Usage: ask "your question"
+#        cat prompt.txt | ask
+
+MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
+OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+
+if [ -t 0 ]; then
+    PROMPT="$*"
+else
+    PROMPT="$(cat)"
+fi
+
+if [ -z "$PROMPT" ]; then
+    echo "Usage: ask <question>  or  echo '<question>' | ask" >&2
+    exit 1
+fi
+
+curl -s "$OLLAMA_URL/api/generate" \
+  -d "$(python3 -c "import json,sys; print(json.dumps({'model':'$MODEL','prompt':sys.argv[1],'stream':false}))" "$PROMPT")" \
+| python3 -c "
+import sys,json
+r = json.load(sys.stdin)
+if 'response' in r:
+    # Strip thinking sections (between  and  or thinking tags)
+    resp = r['response']
+    import re
+    resp = re.sub(r'<think>.*?</think>', '', resp, flags=re.DOTALL)
+    resp = re.sub(r'^.*?```\n', '', resp, flags=re.DOTALL).strip()
+    print(resp)
+" 2>/dev/null

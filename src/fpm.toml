@@ -1,0 +1,14 @@
+name = "fortran_gpt"
+version = "0.1.0"
+license = "MIT"
+author = "autoresearch"
+maintainer = "autoresearch"
+copyright = "Copyright 2026, autoresearch"
+description = "Pure-Fortran GPT forward pass: RMSNorm, matmul, RoPE, causal attention, ReLU^2"
+
+[library]
+source-dir = "lib"
+
+[dependencies]
+openmp = "*"
+stdlib = "*"
