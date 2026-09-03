@@ -48,6 +48,38 @@ python3 hep.py transition --hyp hyp_X --state under_test  # proposed|under_test|
 - Touch `tokenizer_encode.f90` without `tokdiff_driver.py --n 200` green
   (the `(b)`-branch rule is load-bearing; see README).
 
+## The loop (overnight operation)
+
+This is the adapted core of the initial `program.md`: pick → build →
+measure → keep or discard → repeat until morning. HEP replaces
+`results.tsv` as the lab notebook (it is append-only; never rewrite it).
+
+1. **Baseline first.** Every run starts from known numbers, not vibes:
+   `fortran-fpm test` (10/10), parity err (`/tmp/parity.py`, expect ~2e-7),
+   `tokdiff_driver.py --n 200` (exact), depth-12 reference points
+   (torch tag 0.375, Fortran interim 0.58). If any baseline is red, fix
+   it before experimenting — a broken baseline poisons every verdict.
+2. **Pick one hypothesis** (`hep.py status`; lowest-hanging belief first).
+   State the falsifiable prediction up front (e.g. "KV-cache keeps bpb
+   within 1e-6 while cutting 30-token latency 5×").
+3. **Implement small.** One module or one app change, <300 lines/file,
+   following `chat_text`/`eval_bpb` patterns. Touch `tokenizer_encode.f90`
+   only with the diff green.
+4. **Measure with the fixed instruments** — `fortran-fpm test`, parity,
+   tokdiff, `eval_driver.py`. Same rows, same flags, or the numbers are
+   incomparable. Approx costs: test ~1 min, parity ~1 min, tokdiff-200
+   ~2 min, eval Row ~95 s.
+5. **Keep or discard (simplicity criterion applies).** Improvement kept
+   only with evidence recorded (`hep.py evidence` + `transition`); a
+   0.01 gain from 200 lines of hacks is discarded, a 0.0 with deleted
+   code is kept. Discards get one evidence line too (why it failed).
+6. **Commit green states only** (`git add src scripts ...`, never
+   checkpoints/logs/venvs), push the branch, sleep capped at 1800s per
+   call with `nohup` for the long evals.
+
+Morning report = HEP delta since last report: hypotheses moved, numbers,
+verdicts, disk, next pick. That is the whole job.
+
 **Budgets:** VRAM ceiling is irrelevant now (CPU inference); disk is the
 constraint (keep ≥10 GB free — check `df -h /`). `sleep` capped at 1800s
 per call; use `nohup ... &` for long runs (`eval_driver --rows 48` ≈ 75 min).
