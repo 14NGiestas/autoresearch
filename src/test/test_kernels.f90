@@ -132,6 +132,18 @@ program test_kernels
       real, intent(in) :: dout(*)
       real, intent(inout) :: dwte(*)
     end subroutine
+    subroutine attn_bwd(dy, q, k, v, dq, dk, dv, B, T, H, K_H, D) \
+        bind(c, name='attn_bwd')
+      integer, intent(in) :: B, T, H, K_H, D
+      real, intent(in) :: dy(*), q(*), k(*), v(*)
+      real, intent(out) :: dq(*)
+      real, intent(inout) :: dk(*), dv(*)
+    end subroutine
+    subroutine relu2_bwd(dy, x, dx, N) bind(c, name='relu2_bwd')
+      integer, intent(in) :: N
+      real, intent(in) :: dy(*), x(*)
+      real, intent(out) :: dx(*)
+    end subroutine
     subroutine rmsnorm(x, w, y, N, C, eps) bind(c, name='rmsnorm')
       integer, intent(in) :: N, C
       real, intent(in) :: x(*), w(*)
@@ -171,6 +183,8 @@ program test_kernels
   call test_wte_bwd()
   call test_rope_bwd()
   call test_xent()
+  call test_attn_bwd()
+  call test_relu2_bwd()
 
   print '(A,I0,A)', "===", fail_count, " failures ==="
   if (fail_count > 0) call exit(1)
@@ -1011,6 +1025,98 @@ contains
       end if
     end do
     call check(.true., "xent row-sum zero")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! attn_bwd (incl. GQA kv sharing) vs central FD of causal_attn.
+  subroutine test_attn_bwd()
+    integer, parameter :: BR = 1, TC = 3, HH = 2, K_H = 1, DD = 4
+    real(sp), parameter :: H = 1.0e-3_sp
+    real(sp) :: q(BR*TC*HH*DD), k(BR*TC*K_H*DD), v(BR*TC*K_H*DD)
+    real(sp) :: dy(BR*TC*HH*DD)
+    real(sp) :: dq(BR*TC*HH*DD), dk(BR*TC*K_H*DD), dv(BR*TC*K_H*DD)
+    real(sp) :: qp(BR*TC*HH*DD), qm(BR*TC*HH*DD)
+    real(sp) :: kp(BR*TC*K_H*DD), km(BR*TC*K_H*DD)
+    real(sp) :: vp(BR*TC*K_H*DD), vm(BR*TC*K_H*DD)
+    real(sp) :: yp(BR*TC*HH*DD), ym(BR*TC*HH*DD)
+    real(sp) :: e, max_err
+    integer :: i
+
+    print '(A)', "=== test_attn_bwd (finite differences, GQA) ==="
+    call fill(q, BR*TC*HH*DD)
+    call fill(k, BR*TC*K_H*DD)
+    call fill(v, BR*TC*K_H*DD)
+    call fill(dy, BR*TC*HH*DD)
+
+    dq = 0.0_sp; dk = 0.0_sp; dv = 0.0_sp
+    call attn_bwd(dy, q, k, v, dq, dk, dv, BR, TC, HH, K_H, DD)
+
+    max_err = 0.0_sp
+    do i = 1, BR*TC*HH*DD
+      qp = q; qm = q
+      qp(i) = qp(i) + H; qm(i) = qm(i) - H
+      call causal_attn(qp, k, v, yp, BR, TC, HH, K_H, DD)
+      call causal_attn(qm, k, v, ym, BR, TC, HH, K_H, DD)
+      e = abs(dq(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err dq = ", max_err
+    call check(max_err < 3.0e-3_sp, "attn dq")
+
+    max_err = 0.0_sp
+    do i = 1, BR*TC*K_H*DD
+      kp = k; km = k
+      kp(i) = kp(i) + H; km(i) = km(i) - H
+      call causal_attn(q, kp, v, yp, BR, TC, HH, K_H, DD)
+      call causal_attn(q, km, v, ym, BR, TC, HH, K_H, DD)
+      e = abs(dk(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err dk = ", max_err
+    call check(max_err < 3.0e-3_sp, "attn dk")
+
+    max_err = 0.0_sp
+    do i = 1, BR*TC*K_H*DD
+      vp = v; vm = v
+      vp(i) = vp(i) + H; vm(i) = vm(i) - H
+      call causal_attn(q, k, vp, yp, BR, TC, HH, K_H, DD)
+      call causal_attn(q, k, vm, ym, BR, TC, HH, K_H, DD)
+      e = abs(dv(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err dv = ", max_err
+    call check(max_err < 3.0e-3_sp, "attn dv")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! relu2_bwd vs central finite differences of relu2.
+  subroutine test_relu2_bwd()
+    real(sp), parameter :: H = 1.0e-3_sp
+    real(sp) :: x(7), y(7), dy(7), dx(7), yp(7), ym(7)
+    real(sp) :: e, max_err
+    integer :: i
+
+    print '(A)', "=== test_relu2_bwd (finite differences) ==="
+    x = [-2.0_sp, -1.0_sp, -0.5_sp, 0.0_sp, 0.5_sp, 1.0_sp, 2.0_sp]
+    dy = [0.3_sp, -0.2_sp, 0.1_sp, 0.0_sp, 0.4_sp, -0.1_sp, 0.2_sp]
+    y = x
+    call relu2(y, 7)
+
+    call relu2_bwd(dy, x, dx, 7)
+
+    ! kink at x=0 (i=4): FD undefined there, analytic is one-sided; skip.
+    max_err = 0.0_sp
+    do i = 1, 7
+      if (i == 4) cycle
+      yp = x; ym = x
+      yp(i) = yp(i) + H; ym(i) = ym(i) - H
+      call relu2(yp(1:7), 7)
+      call relu2(ym(1:7), 7)
+      e = abs(dx(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err dx = ", max_err
+    call check(max_err < 2.0e-3_sp, "relu2 dx")
   end subroutine
 
 end program test_kernels
