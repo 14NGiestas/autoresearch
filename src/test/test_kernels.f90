@@ -94,6 +94,23 @@ program test_kernels
       real, intent(out) :: out1(*)
       real, value :: eps
     end subroutine
+    subroutine linear3d_bwd(dy, x, w, dx, dw, B, T, IF, OF) &
+        bind(c, name='linear3d_bwd')
+      integer, intent(in) :: B, T, IF, OF
+      real, intent(in) :: dy(*), x(*), w(*)
+      real, intent(out) :: dx(*), dw(*)
+    end subroutine
+    subroutine rmsnorm0_bwd(dy, x, dx, N, C, eps) bind(c, name='rmsnorm0_bwd')
+      integer, intent(in) :: N, C
+      real, intent(in) :: dy(*), x(*)
+      real, intent(out) :: dx(*)
+      real, value :: eps
+    end subroutine
+    subroutine wte_bwd(idx, dout, dwte, B, T, V, D) bind(c, name='wte_bwd')
+      integer, intent(in) :: idx(*), B, T, V, D
+      real, intent(in) :: dout(*)
+      real, intent(inout) :: dwte(*)
+    end subroutine
     subroutine rmsnorm(x, w, y, N, C, eps) bind(c, name='rmsnorm')
       integer, intent(in) :: N, C
       real, intent(in) :: x(*), w(*)
@@ -128,6 +145,9 @@ program test_kernels
   call test_recurrent_loops()
   call test_sample()
   call test_kv_equiv()
+  call test_linear_bwd()
+  call test_rmsnorm_bwd()
+  call test_wte_bwd()
 
   print '(A,I0,A)', "===", fail_count, " failures ==="
   if (fail_count > 0) call exit(1)
@@ -779,6 +799,115 @@ contains
     print '(A,E10.3,A,I0)', "  max err = ", max_err, "  cache_len=", clen
     call check(clen == TC, "cache holds all positions")
     call check(max_err == 0.0_sp, "cached steps == full forward")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! linear3d_bwd vs central finite differences of linear3d.
+  subroutine test_linear_bwd()
+    integer, parameter :: BR = 2, TC = 3, IF = 4, OF = 5
+    real(sp), parameter :: H = 1.0e-3_sp
+    real(sp) :: x(BR*TC*IF), w(OF*IF), dy(BR*TC*OF)
+    real(sp) :: dx(BR*TC*IF), dw(OF*IF)
+    real(sp) :: xp(BR*TC*IF), xm(BR*TC*IF), wp(OF*IF), wm(OF*IF)
+    real(sp) :: yp(BR*TC*OF), ym(BR*TC*OF)
+    real(sp) :: e, max_err
+    integer :: i
+
+    print '(A)', "=== test_linear_bwd (finite differences) ==="
+    call fill(x, BR*TC*IF)
+    call fill(w, OF*IF)
+    call fill(dy, BR*TC*OF)
+
+    call linear3d_bwd(dy, x, w, dx, dw, BR, TC, IF, OF)
+
+    ! dL/dx via central differences (L = sum(dy*y))
+    max_err = 0.0_sp
+    do i = 1, BR*TC*IF
+      xp = x; xm = x
+      xp(i) = xp(i) + H; xm(i) = xm(i) - H
+      call linear3d(xp, w, yp, BR, TC, IF, OF)
+      call linear3d(xm, w, ym, BR, TC, IF, OF)
+      e = abs(dx(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err dx = ", max_err
+    call check(max_err < 2.0e-3_sp, "linear dx")
+
+    max_err = 0.0_sp
+    do i = 1, OF*IF
+      wp = w; wm = w
+      wp(i) = wp(i) + H; wm(i) = wm(i) - H
+      call linear3d(x, wp, yp, BR, TC, IF, OF)
+      call linear3d(x, wm, ym, BR, TC, IF, OF)
+      e = abs(dw(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err dw = ", max_err
+    call check(max_err < 2.0e-3_sp, "linear dw")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! rmsnorm0_bwd vs central finite differences of rmsnorm0.
+  subroutine test_rmsnorm_bwd()
+    integer, parameter :: NN = 3, CC = 8
+    real(sp), parameter :: H = 1.0e-3_sp
+    real(sp) :: x(NN*CC), dy(NN*CC), dx(NN*CC)
+    real(sp) :: xp(NN*CC), xm(NN*CC), yp(NN*CC), ym(NN*CC)
+    real(sp) :: e, max_err
+    integer :: i
+
+    print '(A)', "=== test_rmsnorm_bwd (finite differences) ==="
+    call fill(x, NN*CC)
+    call fill(dy, NN*CC)
+
+    call rmsnorm0_bwd(dy, x, dx, NN, CC, 1.0e-5_sp)
+
+    max_err = 0.0_sp
+    do i = 1, NN*CC
+      xp = x; xm = x
+      xp(i) = xp(i) + H; xm(i) = xm(i) - H
+      call rmsnorm0(xp, yp, NN, CC, 1.0e-5_sp)
+      call rmsnorm0(xm, ym, NN, CC, 1.0e-5_sp)
+      e = abs(dx(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err dx = ", max_err
+    call check(max_err < 2.0e-3_sp, "rmsnorm dx")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! wte_bwd: exact scatter-add check, incl. colliding ids (critical sec).
+  subroutine test_wte_bwd()
+    integer, parameter :: BR = 2, TC = 3, VV = 5, DD = 4
+    integer :: idx(BR*TC)
+    real(sp) :: dout(BR*TC*DD), dwte(VV*DD), ref(VV*DD)
+    real(sp) :: e, max_err
+    integer :: i, j, k
+
+    print '(A)', "=== test_wte_bwd (exact scatter) ==="
+    idx = [0, 2, 2, 4, 0, 1]   ! collisions on 0 and 2
+    call fill(dout, BR*TC*DD)
+    dwte = 0.0_sp
+    ref = 0.0_sp
+
+    call wte_bwd(idx, dout, dwte, BR, TC, VV, DD)
+
+    do i = 1, BR
+      do j = 1, TC
+        do k = 1, DD
+          ref(idx((i-1)*TC+j)*DD+k) = ref(idx((i-1)*TC+j)*DD+k) + &
+              dout(((i-1)*TC+(j-1))*DD+k)
+        end do
+      end do
+    end do
+
+    max_err = 0.0_sp
+    do i = 1, VV*DD
+      e = abs(dwte(i) - ref(i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err = ", max_err
+    call check(max_err == 0.0_sp, "wte scatter exact")
   end subroutine
 
 end program test_kernels
