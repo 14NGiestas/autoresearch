@@ -10,7 +10,7 @@
 
 module load_weights_mod
   use iso_c_binding
-  use stdlib_io_npy, only: load_npy
+  use stdlib_io_npy, only: load_npy, save_npy
   implicit none
 contains
 
@@ -35,6 +35,54 @@ contains
     a(at:at+size(tmp)-1) = tmp
     deallocate(tmp)
   end subroutine load_into
+
+  subroutine save1(path, a)
+    character(*), intent(in) :: path
+    real(c_float), intent(in) :: a(:)
+    integer :: ios
+    character(len=:), allocatable :: msg
+    call save_npy(path, a, iostat=ios, iomsg=msg)
+    if (ios /= 0) then
+      print '(3A)', "save failed: ", trim(path), " " // trim(msg)
+      call exit(1)
+    end if
+  end subroutine save1
+
+  ! Mirror of load_gpt_weights: split stacked buffers back to per-layer
+  ! .npy files (flat float32, exporter convention) for resume.
+  subroutine save_gpt_weights(wdir, n_layer, d_model, n_head, n_kv_head, &
+      head_dim, vocab_size, wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
+    character(*), intent(in) :: wdir
+    integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim
+    integer, intent(in) :: vocab_size
+    real(c_float), intent(in) :: wte(:), lm_head(:)
+    real(c_float), intent(in) :: c_q(:), c_k(:), c_v(:)
+    real(c_float), intent(in) :: c_pr(:), c_fc(:), c_pr2(:)
+    integer :: ll, qsz, ksz, psz, fcsz, p2sz
+    character(len=16) :: lstr
+    qsz = n_head*head_dim*d_model
+    ksz = n_kv_head*head_dim*d_model
+    psz = d_model*n_head*head_dim
+    fcsz = 4*d_model*d_model
+    p2sz = d_model*4*d_model
+    call save1(trim(wdir) // "/transformer_wte_weight.npy", wte)
+    call save1(trim(wdir) // "/lm_head_weight.npy", lm_head)
+    do ll = 0, n_layer - 1
+      write (lstr, '(I0)') ll
+      call save1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_attn_c_q_weight.npy", c_q(ll*qsz+1:(ll+1)*qsz))
+      call save1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_attn_c_k_weight.npy", c_k(ll*ksz+1:(ll+1)*ksz))
+      call save1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_attn_c_v_weight.npy", c_v(ll*ksz+1:(ll+1)*ksz))
+      call save1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_attn_c_proj_weight.npy", c_pr(ll*psz+1:(ll+1)*psz))
+      call save1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_mlp_c_fc_weight.npy", c_fc(ll*fcsz+1:(ll+1)*fcsz))
+      call save1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_mlp_c_proj_weight.npy", c_pr2(ll*p2sz+1:(ll+1)*p2sz))
+    end do
+  end subroutine save_gpt_weights
 
   subroutine load_gpt_weights(wdir, n_layer, d_model, n_head, n_kv_head, &
       head_dim, vocab_size, wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2)

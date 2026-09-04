@@ -25,6 +25,7 @@ program test_kernels
   use iso_c_binding
   use sample_mod, only: sample_token
   use fortran_train_mod
+  use fortran_data_mod, only: load_batch, count_rows
   implicit none
 
   integer, parameter :: sp = c_float
@@ -195,6 +196,8 @@ program test_kernels
   call test_relu2_bwd()
   call test_adamw()
   call test_full_step()
+  call test_data_batch()
+  call test_save_load()
 
   print '(A,I0,A)', "===", fail_count, " failures ==="
   if (fail_count > 0) call exit(1)
@@ -1252,6 +1255,64 @@ contains
     print '(A,F10.5,A,F10.5)', "  nll ", n0, " -> ", n5
     call check(n5 < n0, "overfit descends")
   end subroutine test_full_step
+
+  ! ------------------------------------------------------------------------
+  ! Data loader: write a fixture rows file, read back batch + count.
+  subroutine test_data_batch()
+    integer, parameter :: T = 8
+    integer :: idx(2*T), targets(2*T), ngot, n
+    integer :: u
+
+    print '(A)', "=== test_data_batch ==="
+    open (newunit=u, file="/tmp/fd_rows.txt", status="replace")
+    write (u, '(A)') "0 1 2 3 4 5 6 7 8"
+    write (u, '(A)') ""
+    write (u, '(A)') "8 7 6 5 4 3 2 1 0"
+    close (u)
+
+    n = count_rows("/tmp/fd_rows.txt")
+    call check(n == 2, "count skips blanks")
+    call load_batch("/tmp/fd_rows.txt", 0, 2, T, idx, targets, ngot)
+    call check(ngot == 2, "batch got 2")
+    call check(all(idx(1:T) == [0, 1, 2, 3, 4, 5, 6, 7]), "row0 ids")
+    call check(all(targets(1:T) == [1, 2, 3, 4, 5, 6, 7, 8]), "row0 tgts")
+    call check(all(idx(T+1:2*T) == [8, 7, 6, 5, 4, 3, 2, 1]), "row1 ids")
+    call load_batch("/tmp/fd_rows.txt", 1, 2, T, idx, targets, ngot)
+    call check(ngot == 1, "offset stops at EOF")
+    call check(count_rows("/tmp/does_not_exist_xyz") == -1, "missing -> -1")
+  end subroutine test_data_batch
+
+  ! ------------------------------------------------------------------------
+  ! save_gpt_weights -> load_gpt_weights roundtrip (tiny shapes).
+  subroutine test_save_load()
+    use load_weights_mod, only: load_gpt_weights, save_gpt_weights
+    real(sp), allocatable :: wte(:), lm(:), cq(:), ck(:), cv(:)
+    real(sp), allocatable :: cp(:), cf(:), cp2(:)
+    real(sp), allocatable :: wte2(:), lm2(:), cq2(:), ck2(:), cv2(:)
+    real(sp), allocatable :: cp_(:), cf2(:), cp22(:)
+    integer :: u, i
+    logical :: ok
+
+    print '(A)', "=== test_save_load ==="
+    ! dims V=3 D=2 nh=1 nkv=1 hd=2 nl=1: wte 6, lm 6, q/k/v/p 4,
+    ! fc/p2 16.
+    allocate(wte(6), lm(6))
+    allocate(cq(4), ck(4), cv(4), cp(4), cf(16), cp2(16))
+    wte = [(real(i, sp), i = 1, 6)]
+    lm = -wte
+    cq = 1.0_sp; ck = 2.0_sp; cv = 3.0_sp
+    cp = 4.0_sp; cf = 5.0_sp; cp2 = 6.0_sp
+    call execute_command_line("mkdir -p /tmp/rt_weights")
+    call save_gpt_weights("/tmp/rt_weights", 1, 2, 1, 1, 2, 3, &
+        wte, lm, cq, ck, cv, cp, cf, cp2)
+    call load_gpt_weights("/tmp/rt_weights", 1, 2, 1, 1, 2, 3, &
+        wte2, lm2, cq2, ck2, cv2, cp_, cf2, cp22)
+    ok = all(wte2 == wte) .and. all(lm2 == lm) .and. all(cq2 == cq) &
+        .and. all(ck2 == ck) .and. all(cv2 == cv) .and. all(cp_ == cp) &
+        .and. all(cf2 == cf) .and. all(cp22 == cp2)
+    call check(ok, "npy roundtrip exact")
+    call check(size(cq2) == 4 .and. size(cf2) == 16, "shapes kept")
+  end subroutine test_save_load
 
   subroutine check_group(w, gr, label, max_err, M, G, C, idx, targets, &
       cos, sin, Hh)
