@@ -24,6 +24,7 @@
 program test_kernels
   use iso_c_binding
   use sample_mod, only: sample_token
+  use fortran_train_mod
   implicit none
 
   integer, parameter :: sp = c_float
@@ -193,6 +194,7 @@ program test_kernels
   call test_attn_bwd()
   call test_relu2_bwd()
   call test_adamw()
+  call test_full_step()
 
   print '(A,I0,A)', "===", fail_count, " failures ==="
   if (fail_count > 0) call exit(1)
@@ -1176,5 +1178,116 @@ contains
     print '(A,E10.3,A,E10.3)', "  loss ", loss0, " -> ", loss1
     call check(loss1 < 0.01_sp * loss0, "adamw converges")
   end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! Whole-model: compute_grads vs central FD over EVERY weight + a 5-step
+  ! overfit check (single fixed batch NLL must fall) exercising train_step.
+  subroutine test_full_step()
+    ! H=3e-4: separates FD truncation (~h^2, expect ~10x smaller than
+    ! H=1e-3) from ReLU-kink contamination (h-independent). If errors
+    ! persist at ~1e-2, the analytic path has a real bug.
+    type(dims_t) :: G
+    type(params_t) :: M, GR
+    type(state_t) :: S
+    type(cache_t) :: C
+    real(sp), parameter :: H = 3.0e-4_sp
+    integer :: idx(2), targets(2)
+    real(sp) :: cos(4), sin(4)
+    real(sp) :: nll, n0, n5
+    real(sp) :: e, max_err
+    integer :: k
+
+    print '(A)', "=== test_full_step (whole-model FD + overfit) ==="
+    G%B = 1; G%T = 2; G%V = 8; G%D = 4
+    G%nh = 1; G%nkv = 1; G%hd = 4; G%nl = 1
+    G%eps = 1.0e-5_sp
+    idx = [3, 5]; targets = [5, 1]
+    call fill(cos, 4)
+    call fill(sin, 4)
+
+    allocate(M%wte(32), M%lm(32))
+    allocate(M%q(16), M%k(16), M%v(16), M%p(16))
+    allocate(M%fc(64), M%p2(64))
+    call fill(M%wte, 32, 0.3_sp); call fill(M%lm, 32, 0.3_sp)
+    call fill(M%q, 16, 0.3_sp); call fill(M%k, 16, 0.3_sp)
+    call fill(M%v, 16, 0.3_sp); call fill(M%p, 16, 0.3_sp)
+    call fill(M%fc, 64, 0.3_sp); call fill(M%p2, 64, 0.3_sp)
+    allocate(GR%wte(32), GR%lm(32))
+    allocate(GR%q(16), GR%k(16), GR%v(16), GR%p(16))
+    allocate(GR%fc(64), GR%p2(64))
+    call init_state(M, S)
+
+    call forward_save(idx, targets, cos, sin, M, G, C, nll)
+    call compute_grads(idx, targets, cos, sin, M, G, C, GR, nll)
+    print '(A,F10.5)', "  nll =", nll
+    call check(nll == nll .and. nll > 0.0_sp, "nll finite positive")
+
+    max_err = 0.0_sp
+    call check_group(M%wte, GR%wte, "wte", max_err, M, G, C, idx, &
+        targets, cos, sin, H)
+    call check_group(M%lm, GR%lm, "lm", max_err, M, G, C, idx, &
+        targets, cos, sin, H)
+    call check_group(M%q, GR%q, "q", max_err, M, G, C, idx, &
+        targets, cos, sin, H)
+    call check_group(M%k, GR%k, "k", max_err, M, G, C, idx, &
+        targets, cos, sin, H)
+    call check_group(M%v, GR%v, "v", max_err, M, G, C, idx, &
+        targets, cos, sin, H)
+    call check_group(M%p, GR%p, "proj", max_err, M, G, C, idx, &
+        targets, cos, sin, H)
+    call check_group(M%fc, GR%fc, "fc", max_err, M, G, C, idx, &
+        targets, cos, sin, H)
+    call check_group(M%p2, GR%p2, "p2", max_err, M, G, C, idx, &
+        targets, cos, sin, H)
+    print '(A,E10.3)', "  max err all grads = ", max_err
+    call check(max_err < 5.0e-3_sp, "whole-model grads")
+
+    ! overfit: 5 AdamW steps on this one batch must lower NLL
+    n0 = nll
+    do k = 1, 5
+      call train_step(idx, targets, cos, sin, M, S, G, GR, C, nll, k, &
+          0.02_sp, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp)
+    end do
+    n5 = nll
+    print '(A,F10.5,A,F10.5)', "  nll ", n0, " -> ", n5
+    call check(n5 < n0, "overfit descends")
+  end subroutine test_full_step
+
+  subroutine check_group(w, gr, label, max_err, M, G, C, idx, targets, &
+      cos, sin, Hh)
+    ! group-local max printed separately (cumulative max_err hides origin)
+    real(sp) :: glocal
+    real(sp), intent(inout) :: w(:)
+    real(sp), intent(in) :: gr(:)
+    character(*), intent(in) :: label
+    real(sp), intent(inout) :: max_err
+    type(params_t), intent(inout) :: M
+    type(dims_t), intent(in) :: G
+    type(cache_t), intent(inout) :: C
+    integer, intent(in) :: idx(*), targets(*)
+    real(sp), intent(in) :: cos(*), sin(*)
+    real(sp), intent(in) :: Hh
+    real(sp) :: w0, np_, nm_, e, fdval, fd_worst, an_worst
+    integer :: ii, iworst
+    glocal = 0.0_sp
+    iworst = 1; fd_worst = 0.0_sp; an_worst = 0.0_sp
+    do ii = 1, size(w)
+      w0 = w(ii)
+      w(ii) = w0 + Hh
+      call forward_save(idx, targets, cos, sin, M, G, C, np_)
+      w(ii) = w0 - Hh
+      call forward_save(idx, targets, cos, sin, M, G, C, nm_)
+      w(ii) = w0
+      fdval = (np_ - nm_) / (2.0_sp * Hh)
+      e = abs(gr(ii) - fdval)
+      if (e > glocal) then
+        glocal = e
+        iworst = ii; fd_worst = fdval; an_worst = gr(ii)
+      end if
+      if (e > max_err) max_err = e
+    end do
+    print '(A,A,E10.3,A,I0,A,2ES12.4)', "  group ", label, glocal, &
+        " @", iworst, " analytic/FD:", an_worst, fd_worst
+  end subroutine check_group
 
 end program test_kernels
