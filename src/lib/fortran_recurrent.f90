@@ -70,6 +70,12 @@ contains
     ! ---- 1. token embedding --------------------------------
     call wte_lookup(idx, wte, emd, BB, TT, vocab_size, d_model)
 
+    ! ---- 2. initial RMSNorm (matches gpt_forward / train.py) ---
+    call rmsnorm0(emd, xn, BB*TT, d_model, eps)
+    do jj = 1, BB*TT*d_model
+      emd(jj) = xn(jj)
+    end do
+
     ! ---- 2. recurrent block: same weights, n_loops passes --
     do lr = 1, n_loops
 

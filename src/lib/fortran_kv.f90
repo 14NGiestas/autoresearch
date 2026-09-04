@@ -90,6 +90,12 @@ contains
     ! ---- 1. token embedding (single position) --------------
     call wte_lookup(idx1, wte, emd, BB, 1, vocab_size, d_model)
 
+    ! ---- 2. initial RMSNorm (train.py norms embeddings before blocks)
+    call rmsnorm0(emd, xn, BB, d_model, eps)
+    do jj = 1, BB*d_model
+      emd(jj) = xn(jj)
+    end do
+
     ! ---- 2. transformer blocks -------------------------------
     do ll = 0, n_layer - 1
 
