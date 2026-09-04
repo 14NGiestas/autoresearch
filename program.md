@@ -99,6 +99,14 @@ per call; use `nohup ... &` for long runs (`eval_driver --rows 48` ≈ 75 min).
   may pass descriptors — prefer explicit-shape + contiguous sections.
 - OpenMP: every private-shared variable goes in `private(...)`; a missing
   one passes all tests at H=1 and explodes at H=4 (see `kb` incident).
+- Never `inquire(size=)` on pipes/stdin (gfortran returns 0) — read
+  bytes to EOF. A green exit with piped stdout still deserves a look
+  at the actual bytes (garbage once rode through `tail` undetected).
+- Aborted tool calls reap the whole process group, `nohup` included:
+  launch-and-return in one call, check in the next.
+- Several `build/<hash>/` dirs is normal fpm behavior (per-target flag
+  sets), but globs may grab stale apps — prefer `fortran-fpm run`, or
+  resolve newest explicitly and never trust `build/*` blindly.
 - fpm 0.10.1 has no `[build] openmp` key — OpenMP comes from the
   `[dependencies] openmp = "*"` metapackage; `stdlib = "*"` gives
   `stdlib_io_npy` (weight loading). `iomsg` args must be deferred-length

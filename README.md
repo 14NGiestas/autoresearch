@@ -74,6 +74,10 @@ printf '%s' "Alan Turing theorized that computers" | \
     ~/.cache/autoresearch/weights_depth12 20
 ```
 
+Measured on Ryzen 7 8745HS (8 threads): 30 tokens in ~1.6 s wall
+(~50 ms/token incl. one-time 375 MB weight load) with the KV-cache
+decoder (`gpt_step`); pre-cache full-recompute loop was ~5 s/token.
+
 Or the guided version (encode/decode handled):
 
 ```bash
