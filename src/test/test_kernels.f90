@@ -144,6 +144,13 @@ program test_kernels
       real, intent(in) :: dy(*), x(*)
       real, intent(out) :: dx(*)
     end subroutine
+    subroutine adamw_step(p, g, m, v, N, lr, b1, b2, eps, wd, t) \
+        bind(c, name='adamw_step')
+      integer, intent(in) :: N, t
+      real, intent(inout) :: p(*), m(*), v(*)
+      real, intent(in) :: g(*)
+      real, value :: lr, b1, b2, eps, wd
+    end subroutine
     subroutine rmsnorm(x, w, y, N, C, eps) bind(c, name='rmsnorm')
       integer, intent(in) :: N, C
       real, intent(in) :: x(*), w(*)
@@ -185,6 +192,7 @@ program test_kernels
   call test_xent()
   call test_attn_bwd()
   call test_relu2_bwd()
+  call test_adamw()
 
   print '(A,I0,A)', "===", fail_count, " failures ==="
   if (fail_count > 0) call exit(1)
@@ -1117,6 +1125,56 @@ contains
     end do
     print '(A,E10.3)', "  max err dx = ", max_err
     call check(max_err < 2.0e-3_sp, "relu2 dx")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  subroutine test_adamw()
+    real(sp) :: p(4), g(4), m(4), v(4), p0(4)
+    real(sp) :: lr, b1, b2, eps, wd
+    real(sp) :: e, max_err, loss0, loss1
+    integer :: i, k
+
+    print '(A)', "=== test_adamw ==="
+    lr = 0.01_sp; b1 = 0.9_sp; b2 = 0.999_sp
+    eps = 1.0e-8_sp; wd = 0.1_sp
+
+    ! 1. exact first step from zero state: mhat=g, vhat=g^2
+    p = [1.0_sp, -2.0_sp, 0.5_sp, 3.0_sp]
+    g = [0.5_sp, 0.25_sp, -1.0_sp, 2.0_sp]
+    m = 0.0_sp; v = 0.0_sp
+    p0 = p
+    call adamw_step(p, g, m, v, 4, lr, b1, b2, eps, wd, 1)
+    max_err = 0.0_sp
+    do i = 1, 4
+      e = abs(p(i) - (p0(i) - lr * (g(i) / (abs(g(i)) + eps) + wd * p0(i))))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err first-step = ", max_err
+    call check(max_err < 1.0e-6_sp, "adamw first step exact")
+    ! moments match (1-b)*g, (1-b)*g^2
+    call check(abs(m(1) - 0.1_sp*0.5_sp) < 1.0e-7_sp, "adamw m state")
+    call check(abs(v(2) - 0.001_sp*0.0625_sp) < 1.0e-9_sp, "adamw v state")
+
+    ! 2. decoupled WD with zero grad: geometric decay (1-lr*wd)^t
+    p = 2.0_sp; m = 0.0_sp; v = 0.0_sp; g = 0.0_sp
+    do k = 1, 3
+      call adamw_step(p, g, m, v, 4, lr, b1, b2, eps, wd, k)
+    end do
+    e = abs(p(1) - 2.0_sp * (1.0_sp - lr*wd)**3)
+    print '(A,E10.3)', "  wd decay err = ", e
+    call check(e < 1.0e-6_sp, "adamw decoupled wd")
+
+    ! 3. functional: minimize sum(p^2), gradient 2p, 200 steps
+    p = [1.0_sp, -1.0_sp, 0.5_sp, -0.5_sp]
+    m = 0.0_sp; v = 0.0_sp
+    loss0 = sum(p*p)
+    do k = 1, 200
+      g = 2.0_sp * p
+      call adamw_step(p, g, m, v, 4, 0.05_sp, b1, b2, eps, 0.0_sp, k)
+    end do
+    loss1 = sum(p*p)
+    print '(A,E10.3,A,E10.3)', "  loss ", loss0, " -> ", loss1
+    call check(loss1 < 0.01_sp * loss0, "adamw converges")
   end subroutine
 
 end program test_kernels
