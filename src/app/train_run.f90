@@ -86,7 +86,7 @@ program train_run
   if (command_argument_count() >= 14) then
     call get_command_argument(14, bytesfile)
   else
-    bytesfile = trim(wdir) // "/../../tok_tables/token_bytes.txt"
+    bytesfile = trim(wdir) // "/../tok_tables/token_bytes.txt"
   end if
 
   G%B = B; G%T = TT; G%V = VV; G%D = D
