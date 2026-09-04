@@ -25,7 +25,7 @@ program chat_text
   integer, parameter :: N_LAYER = 12, VV = 8192, BOS = 8188
 
   character(len=512) :: tdir, wdir, arg
-  character(len=:), allocatable :: raw
+  character(len=1) :: cb
   integer :: n_gen, u, ios, fsize, i, j, best, tc, step, nprompt
   integer :: ntot, d2, clen
   real(sp), allocatable :: ckv(:), cvv(:), out1(:)
@@ -61,22 +61,27 @@ program chat_text
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
 
-  ! prompt bytes from stdin (stream, exact)
+  ! prompt bytes from stdin. Pipes have no inquire-able size (gfortran
+  ! returns 0), so read byte-by-byte to EOF instead. Buffer holds 1 MiB.
   open (newunit=u, file="/dev/stdin", access="stream", form="unformatted", &
       status="old", action="read", iostat=ios)
   if (ios /= 0) then
     print '(A)', "cannot read stdin"
     call exit(1)
   end if
-  inquire (unit=u, size=fsize)
-  allocate (character(len=fsize) :: raw)
-  if (fsize > 0) read (u) raw
-  close (u)
-  allocate(pbytes(fsize))
-  do i = 1, fsize
-    pbytes(i) = ichar(raw(i:i))
+  allocate(pbytes(1048576))
+  fsize = 0
+  do
+    read (u, iostat=ios) cb
+    if (ios /= 0) exit
+    fsize = fsize + 1
+    if (fsize > size(pbytes)) then
+      print '(A)', "prompt exceeds 1 MiB"
+      call exit(1)
+    end if
+    pbytes(fsize) = ichar(cb)
   end do
-  deallocate(raw)
+  close (u)
 
   call encode(pbytes, fsize, pids)
   nprompt = size(pids) + 1
@@ -103,8 +108,10 @@ program chat_text
   clen = 0
   allocate(out1(B*VV))
 
-  ! prefill prompt + generate, one cached step per token
-  do step = 1, ntot
+  ! prefill prompt + generate, one cached step per token. Last forward
+  ! needed is t=ntot-1 (its logits predict idx(ntot)); step ntot would
+  ! write idx(ntot+1), out of bounds.
+  do step = 1, ntot - 1
     tc = step
     call gpt_step(idx(tc:tc), cos_b((tc-1)*d2+1:), sin_b((tc-1)*d2+1:), &
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
