@@ -77,6 +77,98 @@ contains
     !$omp end parallel do
   end subroutine rmsnorm0_bwd
 
+  ! RoPE backward (transpose of the forward rotation):
+  !   dx1 = dy1*cos + dy2*(-sin),  dx2 = dy1*sin + dy2*cos
+  subroutine rope_4d_bwd(dy, cos_buf, sin_buf, dx, BB, TT, HH, DD) &
+      bind(c, name='rope_4d_bwd')
+    integer(c_int), intent(in) :: BB, TT, HH, DD
+    real(c_float), intent(in)  :: dy(BB*TT*HH*DD)
+    real(c_float), intent(in)  :: cos_buf(TT*(DD/2))
+    real(c_float), intent(in)  :: sin_buf(TT*(DD/2))
+    real(c_float), intent(out) :: dx(BB*TT*HH*DD)
+    integer :: ia, ib, ic, id, d2, i1, i2, cb
+    real(c_float) :: e1, e2, c_, s_
+
+    d2 = DD / 2
+
+    !$omp parallel do collapse(3) private(ia, ib, ic, id, i1, i2, cb, e1, e2, c_, s_)
+    do ia = 1, BB
+      do ib = 1, TT
+        do ic = 1, HH
+          do id = 1, d2
+            i1 = ((ia-1)*TT + (ib-1))*HH*DD + (ic-1)*DD + id
+            i2 = i1 + d2
+            cb = (ib-1)*d2 + id
+            e1 = dy(i1); e2 = dy(i2)
+            c_ = cos_buf(cb); s_ = sin_buf(cb)
+            dx(i1) = e1 * c_ + e2 * (-s_)
+            dx(i2) = e1 * s_ + e2 * c_
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine rope_4d_bwd
+
+  ! Per-position NLL (nats): nll(bt) = logsumexp(logits) - logit[target].
+  ! Targets are 0-based ids; no ignore-index (callers mask outside).
+  subroutine xent_fwd(logits, targets, nll, BB, TT, VV) &
+      bind(c, name='xent_fwd')
+    integer(c_int), intent(in) :: BB, TT, VV
+    real(c_float), intent(in)  :: logits(BB*TT*VV)
+    integer(c_int), intent(in) :: targets(BB*TT)
+    real(c_float), intent(out) :: nll(BB*TT)
+    integer :: bt, jj, tgt
+    real(c_float) :: m, s
+
+    !$omp parallel do private(bt, jj, tgt, m, s)
+    do bt = 1, BB*TT
+      tgt = targets(bt) + 1
+      m = logits((bt-1)*VV+1)
+      do jj = 2, VV
+        if (logits((bt-1)*VV+jj) > m) m = logits((bt-1)*VV+jj)
+      end do
+      s = 0.0_c_float
+      do jj = 1, VV
+        s = s + exp(logits((bt-1)*VV+jj) - m)
+      end do
+      nll(bt) = (m + log(s)) - logits((bt-1)*VV+tgt)
+    end do
+    !$omp end parallel do
+  end subroutine xent_fwd
+
+  ! Softmax-CE backward (mean reduction):
+  !   dlogits = (softmax(logits) - onehot(target)) * scale, scale = 1/N.
+  subroutine xent_bwd(logits, targets, dlogits, BB, TT, VV, scale_val) &
+      bind(c, name='xent_bwd')
+    integer(c_int), intent(in) :: BB, TT, VV
+    real(c_float), intent(in)  :: logits(BB*TT*VV)
+    integer(c_int), intent(in) :: targets(BB*TT)
+    real(c_float), intent(out) :: dlogits(BB*TT*VV)
+    real(c_float), value :: scale_val
+    integer :: bt, jj, tgt
+    real(c_float) :: m, s, p
+
+    !$omp parallel do private(bt, jj, tgt, m, s, p)
+    do bt = 1, BB*TT
+      tgt = targets(bt) + 1
+      m = logits((bt-1)*VV+1)
+      do jj = 2, VV
+        if (logits((bt-1)*VV+jj) > m) m = logits((bt-1)*VV+jj)
+      end do
+      s = 0.0_c_float
+      do jj = 1, VV
+        s = s + exp(logits((bt-1)*VV+jj) - m)
+      end do
+      do jj = 1, VV
+        p = exp(logits((bt-1)*VV+jj) - m) / s
+        if (jj == tgt) p = p - 1.0_c_float
+        dlogits((bt-1)*VV+jj) = p * scale_val
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine xent_bwd
+
   ! dwte(v,:) += sum over (b,t) with idx=v of dout(b,t,:). 0-based ids.
   subroutine wte_bwd(idx, dout, dwte, BR, TC, VMAX, DMX) &
       bind(c, name='wte_bwd')

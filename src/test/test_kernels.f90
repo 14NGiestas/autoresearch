@@ -106,6 +106,27 @@ program test_kernels
       real, intent(out) :: dx(*)
       real, value :: eps
     end subroutine
+    subroutine rope_4d_bwd(dy, cos, sin, dx, B, T, H, D) \
+        bind(c, name='rope_4d_bwd')
+      integer, intent(in) :: B, T, H, D
+      real, intent(in) :: dy(*), cos(*), sin(*)
+      real, intent(out) :: dx(*)
+    end subroutine
+    subroutine xent_fwd(logits, targets, nll, B, T, V) \
+        bind(c, name='xent_fwd')
+      integer, intent(in) :: B, T, V
+      real, intent(in) :: logits(*)
+      integer, intent(in) :: targets(*)
+      real, intent(out) :: nll(*)
+    end subroutine
+    subroutine xent_bwd(logits, targets, dlogits, B, T, V, scale) \
+        bind(c, name='xent_bwd')
+      integer, intent(in) :: B, T, V
+      real, intent(in) :: logits(*)
+      integer, intent(in) :: targets(*)
+      real, intent(out) :: dlogits(*)
+      real, value :: scale
+    end subroutine
     subroutine wte_bwd(idx, dout, dwte, B, T, V, D) bind(c, name='wte_bwd')
       integer, intent(in) :: idx(*), B, T, V, D
       real, intent(in) :: dout(*)
@@ -148,6 +169,8 @@ program test_kernels
   call test_linear_bwd()
   call test_rmsnorm_bwd()
   call test_wte_bwd()
+  call test_rope_bwd()
+  call test_xent()
 
   print '(A,I0,A)', "===", fail_count, " failures ==="
   if (fail_count > 0) call exit(1)
@@ -908,6 +931,86 @@ contains
     end do
     print '(A,E10.3)', "  max err = ", max_err
     call check(max_err == 0.0_sp, "wte scatter exact")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! rope_4d_bwd vs central finite differences of rope_4d.
+  subroutine test_rope_bwd()
+    integer, parameter :: BR = 1, TC = 4, HH = 2, DD = 8
+    integer, parameter :: d2 = DD / 2
+    real(sp), parameter :: H = 1.0e-3_sp
+    real(sp) :: x(BR*TC*HH*DD), dy(BR*TC*HH*DD), dx(BR*TC*HH*DD)
+    real(sp) :: cos_buf(TC*d2), sin_buf(TC*d2)
+    real(sp) :: xp(BR*TC*HH*DD), xm(BR*TC*HH*DD)
+    real(sp) :: yp(BR*TC*HH*DD), ym(BR*TC*HH*DD)
+    real(sp) :: e, max_err
+    integer :: i
+
+    print '(A)', "=== test_rope_bwd (finite differences) ==="
+    call fill(x, BR*TC*HH*DD)
+    call fill(dy, BR*TC*HH*DD)
+    call fill(cos_buf, TC*d2)
+    call fill(sin_buf, TC*d2)
+
+    call rope_4d_bwd(dy, cos_buf, sin_buf, dx, BR, TC, HH, DD)
+
+    max_err = 0.0_sp
+    do i = 1, BR*TC*HH*DD
+      xp = x; xm = x
+      xp(i) = xp(i) + H; xm(i) = xm(i) - H
+      call rope_4d(xp, cos_buf, sin_buf, yp, BR, TC, HH, DD)
+      call rope_4d(xm, cos_buf, sin_buf, ym, BR, TC, HH, DD)
+      e = abs(dx(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err dx = ", max_err
+    call check(max_err < 2.0e-3_sp, "rope dx")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! xent_bwd vs central finite differences of mean(xent_fwd).
+  subroutine test_xent()
+    integer, parameter :: BR = 2, TC = 3, VV = 16
+    real(sp), parameter :: H = 1.0e-3_sp
+    real(sp) :: logits(BR*TC*VV), dlog(BR*TC*VV)
+    real(sp) :: lp(BR*TC*VV), lm(BR*TC*VV)
+    real(sp) :: np(BR*TC), nm(BR*TC)
+    integer :: targets(BR*TC)
+    real(sp) :: e, max_err, sc
+    integer :: i, k
+
+    print '(A)', "=== test_xent (finite differences) ==="
+    call fill(logits, BR*TC*VV)
+    do i = 1, BR*TC
+      targets(i) = mod(i * 5, VV)
+    end do
+    sc = 1.0_sp / real(BR*TC, sp)
+
+    call xent_fwd(logits, targets, np, BR, TC, VV)
+    call xent_bwd(logits, targets, dlog, BR, TC, VV, sc)
+
+    ! fwd sanity: NLL of argmax-target is small, uniform-target is ~ln V
+    call check(all(np >= 0.0_sp), "nll non-negative")
+
+    max_err = 0.0_sp
+    do i = 1, BR*TC*VV
+      lp = logits; lm = logits
+      lp(i) = lp(i) + H; lm(i) = lm(i) - H
+      call xent_fwd(lp, targets, np, BR, TC, VV)
+      call xent_fwd(lm, targets, nm, BR, TC, VV)
+      e = abs(dlog(i) - sc*sum(np-nm) / (2.0_sp*H))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err dlogits = ", max_err
+    call check(max_err < 5.0e-3_sp, "xent bwd")
+    ! gradient sums to ~zero per row (softmax property)
+    do k = 1, BR*TC
+      if (abs(sum(dlog((k-1)*VV+1:k*VV))) > 1.0e-5_sp) then
+        call check(.false., "xent row-sum zero")
+        return
+      end if
+    end do
+    call check(.true., "xent row-sum zero")
   end subroutine
 
 end program test_kernels
