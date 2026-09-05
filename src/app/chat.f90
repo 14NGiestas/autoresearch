@@ -17,7 +17,8 @@ program chat
   use iso_c_binding
   use fortran_gpt_mod
   use load_weights_mod, only: load_gpt_weights
-  use M_CLI2, only: set_args, sget, iget, igets, specified
+  use M_CLI2, only: set_args, sget, iget, igets, specified, rget
+  use sample_mod, only: sample_next
   implicit none
 
   integer, parameter :: sp = c_float
@@ -35,21 +36,33 @@ program chat
   real(sp), allocatable :: wte(:), lm(:)
   real(sp), allocatable :: c_q(:), c_k(:), c_v(:), c_pr(:), c_fc(:), c_pr2(:)
   real(sp), allocatable :: outp(:)
-  real(sp) :: theta, ang, topv
+  real(sp) :: theta, ang, topv, mchk
+  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp
+  integer :: nblock = 0
+  integer(c_int64_t) :: rng = 12345_c_int64_t
   character(len=16) :: lstr
 
-  call set_args('--weights WEIGHTS --n 20 --ids 1,2,3 --stats F', &
+  call set_args('--weights WEIGHTS --n 20 --ids 1,2,3 --stats F' // &
+      ' --temp 0.0 --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0' // &
+      ' --nblock 0', &
       help_text=[character(len=80) :: &
       'NAME', &
-      '  chat - ids in/out autoregressive inference (greedy)', &
+      '  chat - ids in/out autoregressive inference + sampling', &
       'SYNOPSIS', &
-      '  chat --weights DIR --n N --ids 1,2,3', &
+      '  chat --weights DIR --n N --ids 1,2,3 [options]', &
       'OPTIONS', &
-      '  --stats T     print total ms + tok/s to stderr'], &
-      version_text=[character(len=80) :: 'chat 1.0'])
+      '  --stats T     print total ms + tok/s to stderr', &
+      '  --temp T --seed S --topp P --pres X --freq X --nblock N'], &
+      version_text=[character(len=80) :: 'chat 1.1'])
   wdir = trim(sget('weights'))
   n_gen = iget('n')
   idx = igets('ids')
+  temp = rget('temp')
+  rng = int(iget('seed'), c_int64_t)
+  topp = rget('topp')
+  pres = rget('pres')
+  freq = rget('freq')
+  nblock = iget('nblock')
   n_prompt = size(idx)
   if (.not. specified('weights') .or. n_gen < 1 .or. n_prompt < 1) then
     print '(A)', 'require --weights DIR --n N>=1 --ids I,... (--help)'
@@ -83,15 +96,12 @@ program chat
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
         outp, B, tc, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
 
-    best = 1; topv = outp((tc-1)*VV+1)
-    do i = 2, VV
-      if (outp((tc-1)*VV+i) > topv) then
-        topv = outp((tc-1)*VV+i); best = i
-      end if
-    end do
-    if (.not. (topv == topv)) then
+    mchk = maxval(outp((tc-1)*VV+1:tc*VV))
+    if (.not. (mchk == mchk)) then
       print '(A)', "NaN logit — abort"; call exit(1)
     end if
+    best = sample_next(outp((tc-1)*VV+1:), VV, temp, topp, pres, freq, &
+        idx(n_prompt+1:), tc - n_prompt, nblock, rng)
     idx = [idx, best - 1]   ! 1-based position -> 0-based token id
   end do
   if (dostats) then
