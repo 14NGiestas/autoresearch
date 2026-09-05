@@ -45,3 +45,6 @@ hoard_v2/
 ai_chat_hoarder/hoard/
 **/raw/*.html
 **/raw/*.json
+
+# Local fpm binary copy (see README)
+/fpm

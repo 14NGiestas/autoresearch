@@ -63,6 +63,10 @@ Requirements: Nix with flakes, ~2 GB free (weights are 373 MB + build).
 
 ```bash
 # 1. enter the shell (provides gfortran + fortran-fpm)
+#    ...or skip nix: ./fpm is a repo-local copy (gitignored). Outside nix
+#    you must provide a Fortran compiler plus OpenBLAS paths yourself:
+#      export OB=$(ls -d /nix/store/*openblas-*/lib | head -1)
+#      export LIBRARY_PATH=$OB:$LIBRARY_PATH LD_LIBRARY_PATH=$OB:$LD_LIBRARY_PATH
 nix develop
 
 # 2. weights already exported? if not (needs a .pt checkpoint):
