@@ -12,6 +12,7 @@
 
 module fortran_recurrent_mod
   use iso_c_binding
+  use fortran_blas_mod
   use fortran_linear_mod
   use fortran_rmsnorm_mod
   use fortran_rope_mod
@@ -80,9 +81,9 @@ contains
     do lr = 1, n_loops
 
       call rmsnorm0(emd, xn, BB*TT, d_model, eps)
-      call linear3d(xn, c_q, q, BB, TT, d_model, n_head*head_dim)
-      call linear3d(xn, c_k, k, BB, TT, d_model, n_kv_head*head_dim)
-      call linear3d(xn, c_v, v, BB, TT, d_model, n_kv_head*head_dim)
+      call linear3d_sgemm(xn, c_q, q, BB, TT, d_model, n_head*head_dim)
+      call linear3d_sgemm(xn, c_k, k, BB, TT, d_model, n_kv_head*head_dim)
+      call linear3d_sgemm(xn, c_v, v, BB, TT, d_model, n_kv_head*head_dim)
 
       call rope_4d(q, cos_buf, sin_buf, qrot, BB, TT, n_head, head_dim)
       call rope_4d(k, cos_buf, sin_buf, krot, BB, TT, n_kv_head, head_dim)
@@ -90,16 +91,16 @@ contains
       call causal_attn(qrot, krot, v, attn_out, BB, TT, n_head, &
           n_kv_head, head_dim)
 
-      call linear3d(attn_out, c_proj, sub_out, BB, TT, d_model, d_model)
+      call linear3d_sgemm(attn_out, c_proj, sub_out, BB, TT, d_model, d_model)
 
       do jj = 1, BB*TT*d_model
         emd(jj) = emd(jj) + sub_out(jj)
       end do
 
       call rmsnorm0(emd, xn, BB*TT, d_model, eps)
-      call linear3d(xn, c_fc, mlpd, BB, TT, d_model, d_ff)
+      call linear3d_sgemm(xn, c_fc, mlpd, BB, TT, d_model, d_ff)
       call relu2(mlpd, BB*TT*d_ff)
-      call linear3d(mlpd, c_proj2, sub_out, BB, TT, d_ff, d_model)
+      call linear3d_sgemm(mlpd, c_proj2, sub_out, BB, TT, d_ff, d_model)
 
       do jj = 1, BB*TT*d_model
         emd(jj) = emd(jj) + sub_out(jj)
@@ -109,7 +110,7 @@ contains
 
     ! ---- 3. final RMSNorm + LM head -------------------------
     call rmsnorm0(emd, xn, BB*TT, d_model, eps)
-    call linear3d(xn, lm_head, outp, BB, TT, d_model, vocab_size)
+    call linear3d_sgemm(xn, lm_head, outp, BB, TT, d_model, vocab_size)
 
     deallocate(emd, xn, sub_out, q, k, v, qrot, krot, attn_out, mlpd)
 

@@ -12,6 +12,7 @@ module fortran_train_mod
   use iso_c_binding
   use fortran_adamw_mod
   use fortran_backward_mod
+  use fortran_blas_mod
   use fortran_linear_mod
   use fortran_rmsnorm_mod
   use fortran_rope_mod
@@ -104,9 +105,9 @@ contains
       C%e(ll*BT*DD+1:(ll+1)*BT*DD) = emd
       call rmsnorm0(emd, xn, BT, DD, G%eps)
       C%xa(ll*BT*DD+1:(ll+1)*BT*DD) = xn
-      call linear3d(xn, M%q(ll*qsz+1:), qo, G%B, G%T, DD, hdd)
-      call linear3d(xn, M%k(ll*ksz+1:), ko, G%B, G%T, DD, G%nkv*G%hd)
-      call linear3d(xn, M%v(ll*ksz+1:), vo, G%B, G%T, DD, G%nkv*G%hd)
+      call linear3d_sgemm(xn, M%q(ll*qsz+1:), qo, G%B, G%T, DD, hdd)
+      call linear3d_sgemm(xn, M%k(ll*ksz+1:), ko, G%B, G%T, DD, G%nkv*G%hd)
+      call linear3d_sgemm(xn, M%v(ll*ksz+1:), vo, G%B, G%T, DD, G%nkv*G%hd)
       C%q(ll*BT*hdd+1:(ll+1)*BT*hdd) = qo
       C%k(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = ko
       C%v(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = vo
@@ -116,16 +117,16 @@ contains
       C%kr(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = krot
       call causal_attn(qrot, krot, vo, ao, G%B, G%T, G%nh, G%nkv, G%hd)
       C%ao(ll*BT*DD+1:(ll+1)*BT*DD) = ao
-      call linear3d(ao, M%p(ll*psz+1:), sub, G%B, G%T, DD, DD)
+      call linear3d_sgemm(ao, M%p(ll*psz+1:), sub, G%B, G%T, DD, DD)
       do jj = 1, BT*DD
         emd(jj) = emd(jj) + sub(jj)
       end do
       C%e1(ll*BT*DD+1:(ll+1)*BT*DD) = emd
       call rmsnorm0(emd, xn, BT, DD, G%eps)
-      call linear3d(xn, M%fc(ll*fcsz+1:), mlpd, G%B, G%T, DD, dff)
+      call linear3d_sgemm(xn, M%fc(ll*fcsz+1:), mlpd, G%B, G%T, DD, dff)
       C%f(ll*BT*dff+1:(ll+1)*BT*dff) = mlpd
       call relu2(mlpd, BT*dff)
-      call linear3d(mlpd, M%p2(ll*p2sz+1:), sub, G%B, G%T, dff, DD)
+      call linear3d_sgemm(mlpd, M%p2(ll*p2sz+1:), sub, G%B, G%T, dff, DD)
       do jj = 1, BT*DD
         emd(jj) = emd(jj) + sub(jj)
       end do
@@ -133,7 +134,7 @@ contains
 
     C%ef = emd
     call rmsnorm0(emd, xn, BT, DD, G%eps)
-    call linear3d(xn, M%lm, lgt, G%B, G%T, DD, G%V)
+    call linear3d_sgemm(xn, M%lm, lgt, G%B, G%T, DD, G%V)
     ! mean NLL over all positions (no mask in v1; drivers mask outside)
     nll = 0.0_c_float
     do it = 1, BT
@@ -197,7 +198,7 @@ contains
 
     ! ---- head: dlogits, dwlm, demd ----
     call rmsnorm0(C%ef, xn, BT, DD, G%eps)
-    call linear3d(xn, M%lm, lgt, G%B, G%T, DD, G%V)
+    call linear3d_sgemm(xn, M%lm, lgt, G%B, G%T, DD, G%V)
     nll = 0.0_c_float
     do it = 1, BT
       tg = targets(it) + 1

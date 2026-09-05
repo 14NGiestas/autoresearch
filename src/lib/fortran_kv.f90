@@ -14,6 +14,7 @@
 
 module fortran_kv_mod
   use iso_c_binding
+  use fortran_blas_mod
   use fortran_linear_mod
   use fortran_rmsnorm_mod
   use fortran_rope_mod
@@ -100,9 +101,9 @@ contains
     do ll = 0, n_layer - 1
 
       call rmsnorm0(emd, xn, BB, d_model, eps)
-      call linear3d(xn, c_q(ll*qsz+1:), q, BB, 1, d_model, n_head*head_dim)
-      call linear3d(xn, c_k(ll*ksz+1:), k1, BB, 1, d_model, n_kv_head*head_dim)
-      call linear3d(xn, c_v(ll*ksz+1:), v1, BB, 1, d_model, n_kv_head*head_dim)
+      call linear3d_sgemm(xn, c_q(ll*qsz+1:), q, BB, 1, d_model, n_head*head_dim)
+      call linear3d_sgemm(xn, c_k(ll*ksz+1:), k1, BB, 1, d_model, n_kv_head*head_dim)
+      call linear3d_sgemm(xn, c_v(ll*ksz+1:), v1, BB, 1, d_model, n_kv_head*head_dim)
 
       call rope_4d(q, cos1, sin1, qrot, BB, 1, n_head, head_dim)
       call rope_4d(k1, cos1, sin1, krot, BB, 1, n_kv_head, head_dim)
@@ -117,7 +118,7 @@ contains
           cache_v(ll*maxT*dkh+1:), attn_out, BB, n_head, n_kv_head, &
           head_dim, tc)
 
-      call linear3d(attn_out, c_proj(ll*psz+1:), sub_out, BB, 1, &
+      call linear3d_sgemm(attn_out, c_proj(ll*psz+1:), sub_out, BB, 1, &
           d_model, d_model)
 
       do jj = 1, BB*d_model
@@ -125,9 +126,9 @@ contains
       end do
 
       call rmsnorm0(emd, xn, BB, d_model, eps)
-      call linear3d(xn, c_fc(ll*fcsz+1:), mlpd, BB, 1, d_model, d_ff)
+      call linear3d_sgemm(xn, c_fc(ll*fcsz+1:), mlpd, BB, 1, d_model, d_ff)
       call relu2(mlpd, BB*d_ff)
-      call linear3d(mlpd, c_proj2(ll*p2sz+1:), sub_out, BB, 1, d_ff, &
+      call linear3d_sgemm(mlpd, c_proj2(ll*p2sz+1:), sub_out, BB, 1, d_ff, &
           d_model)
 
       do jj = 1, BB*d_model
@@ -138,7 +139,7 @@ contains
 
     ! ---- 3. final RMSNorm + LM head --------------------------
     call rmsnorm0(emd, xn, BB, d_model, eps)
-    call linear3d(xn, lm_head, out1, BB, 1, d_model, vocab_size)
+    call linear3d_sgemm(xn, lm_head, out1, BB, 1, d_model, vocab_size)
 
     cache_len = tc
 

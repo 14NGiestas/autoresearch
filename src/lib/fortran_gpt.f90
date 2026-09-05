@@ -48,6 +48,12 @@ module fortran_gpt_mod
       real, intent(in) :: x(*), w(*)
       real, intent(out) :: y(*)
     end subroutine
+    subroutine linear3d_sgemm(x, w, y, B, T, IF, OF) \
+        bind(c, name='linear3d_sgemm')
+      integer, intent(in) :: B, T, IF, OF
+      real, intent(in) :: x(*), w(*)
+      real, intent(out) :: y(*)
+    end subroutine
     subroutine linear3dT(x, w, y, B, T, IF, OF) bind(c, name='linear3dT')
       integer, intent(in) :: B, T, IF, OF
       real, intent(in) :: x(*), w(*)
@@ -146,16 +152,16 @@ contains
       ! attention sub-layer (all nn.Linear -> linear3d, i.e. y = x @ W^T)
       ! Layer ll slice: contiguous section -> sequence association, no copy.
       call rmsnorm0(emd, xn, BB*TT, d_model, eps)
-      call linear3d(xn, c_q((ll-1)*qsz+1:), q, BB, TT, d_model, n_head*head_dim)
-      call linear3d(xn, c_k((ll-1)*ksz+1:), k, BB, TT, d_model, n_kv_head*head_dim)
-      call linear3d(xn, c_v((ll-1)*ksz+1:), v, BB, TT, d_model, n_kv_head*head_dim)
+      call linear3d_sgemm(xn, c_q((ll-1)*qsz+1:), q, BB, TT, d_model, n_head*head_dim)
+      call linear3d_sgemm(xn, c_k((ll-1)*ksz+1:), k, BB, TT, d_model, n_kv_head*head_dim)
+      call linear3d_sgemm(xn, c_v((ll-1)*ksz+1:), v, BB, TT, d_model, n_kv_head*head_dim)
 
       call rope_4d(q, cos_buf, sin_buf, qrot, BB, TT, n_head, head_dim)
       call rope_4d(k, cos_buf, sin_buf, krot, BB, TT, n_kv_head, head_dim)
 
       call causal_attn(qrot, krot, v, attn_out, BB, TT, n_head, n_kv_head, head_dim)
 
-      call linear3d(attn_out, c_proj((ll-1)*psz+1:), sub_out, BB, TT, d_model, d_model)
+      call linear3d_sgemm(attn_out, c_proj((ll-1)*psz+1:), sub_out, BB, TT, d_model, d_model)
 
       ! residual: emd = emd + attn_out
       do jj = 1, BB*TT*d_model
@@ -164,9 +170,9 @@ contains
 
       ! MLP sub-layer: fc -> relu^2 -> proj
       call rmsnorm0(emd, xn, BB*TT, d_model, eps)
-      call linear3d(xn, c_fc((ll-1)*fcsz+1:), mlpd, BB, TT, d_model, d_ff)
+      call linear3d_sgemm(xn, c_fc((ll-1)*fcsz+1:), mlpd, BB, TT, d_model, d_ff)
       call relu2(mlpd, BB*TT*d_ff)
-      call linear3d(mlpd, c_proj2((ll-1)*p2sz+1:), sub_out, BB, TT, d_ff, d_model)
+      call linear3d_sgemm(mlpd, c_proj2((ll-1)*p2sz+1:), sub_out, BB, TT, d_ff, d_model)
 
       ! residual: emd = emd + mlp_out
       do jj = 1, BB*TT*d_model
@@ -179,7 +185,7 @@ contains
     call rmsnorm0(emd, xn, BB*TT, d_model, eps)
 
     ! ---- 5. LM head (nn.Linear n_embd -> vocab) ------------
-    call linear3d(xn, lm_head, outp, BB, TT, d_model, vocab_size)
+    call linear3d_sgemm(xn, lm_head, outp, BB, TT, d_model, vocab_size)
 
     deallocate(emd, xn, sub_out, q, k, v, qrot, krot, attn_out, mlpd)
 

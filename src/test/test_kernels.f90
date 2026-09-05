@@ -695,7 +695,8 @@ contains
     end do
 
     print '(A,E10.3)', "  max err = ", max_err
-    call check(max_err == 0.0_sp, "recurrent(1) == gpt(1) bit-exact")
+    ! sgemm summation order: exact only pre-BLAS; now honest 1e-6.
+    call check(max_err < 1.0e-6_sp, "recurrent(1) == gpt(1)")
   end subroutine
 
   ! ------------------------------------------------------------------------
@@ -855,7 +856,7 @@ contains
 
     print '(A,E10.3,A,I0)', "  max err = ", max_err, "  cache_len=", clen
     call check(clen == TC, "cache holds all positions")
-    call check(max_err == 0.0_sp, "cached steps == full forward")
+    call check(max_err < 1.0e-6_sp, "cached steps == full forward")
   end subroutine
 
   ! ------------------------------------------------------------------------
