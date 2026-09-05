@@ -29,6 +29,9 @@ program repl
   character(len=8192) :: linebuf
   integer :: n_gen, u, ios, i, j, best, tc, step, nprompt, nbytes, nlen
   integer :: ntot, d2, clen
+  logical :: dostats = .false.
+  integer :: ca, cb, crate
+  integer(c_int64_t) :: cms_pre = 0, cms_dec = 0
   real(sp), allocatable :: ckv(:), cvv(:), out1(:)
   integer(c_int64_t) :: rng = 12345_c_int64_t
   real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp
@@ -42,7 +45,8 @@ program repl
 
   n_gen = 40
   call set_args('--tables TABLES --weights WEIGHTS --n 40 --temp 0.0' // &
-      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --nblock 0', &
+      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --nblock 0' // &
+      ' --stats F', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  repl - interactive pure-Fortran chat REPL', &
@@ -53,7 +57,8 @@ program repl
       '  --weights DIR checkpoint .npy set', &
       '  --n N         tokens per turn (empty line quits)', &
       '  --temp T --seed S --topp P --pres X --freq X --nblock N', &
-      '                sampling controls (see chat_text --help)'], &
+      '                sampling controls (see chat_text --help)', &
+      '  --stats T     print per-turn prefill/decode ms + tok/s'], &
       version_text=[character(len=80) :: 'repl 1.0'])
   tdir = trim(sget('tables'))
   wdir = trim(sget('weights'))
@@ -119,12 +124,24 @@ program repl
     clen = 0
     allocate(out1(B*VV))
 
+    dostats = specified('stats')
+    if (dostats) call system_clock(count_rate=crate)
+    cms_pre = 0; cms_dec = 0
     do step = 1, ntot - 1
       tc = step
+      if (dostats) call system_clock(ca)
       call gpt_step(idx(tc:tc), cos_b((tc-1)*d2+1:), sin_b((tc-1)*d2+1:), &
           wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
           ckv, cvv, clen, MAXT, out1, &
           B, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
+      if (dostats) then
+        call system_clock(cb)
+        if (step < nprompt) then
+          cms_pre = cms_pre + (cb - ca)
+        else
+          cms_dec = cms_dec + (cb - ca)
+        end if
+      end if
       if (step < nprompt) cycle
       mchk = maxval(out1)
       if (.not. (mchk == mchk)) then
@@ -137,6 +154,11 @@ program repl
     end do
     deallocate(cos_b, sin_b, outp)
 
+    if (dostats) write (0, '(A,F10.1,A,F10.1,A,F8.2)') &
+        "stats: prefill_ms=", &
+        1000.0 * real(cms_pre) / real(crate), " decode_ms=", &
+        1000.0 * real(cms_dec) / real(crate), " tok_s=", &
+        real(n_gen) / max(1.0e-9, real(cms_pre + cms_dec) / real(crate))
     call decode(idx(nprompt+1:), n_gen, obytes, nbytes)
     open (newunit=u, file="/dev/stdout", access="stream", form="unformatted")
     do i = 1, nbytes

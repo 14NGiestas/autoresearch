@@ -26,6 +26,9 @@ program chat
 
   character(len=512) :: wdir, arg
   integer :: n_gen, n_prompt, step, tc, i, j, best, ios, nargs
+  logical :: dostats = .false.
+  integer :: ca, cb, crate
+  integer(c_int64_t) :: cms_tot = 0
   integer :: seed = 777
   integer, allocatable :: idx(:)
   real(sp), allocatable :: cos_b(:), sin_b(:)
@@ -35,12 +38,14 @@ program chat
   real(sp) :: theta, ang, topv
   character(len=16) :: lstr
 
-  call set_args('--weights WEIGHTS --n 20 --ids 1,2,3', &
+  call set_args('--weights WEIGHTS --n 20 --ids 1,2,3 --stats F', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  chat - ids in/out autoregressive inference (greedy)', &
       'SYNOPSIS', &
-      '  chat --weights DIR --n N --ids 1,2,3'], &
+      '  chat --weights DIR --n N --ids 1,2,3', &
+      'OPTIONS', &
+      '  --stats T     print total ms + tok/s to stderr'], &
       version_text=[character(len=80) :: 'chat 1.0'])
   wdir = trim(sget('weights'))
   n_gen = iget('n')
@@ -55,7 +60,10 @@ program chat
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
 
-  ! ---- generate ----------------------------------------------------------
+  ! ---- generate (full recompute per step; chat_text has the KV path) ---
+  dostats = specified('stats')
+  if (dostats) call system_clock(count_rate=crate)
+  if (dostats) call system_clock(ca)
   do step = 1, n_gen
     tc = n_prompt + step - 1
     if (allocated(cos_b)) deallocate(cos_b, sin_b)
@@ -86,6 +94,13 @@ program chat
     end if
     idx = [idx, best - 1]   ! 1-based position -> 0-based token id
   end do
+  if (dostats) then
+    call system_clock(cb)
+    cms_tot = cb - ca
+    write (0, '(A,F10.1,A,F8.2)') "stats: total_ms=", &
+        1000.0 * real(cms_tot) / real(crate), " tok_s=", &
+        real(n_gen) / max(1.0e-9, real(cms_tot) / real(crate))
+  end if
 
   do i = n_prompt + 1, n_prompt + n_gen
     if (i > n_prompt + 1) write (*, '(A)', advance='no') ' '

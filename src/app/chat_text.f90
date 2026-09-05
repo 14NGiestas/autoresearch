@@ -33,6 +33,9 @@ program chat_text
   integer(c_int64_t) :: rng = 12345_c_int64_t
   real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp
   integer :: nblock = 0
+  logical :: dostats = .false.
+  integer :: s0, s1, srate
+  integer(c_int64_t) :: cms_pre = 0, cms_dec = 0
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:)
   integer :: nbytes
   real(sp), allocatable :: cos_b(:), sin_b(:)
@@ -43,7 +46,8 @@ program chat_text
   d2 = HD / 2
 
   call set_args('--tables TABLES --weights WEIGHTS --n 20 --temp 0.0' // &
-      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --nblock 0', &
+      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --nblock 0' // &
+      ' --stats F', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  chat_text - pure-Fortran text-in/text-out GPT inference', &
@@ -58,7 +62,8 @@ program chat_text
       '  --topp P      nucleus cutoff (1 = off)', &
       '  --pres X      presence penalty', &
       '  --freq X      frequency penalty', &
-      '  --nblock N    no-repeat n-gram size (0 = off)'], &
+      '  --nblock N    no-repeat n-gram size (0 = off)', &
+      '  --stats T     print prefill/decode ms + tok/s to stderr'], &
       version_text=[character(len=80) :: 'chat_text 1.0'])
   tdir = trim(sget('tables'))
   wdir = trim(sget('weights'))
@@ -128,12 +133,24 @@ program chat_text
   ! prefill prompt + generate, one cached step per token. Last forward
   ! needed is t=ntot-1 (its logits predict idx(ntot)); step ntot would
   ! write idx(ntot+1), out of bounds.
+  dostats = specified('stats')
+  if (dostats) call system_clock(count_rate=srate)
+  cms_pre = 0; cms_dec = 0
   do step = 1, ntot - 1
     tc = step
+    if (dostats) call system_clock(s0)
     call gpt_step(idx(tc:tc), cos_b((tc-1)*d2+1:), sin_b((tc-1)*d2+1:), &
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
         ckv, cvv, clen, ntot, out1, &
         B, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
+    if (dostats) then
+      call system_clock(s1)
+      if (step < nprompt) then
+        cms_pre = cms_pre + (s1 - s0)
+      else
+        cms_dec = cms_dec + (s1 - s0)
+      end if
+    end if
     if (step < nprompt) cycle   ! prompt steps only fill the cache
     mchk = maxval(out1)
     if (.not. (mchk == mchk)) then
@@ -144,6 +161,10 @@ program chat_text
     idx(tc+1) = best - 1
   end do
 
+  if (dostats) write (0, '(A,F10.1,A,F10.1,A,F8.2)') "stats: prefill_ms=", &
+      1000.0 * real(cms_pre) / real(srate), " decode_ms=", &
+      1000.0 * real(cms_dec) / real(srate), " tok_s=", &
+      real(n_gen) / max(1.0e-9, real(cms_pre + cms_dec) / real(srate))
   call decode(idx(nprompt+1:), n_gen, obytes, nbytes)
   open (newunit=u, file="/dev/stdout", access="stream", form="unformatted")
   do i = 1, nbytes
