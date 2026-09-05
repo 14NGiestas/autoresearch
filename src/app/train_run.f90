@@ -128,7 +128,8 @@ program train_run
     tstep = t0 + k - 1
     ! 2-step linear warmup on run-relative k (overfit-run lesson)
     lr_eff = lr * min(1.0_sp, real(k, sp) / 2.0_sp)
-    r = mod(start_row + k - 1, ntrain)
+    ! cycle within [start_row, start_row+ntrain): r is 0-based offset
+    r = mod(k - 1, ntrain)
     call load_batch(trim(rowsfile), start_row + r, B, TT, idx, targets, ngot)
     if (ngot < B) then
       print '(A)', "rows file too short"
