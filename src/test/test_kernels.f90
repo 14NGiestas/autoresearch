@@ -23,9 +23,11 @@
 
 program test_kernels
   use iso_c_binding
-  use sample_mod, only: sample_token
+  use sample_mod, only: sample_token, sample_next, apply_penalties, &
+      block_ngram, sort_desc
   use fortran_train_mod
   use fortran_data_mod, only: load_batch, count_rows
+  use fortran_sys_mod, only: mkdir_p, dir_exists
   implicit none
 
   integer, parameter :: sp = c_float
@@ -202,6 +204,8 @@ program test_kernels
   call test_relu2_bwd()
   call test_adamw()
   call test_full_step()
+  call test_mkdir_p()
+  call test_decode()
   call test_linear_blas()
   call test_data_batch()
   call test_save_load()
@@ -1290,6 +1294,74 @@ contains
         "  ref scale = ", maxval(abs(y1))
     call check(max_err < 1.0e-4_sp, "sgemm parity")
   end subroutine test_linear_blas
+
+  ! ------------------------------------------------------------------------
+  subroutine test_decode()
+    real(sp) :: lg(5), w(5)
+    integer :: gen(4), pos, i, hits(5)
+    integer(c_int64_t) :: st
+    real(sp) :: pr(4)
+    integer :: ox(4)
+
+    print '(A)', "=== test_decode (penalties/blocking/top-p) ==="
+    ! penalties exact: gen [1,1,2], pres=1, freq=0.5
+    lg = 0.0_sp
+    gen(1:3) = [1, 1, 2]
+    w = lg
+    call apply_penalties(w, 5, gen, 3, 1.0_sp, 0.5_sp)
+    call check(abs(w(2) + 2.0_sp) < 1.0e-7_sp, "presence+freq id1")
+    call check(abs(w(3) + 1.5_sp) < 1.0e-7_sp, "presence+freq id2")
+    call check(abs(w(1)) + abs(w(4)) + abs(w(5)) < 1.0e-7_sp, &
+        "untouched rest")
+
+    ! blocking: gen [3,4,4] has bigram (4,4); tail [4] + t=4 would repeat
+    ! it -> ban t=4; greedy falls through to id 3 (position 4).
+    lg = [0.0_sp, 1.0_sp, 2.0_sp, 3.0_sp, 4.0_sp]
+    gen(1:3) = [3, 4, 4]
+    st = 9_c_int64_t
+    pos = sample_next(lg, 5, 0.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, gen, 3, 2, st)
+    call check(pos == 4, "blocked argmax falls through")
+    ! without blocking, greedy takes id 4 (position 5)
+    pos = sample_next(lg, 5, 0.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, gen, 3, 0, st)
+    call check(pos == 5, "unblocked argmax")
+
+    ! top-p=0 -> always argmax over 50 draws
+    st = 3_c_int64_t
+    do i = 1, 50
+      pos = sample_next(lg, 5, 1.0_sp, 0.0_sp, 0.0_sp, 0.0_sp, gen, 0, 0, st)
+      if (pos /= 5) then
+        call check(.false., "top-p 0 argmax")
+        exit
+      end if
+    end do
+    call check(.true., "top-p 0 argmax")
+    ! top-p=1 spreads (id 4 has ~88% mass, others share rest)
+    st = 11_c_int64_t
+    hits = 0
+    do i = 1, 200
+      pos = sample_next(lg, 5, 1.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, gen, 0, 0, st)
+      hits(pos) = hits(pos) + 1
+    end do
+    call check(hits(5) > 100 .and. sum(hits(1:4)) > 0, "top-p 1 spread")
+
+    ! sort_desc tracks permutation
+    pr = [3.0_sp, 1.0_sp, 2.0_sp, 0.5_sp]
+    ox = [1, 2, 3, 4]
+    call sort_desc(pr, ox, 4)
+    call check(all(abs(pr - [3.0_sp, 2.0_sp, 1.0_sp, 0.5_sp]) < 1e-7), &
+        "sort values")
+    call check(all(ox == [1, 3, 2, 4]), "sort permutation")
+  end subroutine test_decode
+
+  ! ------------------------------------------------------------------------
+  subroutine test_mkdir_p()
+    print '(A)', "=== test_mkdir_p ==="
+    call check(mkdir_p("/tmp/fx_mkdir/a/b/c") == 0, "nested create")
+    call check(dir_exists("/tmp/fx_mkdir/a/b/c"), "exists after")
+    call check(mkdir_p("/tmp/fx_mkdir/a/b/c") == 0, "idempotent EEXIST")
+    call check(dir_exists("/tmp/fx_mkdir/nope") .eqv. .false., &
+        "missing dir false")
+  end subroutine test_mkdir_p
 
   ! ------------------------------------------------------------------------
   ! Data loader: write a fixture rows file, read back batch + count.

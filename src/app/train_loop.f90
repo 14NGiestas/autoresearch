@@ -14,6 +14,7 @@ program train_loop
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights
   use fortran_data_mod, only: load_batch
   use M_CLI2, only: set_args, sget, rget, iget, specified
+  use fortran_sys_mod, only: mkdir_p
   implicit none
 
   integer, parameter :: sp = c_float
@@ -91,7 +92,10 @@ program train_loop
       print '(A,I0,A,F10.5)', "step ", tstep, " nll ", nll
     if (mod(k, save_every) == 0 .or. k == nsteps) then
       write (ckdir, '(A,I0)') trim(outdir) // "/step_", tstep
-      call execute_command_line("mkdir -p " // trim(ckdir))
+      if (mkdir_p(trim(ckdir)) /= 0) then
+        print '(2A)', "cannot create ", trim(ckdir)
+        call exit(1)
+      end if
       call save_gpt_weights(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
           M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
     end if
