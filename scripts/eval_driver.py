@@ -57,7 +57,7 @@ def token_bytes(enc):
     return tbl
 
 
-def pack_rows(enc, bos, T, n_rows, buffer_size=1000):
+def pack_rows(enc, bos, T, n_rows, buffer_size=1000, doc_offset=0):
     """BOS-aligned best-fit packing replica. Yields lists of T+1 ids."""
     try:
         import importlib
@@ -69,6 +69,7 @@ def pack_rows(enc, bos, T, n_rows, buffer_size=1000):
     texts = []
     for rg in range(pf.num_row_groups):
         texts.extend(pf.read_row_group(rg).column("text").to_pylist())
+    texts = texts[doc_offset:]
     encoded = enc.encode_ordinary_batch(texts[:buffer_size])
     docs = [[bos] + e for e in encoded]
     di = buffer_size
@@ -109,12 +110,14 @@ def main():
     ap.add_argument("--chunk", type=int, default=4)
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--chunk-timeout", type=int, default=1500)
+    ap.add_argument("--doc-offset", type=int, default=0)
     args = ap.parse_args()
 
     enc = load_enc()
     bos = enc.encode_single_token("<|reserved_0|>")
     tbytes = token_bytes(enc)
-    rows = pack_rows(enc, bos, args.seq, args.start + args.rows)[args.start:]
+    rows = pack_rows(enc, bos, args.seq, args.start + args.rows,
+                      doc_offset=args.doc_offset)[args.start:]
     print(f"packed {len(rows)} rows of {args.seq + 1} ids" +
           (f" (offset {args.start})" if args.start else ""), flush=True)
     if not rows:

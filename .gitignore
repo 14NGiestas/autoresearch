@@ -28,7 +28,7 @@ checkpoints/
 logs/
 *.log
 node_modules/
-archive/
+.ruff_cache/
 .direnv/
 .envrc
 .base_done
