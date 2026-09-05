@@ -153,7 +153,8 @@ program repl
       idx(tc+1) = best - 1
     end do
     deallocate(cos_b, sin_b)
-    if (allocated(out1)) deallocate(out1)
+    ! ckv/cvv/out1 are deallocated together at top of next turn
+    ! (line 119: if (allocated(ckv)) deallocate(ckv, cvv, out1))
 
     if (dostats) write (0, '(A,F10.1,A,F10.1,A,F8.2)') &
         "stats: prefill_ms=", &
