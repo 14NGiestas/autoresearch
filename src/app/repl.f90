@@ -108,7 +108,7 @@ program repl
     clen = 0
     allocate(out1(B*VV))
 
-    do step = 1, ntot
+    do step = 1, ntot - 1
       tc = step
       call gpt_step(idx(tc:tc), cos_b((tc-1)*d2+1:), sin_b((tc-1)*d2+1:), &
           wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
