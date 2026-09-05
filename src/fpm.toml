@@ -12,3 +12,6 @@ source-dir = "lib"
 [dependencies]
 openmp = "*"
 stdlib = "*"
+
+[build]
+link = ["openblas"]

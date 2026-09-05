@@ -35,6 +35,7 @@
               python312
               gfortran
               fortran-fpm
+              openblas
             ] ++ rocmLibs;
 
             shellHook = ''

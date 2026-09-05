@@ -153,6 +153,12 @@ program test_kernels
       real, intent(in) :: g(*)
       real, value :: lr, b1, b2, eps, wd
     end subroutine
+    subroutine linear3d_sgemm(x, w, y, B, T, IF, OF) \
+        bind(c, name='linear3d_sgemm')
+      integer, intent(in) :: B, T, IF, OF
+      real, intent(in) :: x(*), w(*)
+      real, intent(out) :: y(*)
+    end subroutine
     subroutine rmsnorm(x, w, y, N, C, eps) bind(c, name='rmsnorm')
       integer, intent(in) :: N, C
       real, intent(in) :: x(*), w(*)
@@ -196,6 +202,7 @@ program test_kernels
   call test_relu2_bwd()
   call test_adamw()
   call test_full_step()
+  call test_linear_blas()
   call test_data_batch()
   call test_save_load()
 
@@ -1255,6 +1262,33 @@ contains
     print '(A,F10.5,A,F10.5)', "  nll ", n0, " -> ", n5
     call check(n5 < n0, "overfit descends")
   end subroutine test_full_step
+
+  ! ------------------------------------------------------------------------
+  ! linear3d_sgemm vs naive linear3d. Different summation order (FMA +
+  ! blocking) gives relative ~1e-6 on O(10) values; tolerance is honest
+  ! 1e-4 absolute, still 1000x below anything downstream can feel.
+  subroutine test_linear_blas()
+    integer, parameter :: BR = 4, TC = 16, IF = 128, OF = 128
+    real(sp) :: x(BR*TC*IF), w(OF*IF), y1(BR*TC*OF), y2(BR*TC*OF)
+    real(sp) :: e, max_err
+    integer :: i
+
+    print '(A)', "=== test_linear_blas (sgemm vs naive) ==="
+    call fill(x, BR*TC*IF)
+    call fill(w, OF*IF)
+
+    call linear3d(x, w, y1, BR, TC, IF, OF)
+    call linear3d_sgemm(x, w, y2, BR, TC, IF, OF)
+
+    max_err = 0.0_sp
+    do i = 1, BR*TC*OF
+      e = abs(y1(i) - y2(i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3,A,E10.3)', "  max err = ", max_err, \
+        "  ref scale = ", maxval(abs(y1))
+    call check(max_err < 1.0e-4_sp, "sgemm parity")
+  end subroutine test_linear_blas
 
   ! ------------------------------------------------------------------------
   ! Data loader: write a fixture rows file, read back batch + count.
