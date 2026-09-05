@@ -152,7 +152,8 @@ program repl
           idx(nprompt+1:), tc - nprompt, nblock, rng)
       idx(tc+1) = best - 1
     end do
-    deallocate(cos_b, sin_b, outp)
+    deallocate(cos_b, sin_b)
+    if (allocated(out1)) deallocate(out1)
 
     if (dostats) write (0, '(A,F10.1,A,F10.1,A,F8.2)') &
         "stats: prefill_ms=", &
