@@ -17,6 +17,7 @@ program train_run
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights
   use fortran_data_mod, only: load_batch
+  use M_CLI2, only: set_args, sget, rget, iget, specified
   use fortran_linear_mod
   use fortran_rmsnorm_mod
   use fortran_rope_mod
@@ -46,48 +47,37 @@ program train_run
   ntrain = 40; val_every = 5; nval = 8; keep_last = 2
   bytesfile = ""
   nsteps = -1
-  if (command_argument_count() < 4) then
-    print '(A)', "usage: train_run <weights> <rows> <outdir> <nsteps> " // &
-        "[lr] [t0] [log_every] [save_every] [start_row] " // &
-        "[ntrain] [val_every] [nval] [keep_last] [bytes_file]"
+  call set_args('--weights WEIGHTS --rows ROWS --out OUT --nsteps 20' // &
+      ' --lr 0.0003 --t0 1 --log_every 1 --save_every 10' // &
+      ' --start_row 0 --ntrain 40 --val_every 5 --nval 8 --keep_last 2' // &
+      ' --bytes BYTES', &
+      help_text=[character(len=80) :: &
+      'NAME', &
+      '  train_run - multi-batch trainer (slice 3)', &
+      'SYNOPSIS', &
+      '  train_run --weights DIR --rows FILE --out DIR --nsteps N'], &
+      version_text=[character(len=80) :: 'train_run 1.0'])
+  wdir = trim(sget('weights'))
+  rowsfile = trim(sget('rows'))
+  outdir = trim(sget('out'))
+  nsteps = iget('nsteps')
+  lr = rget('lr')
+  t0 = iget('t0')
+  log_every = iget('log_every')
+  save_every = iget('save_every')
+  start_row = iget('start_row')
+  ntrain = iget('ntrain')
+  val_every = iget('val_every')
+  nval = iget('nval')
+  keep_last = iget('keep_last')
+  bytesfile = trim(sget('bytes'))
+  if (.not. specified('weights') .or. .not. specified('rows') &
+      .or. .not. specified('out') .or. nsteps < 1) then
+    print '(A)', 'require --weights --rows --out --nsteps>=1 (--help)'
     call exit(2)
   end if
-  call get_command_argument(1, wdir)
-  call get_command_argument(2, rowsfile)
-  call get_command_argument(3, outdir)
-  call get_command_argument(4, arg); read (arg, *) nsteps
-  if (command_argument_count() >= 5) then
-    call get_command_argument(5, arg); read (arg, *) lr
-  end if
-  if (command_argument_count() >= 6) then
-    call get_command_argument(6, arg); read (arg, *) t0
-  end if
-  if (command_argument_count() >= 7) then
-    call get_command_argument(7, arg); read (arg, *) log_every
-  end if
-  if (command_argument_count() >= 8) then
-    call get_command_argument(8, arg); read (arg, *) save_every
-  end if
-  if (command_argument_count() >= 9) then
-    call get_command_argument(9, arg); read (arg, *) start_row
-  end if
-  if (command_argument_count() >= 10) then
-    call get_command_argument(10, arg); read (arg, *) ntrain
-  end if
-  if (command_argument_count() >= 11) then
-    call get_command_argument(11, arg); read (arg, *) val_every
-  end if
-  if (command_argument_count() >= 12) then
-    call get_command_argument(12, arg); read (arg, *) nval
-  end if
-  if (command_argument_count() >= 13) then
-    call get_command_argument(13, arg); read (arg, *) keep_last
-  end if
-  if (command_argument_count() >= 14) then
-    call get_command_argument(14, bytesfile)
-  else
-    bytesfile = trim(wdir) // "/../tok_tables/token_bytes.txt"
-  end if
+  if (bytesfile == 'BYTES') &
+      bytesfile = trim(wdir) // '/../tok_tables/token_bytes.txt'
 
   G%B = B; G%T = TT; G%V = VV; G%D = D
   G%nh = N_HEAD; G%nkv = N_KV; G%hd = HD; G%nl = N_LAYER

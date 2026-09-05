@@ -13,6 +13,7 @@ program train_1step
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights
   use fortran_data_mod, only: load_batch
+  use M_CLI2, only: set_args, sget, rget, iget, specified
   implicit none
 
   integer, parameter :: sp = c_float
@@ -32,22 +33,23 @@ program train_1step
   integer :: tstep, i, j
   real(sp) :: theta, ang
 
-  lr = 0.001_sp
-  tstep = 1
-  if (command_argument_count() < 3) then
-    print '(A)', "usage: train_1step <weights> <rows> <out> [lr] [tstep]"
+  call set_args('--weights WEIGHTS --rows ROWS --out OUT' // &
+      ' --lr 0.001 --tstep 1', &
+      help_text=[character(len=80) :: &
+      'NAME', &
+      '  train_1step - single AdamW step on real weights', &
+      'SYNOPSIS', &
+      '  train_1step --weights DIR --rows FILE --out DIR [--lr X]'], &
+      version_text=[character(len=80) :: 'train_1step 1.0'])
+  wdir = trim(sget('weights'))
+  rowsfile = trim(sget('rows'))
+  outdir = trim(sget('out'))
+  lr = rget('lr')
+  tstep = iget('tstep')
+  if (.not. specified('weights') .or. .not. specified('rows') &
+      .or. .not. specified('out')) then
+    print '(A)', 'require --weights --rows --out (--help for all)'
     call exit(2)
-  end if
-  call get_command_argument(1, wdir)
-  call get_command_argument(2, rowsfile)
-  call get_command_argument(3, outdir)
-  if (command_argument_count() >= 4) then
-    call get_command_argument(4, arg)
-    read (arg, *) lr
-  end if
-  if (command_argument_count() >= 5) then
-    call get_command_argument(5, arg)
-    read (arg, *) tstep
   end if
 
   G%B = B; G%T = TT; G%V = VV; G%D = D

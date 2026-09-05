@@ -15,8 +15,9 @@ program repl
   use load_weights_mod, only: load_gpt_weights
   use tokenizer_tables_mod
   use tokenizer_encode_mod
-  use sample_mod, only: sample_token
+  use sample_mod, only: sample_token, sample_next
   use fortran_kv_mod, only: gpt_step
+  use M_CLI2, only: set_args, sget, rget, iget, specified
   implicit none
 
   integer, parameter :: sp = c_float
@@ -30,7 +31,8 @@ program repl
   integer :: ntot, d2, clen
   real(sp), allocatable :: ckv(:), cvv(:), out1(:)
   integer(c_int64_t) :: rng = 12345_c_int64_t
-  real(sp) :: temp = 0.0_sp
+  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp
+  integer :: nblock = 0
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:)
   real(sp), allocatable :: cos_b(:), sin_b(:)
   real(sp), allocatable :: wte(:), lm(:)
@@ -39,23 +41,32 @@ program repl
   real(sp) :: theta, ang, mchk
 
   n_gen = 40
-  if (command_argument_count() < 2) then
-    write (0, '(A)') "usage: repl <tables_dir> <weights_dir> [n_gen] [temp] [seed]"
+  call set_args('--tables TABLES --weights WEIGHTS --n 40 --temp 0.0' // &
+      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --nblock 0', &
+      help_text=[character(len=80) :: &
+      'NAME', &
+      '  repl - interactive pure-Fortran chat REPL', &
+      'SYNOPSIS', &
+      '  repl --tables DIR --weights DIR [options]', &
+      'OPTIONS', &
+      '  --tables DIR  tokenizer tables', &
+      '  --weights DIR checkpoint .npy set', &
+      '  --n N         tokens per turn (empty line quits)', &
+      '  --temp T --seed S --topp P --pres X --freq X --nblock N', &
+      '                sampling controls (see chat_text --help)'], &
+      version_text=[character(len=80) :: 'repl 1.0'])
+  tdir = trim(sget('tables'))
+  wdir = trim(sget('weights'))
+  n_gen = iget('n')
+  temp = rget('temp')
+  rng = int(iget('seed'), c_int64_t)
+  topp = rget('topp')
+  pres = rget('pres')
+  freq = rget('freq')
+  nblock = iget('nblock')
+  if (.not. specified('tables') .or. .not. specified('weights')) then
+    write (0, '(A)') 'require --tables DIR --weights DIR (--help for all)'
     call exit(2)
-  end if
-  call get_command_argument(1, tdir)
-  call get_command_argument(2, wdir)
-  if (command_argument_count() >= 3) then
-    call get_command_argument(3, arg)
-    read (arg, *) n_gen
-  end if
-  if (command_argument_count() >= 4) then
-    call get_command_argument(4, arg)
-    read (arg, *) temp
-  end if
-  if (command_argument_count() >= 5) then
-    call get_command_argument(5, arg)
-    read (arg, *) rng
   end if
 
   write (0, '(A)') "loading tables + weights (one-time, ~10 s) ..."
@@ -120,7 +131,8 @@ program repl
         write (0, '(A)') "NaN logit — abort"
         call exit(1)
       end if
-      best = sample_token(out1, VV, temp, rng)
+      best = sample_next(out1, VV, temp, topp, pres, freq, &
+          idx(nprompt+1:), tc - nprompt, nblock, rng)
       idx(tc+1) = best - 1
     end do
     deallocate(cos_b, sin_b, outp)

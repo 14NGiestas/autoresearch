@@ -16,8 +16,9 @@ program chat_text
   use load_weights_mod, only: load_gpt_weights
   use tokenizer_tables_mod
   use tokenizer_encode_mod
-  use sample_mod, only: sample_token
+  use sample_mod, only: sample_token, sample_next
   use fortran_kv_mod, only: gpt_step
+  use M_CLI2, only: set_args, sget, rget, iget, specified
   implicit none
 
   integer, parameter :: sp = c_float
@@ -30,7 +31,8 @@ program chat_text
   integer :: ntot, d2, clen
   real(sp), allocatable :: ckv(:), cvv(:), out1(:)
   integer(c_int64_t) :: rng = 12345_c_int64_t
-  real(sp) :: temp = 0.0_sp
+  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp
+  integer :: nblock = 0
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:)
   integer :: nbytes
   real(sp), allocatable :: cos_b(:), sin_b(:)
@@ -40,23 +42,38 @@ program chat_text
   real(sp) :: theta, ang, mchk
   d2 = HD / 2
 
-  if (command_argument_count() < 3) then
-    print '(A)', "usage: chat_text <tables_dir> <weights_dir> <n_gen> [temp] [seed] < stdin"
+  call set_args('--tables TABLES --weights WEIGHTS --n 20 --temp 0.0' // &
+      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --nblock 0', &
+      help_text=[character(len=80) :: &
+      'NAME', &
+      '  chat_text - pure-Fortran text-in/text-out GPT inference', &
+      'SYNOPSIS', &
+      '  chat_text --tables DIR --weights DIR --n N [options] < stdin', &
+      'OPTIONS', &
+      '  --tables DIR  tokenizer tables (ranks.txt, unicode_*.txt)', &
+      '  --weights DIR checkpoint .npy set (see export_weights.py)', &
+      '  --n N         tokens to generate', &
+      '  --temp T      temperature (0 = greedy)', &
+      '  --seed S      RNG seed', &
+      '  --topp P      nucleus cutoff (1 = off)', &
+      '  --pres X      presence penalty', &
+      '  --freq X      frequency penalty', &
+      '  --nblock N    no-repeat n-gram size (0 = off)'], &
+      version_text=[character(len=80) :: 'chat_text 1.0'])
+  tdir = trim(sget('tables'))
+  wdir = trim(sget('weights'))
+  n_gen = iget('n')
+  temp = rget('temp')
+  rng = int(iget('seed'), c_int64_t)
+  topp = rget('topp')
+  pres = rget('pres')
+  freq = rget('freq')
+  nblock = iget('nblock')
+  if (.not. specified('tables') .or. .not. specified('weights') &
+      .or. n_gen < 1) then
+    print '(A)', 'require --tables DIR --weights DIR --n N>=1 (--help for all)'
     call exit(2)
   end if
-  call get_command_argument(1, tdir)
-  call get_command_argument(2, wdir)
-  call get_command_argument(3, arg)
-  read (arg, *) n_gen
-  if (command_argument_count() >= 4) then
-    call get_command_argument(4, arg)
-    read (arg, *) temp
-  end if
-  if (command_argument_count() >= 5) then
-    call get_command_argument(5, arg)
-    read (arg, *) rng
-  end if
-
   call load_tables(trim(tdir))
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
@@ -122,7 +139,8 @@ program chat_text
     if (.not. (mchk == mchk)) then
       print '(A)', "NaN logit — abort"; call exit(1)
     end if
-    best = sample_token(out1, VV, temp, rng)
+    best = sample_next(out1, VV, temp, topp, pres, freq, &
+        idx(nprompt+1:), tc - nprompt, nblock, rng)
     idx(tc+1) = best - 1
   end do
 

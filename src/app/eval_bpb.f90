@@ -17,6 +17,7 @@ program eval_bpb
   use iso_c_binding
   use fortran_gpt_mod
   use load_weights_mod, only: load_gpt_weights
+  use M_CLI2, only: set_args, sget, specified
   implicit none
 
   integer, parameter :: sp = c_float
@@ -34,12 +35,19 @@ program eval_bpb
   real(sp) :: theta, ang, m, s, nll
   character(len=65536) :: buf
 
-  if (command_argument_count() < 2) then
-    print '(A)', "usage: eval_bpb <weights_dir> <rows_file>"
+  call set_args('--weights WEIGHTS --rows ROWS', &
+      help_text=[character(len=80) :: &
+      'NAME', &
+      '  eval_bpb - bits-per-byte evaluation (prints per-position NLLs)', &
+      'SYNOPSIS', &
+      '  eval_bpb --weights DIR --rows FILE'], &
+      version_text=[character(len=80) :: 'eval_bpb 1.0'])
+  wdir = trim(sget('weights'))
+  rowsfile = trim(sget('rows'))
+  if (.not. specified('weights') .or. .not. specified('rows')) then
+    print '(A)', 'require --weights DIR --rows FILE (--help for all)'
     call exit(2)
   end if
-  call get_command_argument(1, wdir)
-  call get_command_argument(2, rowsfile)
 
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)

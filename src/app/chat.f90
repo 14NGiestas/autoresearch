@@ -5,7 +5,7 @@
 ! stdlib_io_npy::load_npy, then greedy-generates.
 !
 ! Usage:
-!   fortran-fpm run chat -- <weights_dir> <n_gen> <id1> [id2 ...]
+!   fortran-fpm run chat -- --weights DIR --n N --ids 1,2,3
 !
 ! Prints generated token IDs (0-based) space-separated on one line.
 ! Pair with tiktoken (python) for encode/decode; see scripts/chat_driver.py.
@@ -17,6 +17,7 @@ program chat
   use iso_c_binding
   use fortran_gpt_mod
   use load_weights_mod, only: load_gpt_weights
+  use M_CLI2, only: set_args, sget, iget, igets, specified
   implicit none
 
   integer, parameter :: sp = c_float
@@ -34,20 +35,21 @@ program chat
   real(sp) :: theta, ang, topv
   character(len=16) :: lstr
 
-  nargs = command_argument_count()
-  if (nargs < 3) then
-    print '(A)', "usage: chat <weights_dir> <n_gen> <id1> [id2 ...]"
+  call set_args('--weights WEIGHTS --n 20 --ids 1,2,3', &
+      help_text=[character(len=80) :: &
+      'NAME', &
+      '  chat - ids in/out autoregressive inference (greedy)', &
+      'SYNOPSIS', &
+      '  chat --weights DIR --n N --ids 1,2,3'], &
+      version_text=[character(len=80) :: 'chat 1.0'])
+  wdir = trim(sget('weights'))
+  n_gen = iget('n')
+  idx = igets('ids')
+  n_prompt = size(idx)
+  if (.not. specified('weights') .or. n_gen < 1 .or. n_prompt < 1) then
+    print '(A)', 'require --weights DIR --n N>=1 --ids I,... (--help)'
     call exit(2)
   end if
-  call get_command_argument(1, wdir)
-  call get_command_argument(2, arg)
-  read (arg, *) n_gen
-  n_prompt = nargs - 2
-  allocate(idx(n_prompt))
-  do i = 1, n_prompt
-    call get_command_argument(2 + i, arg)
-    read (arg, *) idx(i)
-  end do
 
   ! ---- weights (shared loader module) ------------------------------------
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &

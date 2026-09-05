@@ -19,6 +19,7 @@ program recur_sweep
   use iso_c_binding
   use fortran_recurrent_mod
   use load_weights_mod, only: load1
+  use M_CLI2, only: set_args, sget, igets, specified
   implicit none
 
   integer, parameter :: sp = c_float
@@ -37,18 +38,25 @@ program recur_sweep
   real(sp) :: theta, ang, m, s, nll
   character(len=65536) :: buf
 
-  nargs = command_argument_count()
-  if (nargs < 3) then
-    print '(A)', "usage: recur_sweep <weights_dir> <rows_file> <N1> [N2 ...]"
+  block
+    integer, allocatable :: tmp(:)
+    call set_args('--weights WEIGHTS --rows ROWS --loops 1,2,3', &
+        help_text=[character(len=80) :: &
+        'NAME', &
+        '  recur_sweep - loop-count overthinking sweep (hyp_ba98cd)', &
+        'SYNOPSIS', &
+        '  recur_sweep --weights DIR --rows FILE --loops 1,2,3,4,6,8,12'], &
+        version_text=[character(len=80) :: 'recur_sweep 1.0'])
+    wdir = trim(sget('weights'))
+    rowsfile = trim(sget('rows'))
+    tmp = igets('loops')
+    nvals = min(size(tmp), MAXN)
+    nlvec(1:nvals) = tmp(1:nvals)
+  end block
+  if (.not. specified('weights') .or. .not. specified('rows')) then
+    print '(A)', 'require --weights DIR --rows FILE (--help for all)'
     call exit(2)
   end if
-  call get_command_argument(1, wdir)
-  call get_command_argument(2, rowsfile)
-  nvals = min(nargs - 2, MAXN)
-  do i = 1, nvals
-    call get_command_argument(2 + i, arg)
-    read (arg, *) nlvec(i)
-  end do
 
   ! single tied layer = depth-12 layer 0 + real wte/lm_head
   call load1(trim(wdir) // "/transformer_wte_weight.npy", wte)

@@ -8,6 +8,7 @@
 program tokdiff
   use tokenizer_tables_mod
   use tokenizer_encode_mod
+  use M_CLI2, only: set_args, sget, specified
   implicit none
 
   character(len=512) :: tdir, listfile, path
@@ -15,12 +16,19 @@ program tokdiff
   character(len=:), allocatable :: raw
   integer, allocatable :: bytes(:), ids(:)
 
-  if (command_argument_count() < 2) then
-    print '(A)', "usage: tokdiff <tables_dir> <list_file>"
+  call set_args('--tables TABLES --list LIST', &
+      help_text=[character(len=80) :: &
+      'NAME', &
+      '  tokdiff - differential test for the Fortran tokenizer', &
+      'SYNOPSIS', &
+      '  tokdiff --tables DIR --list FILE (one doc path per line)'], &
+      version_text=[character(len=80) :: 'tokdiff 1.0'])
+  tdir = trim(sget('tables'))
+  listfile = trim(sget('list'))
+  if (.not. specified('tables') .or. .not. specified('list')) then
+    print '(A)', 'require --tables DIR --list FILE (--help for all)'
     call exit(2)
   end if
-  call get_command_argument(1, tdir)
-  call get_command_argument(2, listfile)
   call load_tables(trim(tdir))
 
   open (newunit=lu, file=trim(listfile), status="old", action="read")

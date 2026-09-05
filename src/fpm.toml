@@ -12,6 +12,9 @@ source-dir = "lib"
 [dependencies]
 openmp = "*"
 stdlib = "*"
+# NOTE: M_CLI2 vendored as src/lib/m_cli2.f90 (CC0-1.0, upstream:
+# github.com/urbanjost/M_CLI2) — fpm 0.10.1 ignores the dep's .F90
+# sources, so a git dependency builds nothing.
 
 [build]
 link = ["openblas"]

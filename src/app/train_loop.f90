@@ -13,6 +13,7 @@ program train_loop
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights
   use fortran_data_mod, only: load_batch
+  use M_CLI2, only: set_args, sget, rget, iget, specified
   implicit none
 
   integer, parameter :: sp = c_float
@@ -33,32 +34,27 @@ program train_loop
   integer :: k, i, j, tstep
   real(sp) :: theta, ang
 
-  lr = 0.001_sp; t0 = 1; log_every = 1; save_every = 5; start_row = 0
-  nsteps = -1
-  if (command_argument_count() < 4) then
-    print '(A)', "usage: train_loop <weights> <rows> <outdir> <nsteps> " // &
-        "[lr] [t0] [log_every] [save_every] [start_row]"
+  call set_args('--weights WEIGHTS --rows ROWS --out OUT --nsteps 10' // &
+      ' --lr 0.001 --t0 1 --log_every 1 --save_every 5 --start_row 0', &
+      help_text=[character(len=80) :: &
+      'NAME', &
+      '  train_loop - fixed-batch overfit loop (skeleton)', &
+      'SYNOPSIS', &
+      '  train_loop --weights DIR --rows FILE --out DIR --nsteps N'], &
+      version_text=[character(len=80) :: 'train_loop 1.0'])
+  wdir = trim(sget('weights'))
+  rowsfile = trim(sget('rows'))
+  outdir = trim(sget('out'))
+  nsteps = iget('nsteps')
+  lr = rget('lr')
+  t0 = iget('t0')
+  log_every = iget('log_every')
+  save_every = iget('save_every')
+  start_row = iget('start_row')
+  if (.not. specified('weights') .or. .not. specified('rows') &
+      .or. .not. specified('out') .or. nsteps < 1) then
+    print '(A)', 'require --weights --rows --out --nsteps>=1 (--help)'
     call exit(2)
-  end if
-  call get_command_argument(1, wdir)
-  call get_command_argument(2, rowsfile)
-  call get_command_argument(3, outdir)
-  call get_command_argument(4, arg)
-  read (arg, *) nsteps
-  if (command_argument_count() >= 5) then
-    call get_command_argument(5, arg); read (arg, *) lr
-  end if
-  if (command_argument_count() >= 6) then
-    call get_command_argument(6, arg); read (arg, *) t0
-  end if
-  if (command_argument_count() >= 7) then
-    call get_command_argument(7, arg); read (arg, *) log_every
-  end if
-  if (command_argument_count() >= 8) then
-    call get_command_argument(8, arg); read (arg, *) save_every
-  end if
-  if (command_argument_count() >= 9) then
-    call get_command_argument(9, arg); read (arg, *) start_row
   end if
 
   G%B = B; G%T = TT; G%V = VV; G%D = D
