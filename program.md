@@ -112,6 +112,52 @@ per call; use `nohup ... &` for long runs (`eval_driver --rows 48` ≈ 75 min).
   `stdlib_io_npy` (weight loading). `iomsg` args must be deferred-length
   `character(len=:), allocatable`.
 
+## Literature backlog (arXiv survey, Sep 2026 — watchdog-added)
+
+Surveyed for the two live fronts (sampling loops, small-model training).
+Status markers: HAVE (in `sample.f90`), NEXT (concrete slice), LATER.
+
+### Decoding / repetition (front: greedy + temp-0.3 loops)
+
+- HAVE: presence/frequency penalties, no-repeat n-gram block, temp + top-p
+  (`src/lib/sample.f90`, flags `--pres --freq --nblock --temp --topp`).
+- NEXT — CTRL-style repetition penalty (Keskar et al., arXiv:1909.05858):
+  multiplicative discount (logits of seen tokens / θ, θ≈1.2), distinct from
+  our additive pres/freq. ~15 lines next to `apply_penalties`, flag `--rep`.
+- NEXT — windowed (forgetting) penalty (Zhu et al., EMNLP 2023,
+  arXiv:2310.14971): penalize only the last W tokens + a length penalty
+  against over-short outputs. Explains why full-history pres/freq needs
+  retuning per run; flag `--pwin`.
+- NEXT — DRY, Don't Repeat Yourself (arXiv:2608.22761): pres/freq/ngram act
+  on token recurrence and stop *sequential* loops only at fluency-killing
+  strengths; DRY penalizes the loop structure itself. Fits our DOS-loop
+  observations exactly; implement after `--rep`.
+- LATER — LZ penalty (Ginart et al., arXiv:2504.20131): LZ77-codelength
+  penalty; reported to allow greedy decoding with ~0% degeneration where
+  freq/repetition penalties still fail (up to 4%). Needs per-step
+  match-length computation — feasible in Fortran, but profile first.
+- LATER — contrastive search (Su et al., arXiv:2210.14140) / adaptive
+  variant (arXiv:2407.18698): needs hidden-state cosine similarity per step.
+  Heavier; revisit only if penalty-family stalls. Background reading:
+  nucleus sampling + degeneration survey (Holtzman et al., arXiv:1904.09751).
+
+### Small-model training (front: lr/batch choices, hyp_fa2388 line)
+
+- SmolTulu (arXiv:2412.08347, ablations at 135M ≈ our ~100M scale): LR to
+  batch-size ratio is task-split — reasoning (ARC/GSM8K) wants *higher*
+  ratios, pattern matching (HellaSwag/IFEval) wants lower. Our val-bpb is
+  pattern-side; do not blindly raise LR for reasoning hopes. Slice: ratio
+  sweep recorded as HEP evidence, not vibes.
+- Small-batch Adam rule (Marek et al., NeurIPS 2025, arXiv:2507.07101): hold
+  Adam second-moment *half-life fixed in tokens*, not steps (scale β2 with
+  batch tokens); small batches then train stably and are *more* robust to
+  hyperparameter choice. Our batches are small — apply the β2 rule before
+  blaming LR. Also: no gradient accumulation on a single device.
+- Warmup (NeurIPS 2024, "Analyzing & reducing the need for LR warmup in
+  GPT training"): warmup's job is keeping early update sizes small; verify
+  our warmup covers the steps where nll is volatile (steps ~101-110
+  showed 0.02→0.72 swings) rather than extending it blindly.
+
 ## Output format
 
 Report: what ran (commands), numbers (bpb/parity-err/tokenizer diffs),

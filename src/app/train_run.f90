@@ -38,7 +38,7 @@ program train_run
   integer :: idx(B*TT), targets(B*TT), ngot
   integer, allocatable :: tbytes(:)
   real(sp) :: ct(TT*(HD/2)), st(TT*(HD/2))
-  real(sp) :: nll, vnll, lr, lr_eff, best
+  real(sp) :: nll, vnll, tnll, lr, lr_eff, best
   integer :: nsteps, t0, log_every, save_every, start_row
   integer :: ntrain, val_every, nval, keep_last
   integer :: k, i, j, tstep, u, ios, r
@@ -143,7 +143,13 @@ program train_run
     end if
     if (mod(k, val_every) == 0 .or. k == nsteps) then
       vnll = val_bpb(trim(rowsfile), start_row + ntrain, nval)
-      print '(A,I0,A,F10.5)', "val @", tstep, " bpb ", vnll
+      ! train-bpb on a held-out slice of the train pool (start_row+nval to
+      ! start_row+ntrain) so train/val are on the same scale. Lets us see
+      ! overfitting (train << val bpb) and pick best-checkpoint fairly.
+      tnll = val_bpb(trim(rowsfile), start_row + nval, ntrain - nval)
+      print '(A,I0,A,F10.5)', "val @", tstep, " bpb    ", vnll
+      print '(A,I0,A,F10.5)', "trn @", tstep, " bpb    ", tnll
+      print '(A,I0,A,F10.5)', "gap @", tstep, " bpb    ", vnll - tnll
       if (vnll < best) then
         best = vnll
         if (mkdir_p(trim(outdir) // "/best") /= 0) then
@@ -239,12 +245,8 @@ contains
   subroutine rotate_ckpts(outdir, tstep, save_every, keep_last)
     character(*), intent(in) :: outdir
     integer, intent(in) :: tstep, save_every, keep_last
-    character(len=512) :: old
-    integer :: victim
-    victim = tstep - keep_last * save_every
-    if (victim > 0) then
-      write (old, '(A,I0)') trim(outdir) // "/step_", victim
-      call execute_command_line("rm -rf " // trim(old))
-    end if
+    ! Fork-free: rm -rf via execute_command_line forks with live OpenMP
+    ! pools and kills children (step 110/120 smashes). Best-effort only —
+    ! leave old steps on disk, clean offline. No fork, no crash.
   end subroutine rotate_ckpts
 end program train_run
