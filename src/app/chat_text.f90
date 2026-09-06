@@ -36,7 +36,7 @@ program chat_text
   real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp, rep = 1.0_sp, plen = 0.0_sp
   integer :: nblock = 0, pwin = 0
   logical :: dostats = .false.
-  logical :: dostream = .false.
+  logical :: dostream = .true.
   integer :: s0, s1, srate
   integer(c_int64_t) :: cms_pre = 0, cms_dec = 0
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:), sbytes(:)
@@ -51,7 +51,7 @@ program chat_text
   call set_mode('response_file')
   call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 20 --temp 0.0' // &
       ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --pwin 0 --plen 0.0 --nblock 0' // &
-      ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream F', &
+      ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream T', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  chat_text - pure-Fortran text-in/text-out GPT inference', &
@@ -75,7 +75,7 @@ program chat_text
       '                use "raw" for no wrapping (completion mode)', &
       '  --system S    system prompt (prepended as ### SYSTEM)', &
       '  --stop S      comma-separated stop sequences', &
-      '  --stream T    stream tokens as generated (flush each)', &
+      '  --stream T    stream tokens as generated (default: on, use --stream F to disable)', &
       '  --stats T     print prefill/decode ms + tok/s to stderr'], &
       version_text=[character(len=80) :: 'chat_text 1.1'])
   tdir = trim(sget('tables'))
