@@ -1319,16 +1319,16 @@ contains
     lg = [0.0_sp, 1.0_sp, 2.0_sp, 3.0_sp, 4.0_sp]
     gen(1:3) = [3, 4, 4]
     st = 9_c_int64_t
-    pos = sample_next(lg, 5, 0.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, gen, 3, 2, st)
+    pos = sample_next(lg, 5, 0.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, 0, 0.0_sp, gen, 3, 2, st)
     call check(pos == 4, "blocked argmax falls through")
     ! without blocking, greedy takes id 4 (position 5)
-    pos = sample_next(lg, 5, 0.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, gen, 3, 0, st)
+    pos = sample_next(lg, 5, 0.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, 0, 0.0_sp, gen, 3, 0, st)
     call check(pos == 5, "unblocked argmax")
 
     ! top-p=0 -> always argmax over 50 draws
     st = 3_c_int64_t
     do i = 1, 50
-      pos = sample_next(lg, 5, 1.0_sp, 0.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, gen, 0, 0, st)
+      pos = sample_next(lg, 5, 1.0_sp, 0.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, 0, 0.0_sp, gen, 0, 0, st)
       if (pos /= 5) then
         call check(.false., "top-p 0 argmax")
         exit
@@ -1339,7 +1339,7 @@ contains
     st = 11_c_int64_t
     hits = 0
     do i = 1, 200
-      pos = sample_next(lg, 5, 1.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, gen, 0, 0, st)
+      pos = sample_next(lg, 5, 1.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, 0, 0.0_sp, gen, 0, 0, st)
       hits(pos) = hits(pos) + 1
     end do
     call check(hits(5) > 100 .and. sum(hits(1:4)) > 0, "top-p 1 spread")

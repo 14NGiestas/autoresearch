@@ -73,6 +73,40 @@ contains
     deallocate(seen)
   end subroutine apply_rep_penalty
 
+  ! Windowed (forgetting) penalty (Zhu et al. 2310.14971):
+  !   pres/freq only on last W tokens, not full history, plus a length
+  !   penalty that discourages over-short outputs (logits(EOS) -= plen *
+  !   max(0, 1 - ngen/W)). Explains why full-history needs retuning.
+  subroutine apply_windowed_penalties(logits, V, gen, ngen, pres, freq, win, plen)
+    integer, intent(in) :: V, ngen, win
+    real(c_float), intent(inout) :: logits(V)
+    integer, intent(in) :: gen(ngen)
+    real(c_float), intent(in) :: pres, freq, plen
+    integer :: i, j, cnt, start
+    logical, allocatable :: seen(:)
+    if (win <= 0 .or. ngen == 0) return
+    start = max(1, ngen - win + 1)
+    if (pres /= 0.0_c_float .or. freq /= 0.0_c_float) then
+      allocate(seen(0:V-1))
+      seen = .false.
+      do i = start, ngen
+        if (gen(i) < 0 .or. gen(i) >= V) cycle
+        if (seen(gen(i))) cycle
+        seen(gen(i)) = .true.
+        cnt = 0
+        do j = start, ngen
+          if (gen(j) == gen(i)) cnt = cnt + 1
+        end do
+        logits(gen(i)+1) = logits(gen(i)+1) - pres - freq * real(cnt, c_float)
+      end do
+      deallocate(seen)
+    end if
+    ! length penalty: if ngen < win, discourage EOS (assume EOS=0) from ending too short
+    if (plen /= 0.0_c_float .and. ngen < win) then
+      logits(1) = logits(1) - plen * real(win - ngen, c_float) / real(win, c_float)
+    end if
+  end subroutine apply_windowed_penalties
+
   ! No-repeat n-gram blocking: any token completing an n-gram already
   ! seen in gen(1:ngen) gets -inf. Windows [s, s+nn-1] with
   ! s <= ngen-nn+1 (strictly inside history; never self-compare).
@@ -100,19 +134,23 @@ contains
     end do
   end subroutine block_ngram
 
-  ! Full pipeline: penalties -> rep -> blocking -> temp/top-p sample.
+  ! Full pipeline: penalties (windowed or full) -> rep -> blocking -> temp/top-p.
   ! gen holds previously generated 0-based ids (ngen may be 0).
-  integer function sample_next(logits, V, temp, topp, pres, freq, rep, &
+  integer function sample_next(logits, V, temp, topp, pres, freq, rep, pwin, plen, &
       gen, ngen, nblock, state)
-    integer, intent(in) :: V, ngen, nblock
-    real(c_float), intent(in) :: logits(V), temp, topp, pres, freq, rep
+    integer, intent(in) :: V, ngen, nblock, pwin
+    real(c_float), intent(in) :: logits(V), temp, topp, pres, freq, rep, plen
     integer, intent(in) :: gen(ngen)
     integer(c_int64_t), intent(inout) :: state
     real(c_float), allocatable :: work(:)
     allocate(work(V))
     work = logits
-    if (pres /= 0.0_c_float .or. freq /= 0.0_c_float) &
-        call apply_penalties(work, V, gen, ngen, pres, freq)
+    if (pwin > 0) then
+      call apply_windowed_penalties(work, V, gen, ngen, pres, freq, pwin, plen)
+    else
+      if (pres /= 0.0_c_float .or. freq /= 0.0_c_float) &
+          call apply_penalties(work, V, gen, ngen, pres, freq)
+    end if
     if (rep > 1.0_c_float) call apply_rep_penalty(work, V, gen, ngen, rep)
     if (nblock >= 2) call block_ngram(work, V, gen, ngen, nblock)
     sample_next = sample_top_p(work, V, temp, topp, state)

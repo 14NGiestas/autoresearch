@@ -37,8 +37,8 @@ program repl
   integer(c_int64_t) :: cms_pre = 0, cms_dec = 0
   real(sp), allocatable :: ckv(:), cvv(:), out1(:)
   integer(c_int64_t) :: rng = 12345_c_int64_t
-  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp, rep = 1.0_sp
-  integer :: nblock = 0
+  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp, rep = 1.0_sp, plen = 0.0_sp
+  integer :: nblock = 0, pwin = 0
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:), sbytes(:)
   integer :: snbytes
   real(sp), allocatable :: cos_b(:), sin_b(:)
@@ -50,7 +50,7 @@ program repl
   n_gen = 40
   call set_mode('response_file')
   call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 40 --temp 0.0' // &
-      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --nblock 0' // &
+      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --pwin 0 --plen 0.0 --nblock 0' // &
       ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream F', &
       help_text=[character(len=80) :: &
       'NAME', &
@@ -62,7 +62,7 @@ program repl
       '  --tables DIR  tokenizer tables', &
       '  --weights DIR checkpoint .npy set', &
       '  --n N         tokens per turn (empty line quits)', &
-      '  --temp T --seed S --topp P --pres X --freq X --rep X --nblock N', &
+      '  --temp T --seed S --topp P --pres X --freq X --rep X --pwin W --plen X --nblock N', &
       '                sampling controls (see chat_text --help)', &
       '  --template S  chat template with {prompt} (default: chat)', &
       '  --system S    system prompt (prepended as ### SYSTEM)', &
@@ -79,6 +79,8 @@ program repl
   pres = rget('pres')
   freq = rget('freq')
   rep = rget('rep')
+  pwin = iget('pwin')
+  plen = rget('plen')
   nblock = iget('nblock')
   ! tables/weights have defaults (see set_args) so bare 'fpm run repl' works;
   ! response file @chat can still override them.
@@ -185,7 +187,7 @@ program repl
         write (0, '(A)') "NaN logit — abort"
         call exit(1)
       end if
-      best = sample_next(out1, VV, temp, topp, pres, freq, rep, &
+      best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &
           idx(nprompt+1:), tc - nprompt, nblock, rng)
       idx(tc+1) = best - 1
       if (dostream) then

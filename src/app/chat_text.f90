@@ -33,8 +33,8 @@ program chat_text
   integer :: ntot, d2, clen
   real(sp), allocatable :: ckv(:), cvv(:), out1(:)
   integer(c_int64_t) :: rng = 12345_c_int64_t
-  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp, rep = 1.0_sp
-  integer :: nblock = 0
+  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp, rep = 1.0_sp, plen = 0.0_sp
+  integer :: nblock = 0, pwin = 0
   logical :: dostats = .false.
   logical :: dostream = .false.
   integer :: s0, s1, srate
@@ -50,7 +50,7 @@ program chat_text
 
   call set_mode('response_file')
   call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 20 --temp 0.0' // &
-      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --nblock 0' // &
+      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --pwin 0 --plen 0.0 --nblock 0' // &
       ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream F', &
       help_text=[character(len=80) :: &
       'NAME', &
@@ -68,6 +68,8 @@ program chat_text
       '  --pres X      presence penalty', &
       '  --freq X      frequency penalty', &
       '  --rep X       CTRL repetition penalty theta (1.0=off, 1.2=on)', &
+      '  --pwin N      windowed penalty: only last W tokens (0=full history)', &
+      '  --plen X      length penalty (with --pwin)', &
       '  --nblock N    no-repeat n-gram size (0 = off)', &
       '  --template S  chat template with {prompt} (default: chat)', &
       '                use "raw" for no wrapping (completion mode)', &
@@ -85,6 +87,8 @@ program chat_text
   pres = rget('pres')
   freq = rget('freq')
   rep = rget('rep')
+  pwin = iget('pwin')
+  plen = rget('plen')
   nblock = iget('nblock')
   if (n_gen < 1) then
     print '(A)', 'require --n N>=1 (--help for all)'
@@ -192,7 +196,7 @@ program chat_text
     if (.not. (mchk == mchk)) then
       print '(A)', "NaN logit — abort"; call exit(1)
     end if
-    best = sample_next(out1, VV, temp, topp, pres, freq, rep, &
+    best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &
         idx(nprompt+1:), tc - nprompt, nblock, rng)
     idx(tc+1) = best - 1
     if (dostream) then
