@@ -18,6 +18,7 @@ program repl
   use sample_mod, only: sample_token, sample_next
   use fortran_kv_mod, only: gpt_step
   use M_CLI2, only: set_args, set_mode, sget, rget, iget, specified
+  use fortran_chat_mod
   implicit none
 
   integer, parameter :: sp = c_float
@@ -36,7 +37,7 @@ program repl
   integer(c_int64_t) :: cms_pre = 0, cms_dec = 0
   real(sp), allocatable :: ckv(:), cvv(:), out1(:)
   integer(c_int64_t) :: rng = 12345_c_int64_t
-  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp
+  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp, rep = 1.0_sp
   integer :: nblock = 0
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:), sbytes(:)
   integer :: snbytes
@@ -49,7 +50,7 @@ program repl
   n_gen = 40
   call set_mode('response_file')
   call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 40 --temp 0.0' // &
-      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --nblock 0' // &
+      ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --nblock 0' // &
       ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream F', &
       help_text=[character(len=80) :: &
       'NAME', &
@@ -61,7 +62,7 @@ program repl
       '  --tables DIR  tokenizer tables', &
       '  --weights DIR checkpoint .npy set', &
       '  --n N         tokens per turn (empty line quits)', &
-      '  --temp T --seed S --topp P --pres X --freq X --nblock N', &
+      '  --temp T --seed S --topp P --pres X --freq X --rep X --nblock N', &
       '                sampling controls (see chat_text --help)', &
       '  --template S  chat template with {prompt} (default: chat)', &
       '  --system S    system prompt (prepended as ### SYSTEM)', &
@@ -77,6 +78,7 @@ program repl
   topp = rget('topp')
   pres = rget('pres')
   freq = rget('freq')
+  rep = rget('rep')
   nblock = iget('nblock')
   ! tables/weights have defaults (see set_args) so bare 'fpm run repl' works;
   ! response file @chat can still override them.
@@ -161,7 +163,6 @@ program repl
     dostats = specified('stats')
     dostream = specified('stream')
     if (dostats) call system_clock(count_rate=crate)
-    if (dostream) open (newunit=u, file="/dev/stdout", access="stream", form="unformatted")
     cms_pre = 0; cms_dec = 0
     do step = 1, ntot - 1
       tc = step
@@ -184,15 +185,15 @@ program repl
         write (0, '(A)') "NaN logit — abort"
         call exit(1)
       end if
-      best = sample_next(out1, VV, temp, topp, pres, freq, &
+      best = sample_next(out1, VV, temp, topp, pres, freq, rep, &
           idx(nprompt+1:), tc - nprompt, nblock, rng)
       idx(tc+1) = best - 1
       if (dostream) then
         call decode(idx(tc+1:tc+1), 1, sbytes, snbytes)
         do j = 1, snbytes
-          write (u) char(sbytes(j))
+          write (*, '(A)', advance='no') char(sbytes(j))
         end do
-        flush(u)
+        flush(6)
         deallocate(sbytes)
       end if
     end do
@@ -206,8 +207,7 @@ program repl
         1000.0 * real(cms_dec) / real(crate), " tok_s=", &
         real(n_gen) / max(1.0e-9, real(cms_pre + cms_dec) / real(crate))
     if (dostream) then
-      write (u) char(10)
-      close (u)
+      write (*, '(A)') ""
       deallocate(idx)
     else
       call decode(idx(nprompt+1:), n_gen, obytes, nbytes)
@@ -227,103 +227,5 @@ program repl
     end if
   end do
   write (0, '(A)') "bye."
-
-contains
-
-  subroutine apply_template(inp, n_in, tmpl, sys, out, n_out)
-    integer, intent(in) :: inp(*), n_in
-    character(*), intent(in) :: tmpl, sys
-    integer, allocatable, intent(out) :: out(:)
-    integer, intent(out) :: n_out
-    character(len=:), allocatable :: pre, post, sys_part, t2
-    integer :: at, k, ii
-    allocate(character(len=len_trim(tmpl)) :: t2)
-    t2 = trim(tmpl)
-    call unescape_nl(t2)
-    if (len_trim(sys) > 0) then
-      sys_part = "### SYSTEM" // char(10) // trim(sys) // char(10) // char(10)
-    else
-      sys_part = ""
-    end if
-    at = index(t2, "{prompt}")
-    if (at > 0) then
-      pre = sys_part // t2(1:at-1)
-      post = t2(at+8:)
-    else
-      pre = sys_part // t2
-      post = ""
-    end if
-    n_out = len(pre) + n_in + len(post)
-    allocate(out(n_out))
-    k = 1
-    do ii = 1, len(pre)
-      out(k) = ichar(pre(ii:ii)); k = k + 1
-    end do
-    do ii = 1, n_in
-      out(k) = inp(ii); k = k + 1
-    end do
-    do ii = 1, len(post)
-      out(k) = ichar(post(ii:ii)); k = k + 1
-    end do
-  end subroutine apply_template
-
-  subroutine unescape_nl(s)
-    character(len=:), allocatable, intent(inout) :: s
-    character(len=:), allocatable :: r
-    integer :: i, j
-    allocate(character(len=len(s)) :: r)
-    j = 0; i = 1
-    do while (i <= len(s))
-      if (s(i:i) == "\\" .and. i < len(s) .and. s(i+1:i+1) == "n") then
-        j = j + 1; r(j:j) = char(10); i = i + 2
-      else if (s(i:i) == "\\" .and. i < len(s) .and. s(i+1:i+1) == "t") then
-        j = j + 1; r(j:j) = char(9); i = i + 2
-      else
-        j = j + 1; r(j:j) = s(i:i); i = i + 1
-      end if
-    end do
-    s = r(1:j)
-  end subroutine unescape_nl
-
-  subroutine strip_quotes(s)
-    character(len=*), intent(inout) :: s
-    integer :: n
-    n = len_trim(s)
-    if (n >= 2) then
-      if ((s(1:1) == '"' .and. s(n:n) == '"') .or. (s(1:1) == "'" .and. s(n:n) == "'")) then
-        s = s(2:n-1)
-      end if
-    end if
-  end subroutine strip_quotes
-
-  subroutine truncate_at_stop(bytes, n, stops)
-    integer, intent(inout) :: n
-    integer, intent(in) :: bytes(*)
-    character(*), intent(in) :: stops
-    character(len=:), allocatable :: txt, stop1
-    integer :: p, q, cut, best_cut
-    allocate(character(len=n) :: txt)
-    do p = 1, n; txt(p:p) = char(bytes(p)); end do
-    best_cut = 0; p = 1
-    do
-      q = index(stops(p:), ",")
-      if (q == 0) then
-        stop1 = trim(adjustl(stops(p:)))
-        if (len_trim(stop1) > 0) then
-          cut = index(txt, trim(stop1))
-          if (cut > 0 .and. (best_cut == 0 .or. cut < best_cut)) best_cut = cut
-        end if
-        exit
-      else
-        stop1 = trim(adjustl(stops(p:p+q-2)))
-        if (len_trim(stop1) > 0) then
-          cut = index(txt, trim(stop1))
-          if (cut > 0 .and. (best_cut == 0 .or. cut < best_cut)) best_cut = cut
-        end if
-        p = p + q
-      end if
-    end do
-    if (best_cut > 0) n = best_cut - 1
-  end subroutine truncate_at_stop
 
 end program repl

@@ -51,6 +51,28 @@ contains
     deallocate(seen)
   end subroutine apply_penalties
 
+  ! CTRL-style repetition penalty (Keskar et al. 1909.05858):
+  !   if token seen in gen, logits(id) /= theta (theta>1 discounts).
+  ! Distinct from additive pres/freq; ~15 lines, multiplicative.
+  subroutine apply_rep_penalty(logits, V, gen, ngen, theta)
+    integer, intent(in) :: V, ngen
+    real(c_float), intent(inout) :: logits(V)
+    integer, intent(in) :: gen(ngen)
+    real(c_float), intent(in) :: theta
+    logical, allocatable :: seen(:)
+    integer :: i
+    if (theta <= 1.0_c_float .or. ngen == 0) return
+    allocate(seen(0:V-1))
+    seen = .false.
+    do i = 1, ngen
+      if (gen(i) < 0 .or. gen(i) >= V) cycle
+      if (seen(gen(i))) cycle
+      seen(gen(i)) = .true.
+      logits(gen(i)+1) = logits(gen(i)+1) / theta
+    end do
+    deallocate(seen)
+  end subroutine apply_rep_penalty
+
   ! No-repeat n-gram blocking: any token completing an n-gram already
   ! seen in gen(1:ngen) gets -inf. Windows [s, s+nn-1] with
   ! s <= ngen-nn+1 (strictly inside history; never self-compare).
@@ -78,12 +100,12 @@ contains
     end do
   end subroutine block_ngram
 
-  ! Full pipeline: penalties -> blocking -> temp/top-p sample.
+  ! Full pipeline: penalties -> rep -> blocking -> temp/top-p sample.
   ! gen holds previously generated 0-based ids (ngen may be 0).
-  integer function sample_next(logits, V, temp, topp, pres, freq, &
+  integer function sample_next(logits, V, temp, topp, pres, freq, rep, &
       gen, ngen, nblock, state)
     integer, intent(in) :: V, ngen, nblock
-    real(c_float), intent(in) :: logits(V), temp, topp, pres, freq
+    real(c_float), intent(in) :: logits(V), temp, topp, pres, freq, rep
     integer, intent(in) :: gen(ngen)
     integer(c_int64_t), intent(inout) :: state
     real(c_float), allocatable :: work(:)
@@ -91,6 +113,7 @@ contains
     work = logits
     if (pres /= 0.0_c_float .or. freq /= 0.0_c_float) &
         call apply_penalties(work, V, gen, ngen, pres, freq)
+    if (rep > 1.0_c_float) call apply_rep_penalty(work, V, gen, ngen, rep)
     if (nblock >= 2) call block_ngram(work, V, gen, ngen, nblock)
     sample_next = sample_top_p(work, V, temp, topp, state)
     deallocate(work)

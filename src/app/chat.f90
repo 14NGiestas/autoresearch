@@ -37,13 +37,13 @@ program chat
   real(sp), allocatable :: c_q(:), c_k(:), c_v(:), c_pr(:), c_fc(:), c_pr2(:)
   real(sp), allocatable :: outp(:)
   real(sp) :: theta, ang, topv, mchk
-  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp
+  real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp, rep = 1.0_sp
   integer :: nblock = 0
   integer(c_int64_t) :: rng = 12345_c_int64_t
   character(len=16) :: lstr
 
   call set_args('--weights WEIGHTS --n 20 --ids 1,2,3 --stats F' // &
-      ' --temp 0.0 --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0' // &
+      ' --temp 0.0 --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0' // &
       ' --nblock 0', &
       help_text=[character(len=80) :: &
       'NAME', &
@@ -52,7 +52,7 @@ program chat
       '  chat --weights DIR --n N --ids 1,2,3 [options]', &
       'OPTIONS', &
       '  --stats T     print total ms + tok/s to stderr', &
-      '  --temp T --seed S --topp P --pres X --freq X --nblock N'], &
+      '  --temp T --seed S --topp P --pres X --freq X --rep X --nblock N'], &
       version_text=[character(len=80) :: 'chat 1.1'])
   wdir = trim(sget('weights'))
   n_gen = iget('n')
@@ -62,6 +62,7 @@ program chat
   topp = rget('topp')
   pres = rget('pres')
   freq = rget('freq')
+  rep = rget('rep')
   nblock = iget('nblock')
   n_prompt = size(idx)
   if (.not. specified('weights') .or. n_gen < 1 .or. n_prompt < 1) then
@@ -100,7 +101,7 @@ program chat
     if (.not. (mchk == mchk)) then
       print '(A)', "NaN logit — abort"; call exit(1)
     end if
-    best = sample_next(outp((tc-1)*VV+1:), VV, temp, topp, pres, freq, &
+    best = sample_next(outp((tc-1)*VV+1:), VV, temp, topp, pres, freq, rep, &
         idx(n_prompt+1:), tc - n_prompt, nblock, rng)
     idx = [idx, best - 1]   ! 1-based position -> 0-based token id
   end do
