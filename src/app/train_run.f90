@@ -128,9 +128,11 @@ program train_run
     end if
     call train_step(idx, targets, ct, st, M, S, G, GR, C, nll, tstep, &
         lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp)
-    if (mod(k, log_every) == 0 .or. k == nsteps) &
+    if (mod(k, log_every) == 0 .or. k == nsteps) then
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &
         " lr ", lr_eff
+      flush (6)
+    end if
     if (mod(k, save_every) == 0 .or. k == nsteps) then
       write (ckdir, '(A,I0)') trim(outdir) // "/step_", tstep
       if (mkdir_p(trim(ckdir)) /= 0) then
@@ -161,6 +163,7 @@ program train_run
             M%fc, M%p2)
         print '(A)', "new best snapshot"
       end if
+      flush (6)
     end if
   end do
 contains
