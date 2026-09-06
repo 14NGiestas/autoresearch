@@ -48,9 +48,9 @@ program chat_text
   d2 = HD / 2
 
   call set_mode('response_file')
-  call set_args('--tables TABLES --weights WEIGHTS --n 20 --temp 0.0' // &
+  call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 20 --temp 0.0' // &
       ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --nblock 0' // &
-      ' --stats F --template T --system S --stop S --stream F', &
+      ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream F', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  chat_text - pure-Fortran text-in/text-out GPT inference', &
@@ -83,9 +83,8 @@ program chat_text
   pres = rget('pres')
   freq = rget('freq')
   nblock = iget('nblock')
-  if (.not. specified('tables') .or. .not. specified('weights') &
-      .or. n_gen < 1) then
-    print '(A)', 'require --tables DIR --weights DIR --n N>=1 (--help for all)'
+  if (n_gen < 1) then
+    print '(A)', 'require --n N>=1 (--help for all)'
     call exit(2)
   end if
   call load_tables(trim(tdir))
@@ -117,11 +116,13 @@ program chat_text
   ! --- templating (customizable, default = chat) ---
   if (specified('template')) then
     tmpl_raw = trim(sget('template'))
+    call strip_quotes(tmpl_raw)
   else
     tmpl_raw = "### USER" // char(10) // "{prompt}" // char(10) // char(10) // "### ASSISTANT" // char(10)
   end if
   if (specified('system')) then
     sys_raw = trim(sget('system'))
+    call strip_quotes(sys_raw)
   else
     sys_raw = ""
   end if
@@ -283,6 +284,17 @@ contains
     end do
     s = r(1:j)
   end subroutine unescape_nl
+
+  subroutine strip_quotes(s)
+    character(len=*), intent(inout) :: s
+    integer :: n
+    n = len_trim(s)
+    if (n >= 2) then
+      if ((s(1:1) == '"' .and. s(n:n) == '"') .or. (s(1:1) == "'" .and. s(n:n) == "'")) then
+        s = s(2:n-1)
+      end if
+    end if
+  end subroutine strip_quotes
 
   subroutine truncate_at_stop(bytes, n, stops)
     integer, intent(inout) :: n

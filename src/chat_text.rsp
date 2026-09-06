@@ -1,0 +1,7 @@
+--tables /home/pauli/.cache/autoresearch/tok_tables
+--weights /tmp/w_long100/best
+--n 40
+--temp 0.7
+--pres 1.0
+--freq 1.0
+--nblock 3
