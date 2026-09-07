@@ -14,14 +14,15 @@ set -u
 OPENBLAS=/nix/store/qqgfxcvq0wqp5a842pv8bcyxrc8n4sd3-openblas-0.3.33
 export LD_LIBRARY_PATH="$OPENBLAS/lib:${LD_LIBRARY_PATH:-}"
 export LIBRARY_PATH="$OPENBLAS/lib:${LIBRARY_PATH:-}"
-# Threading: FAFO experiment 2026-09-07. Unexplained fixed 6-thread team
-# observed with clean env (16 threads exist, 10 parked forever). Pin both
-# runtimes to 16 and compare step cadence + R-count vs the 6R baseline.
+# Threading (FAFO concluded 2026-09-07): steady 6R is OpenBLAS's own
+# work-division for our GEMM shapes (default max is 16, verified), NOT a
+# cap: no thread env vars exist, affinity is 0-15, 16 threads live, and
+# 16R bursts from our OpenMP regions were directly observed. OMP_DISPLAY_ENV
+# confirmed libgomp honors NUM_THREADS=16/DYNAMIC=FALSE. No thermal issue
+# (workers boost 4.5GHz). Pins below are harmless hygiene; the next real
+# lever is code (attention over heads is serial), not env.
 export OMP_NUM_THREADS=16
 export OPENBLAS_NUM_THREADS=16
-# FAFO round 2: 16R seen at startup decayed to stable 6R by step 3.
-# Prime suspect now libgomp DYNAMIC team adjustment shrinking teams
-# under load (OMP_NUM_THREADS alone does not disable it).
 export OMP_DYNAMIC=FALSE
 cd /home/pauli/autoresearch/src
 exec flock -n /tmp/w_10k/train.lock \
