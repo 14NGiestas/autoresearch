@@ -48,4 +48,29 @@ contains
         1.0_c_float, w, lda, x, ldb, 0.0_c_float, y, ldc)
   end subroutine linear3d_sgemm
 
+  ! Reverse-mode twin of linear3d_sgemm (same row-major-as-col-major trick):
+  !   dx(bt,i) = sum_o dy(bt,o) * w(o,i)   ->  DXf = Wf^T . DYf
+  !     sgemm('T','N', IF,BT,OF, 1, W,IF, dy,OF, 0, dx,IF)
+  !   dw(o,i)  = sum_bt dy(bt,o) * x(bt,i) ->  DWf = Xf . DYf^T
+  !     sgemm('N','T', IF,OF,BT, 1, x,IF, dy,OF, 0, dw,IF)
+  ! Call OUTSIDE OpenMP regions (compute_grads is serial). FP32-only
+  ! (sgemm_); a wp->real64 flip needs a dgemm_ twin.
+  subroutine linear3d_bwd_sgemm(dy, x, w, dx, dw, BB, TT, IF, OF)
+    integer(c_int), intent(in) :: BB, TT, IF, OF
+    real(wp), intent(in)  :: dy(:), x(:), w(:)
+    real(wp), intent(out) :: dx(:), dw(:)
+    integer(c_int64_t) :: m, n, k, lda, ldb, ldc, bt64
+    bt64 = int(BB, c_int64_t) * int(TT, c_int64_t)
+    ! dx = dy . W
+    m = int(IF, c_int64_t); n = bt64; k = int(OF, c_int64_t)
+    lda = int(IF, c_int64_t); ldb = int(OF, c_int64_t); ldc = int(IF, c_int64_t)
+    call sgemm_(char(84, c_char), char(78, c_char), m, n, k, &
+        1.0_c_float, w, lda, dy, ldb, 0.0_c_float, dx, ldc)
+    ! dw = dy^T . x
+    m = int(IF, c_int64_t); n = int(OF, c_int64_t); k = bt64
+    lda = int(IF, c_int64_t); ldb = int(OF, c_int64_t); ldc = int(IF, c_int64_t)
+    call sgemm_(char(78, c_char), char(84, c_char), m, n, k, &
+        1.0_c_float, x, lda, dy, ldb, 0.0_c_float, dw, ldc)
+  end subroutine linear3d_bwd_sgemm
+
 end module fortran_blas_mod

@@ -285,7 +285,7 @@ contains
       end do
       tmp%dlgt((it-1)*G%V+tg) = tmp%dlgt((it-1)*G%V+tg) - sc
     end do
-    call linear3d_bwd(tmp%dlgt, tmp%xn, M%lm, tmp%dxn, GR%lm, G%B, G%T, DD, G%V)
+    call linear3d_bwd_sgemm(tmp%dlgt, tmp%xn, M%lm, tmp%dxn, GR%lm, G%B, G%T, DD, G%V)
     call rmsnorm0_bwd(tmp%dxn, C%ef, tmp%demd, BT, DD, G%eps)
 
     ! ---- blocks reversed ----
@@ -294,18 +294,18 @@ contains
     do ll = G%nl - 1, 0, -1
       tmp%rbuf = C%f(ll*BT*dff+1:(ll+1)*BT*dff)
       call relu2(tmp%rbuf, BT*dff)   ! r = relu(f), x-input of proj2 bwd
-      call linear3d_bwd(tmp%demd, tmp%rbuf, M%p2(ll*p2sz+1:), tmp%dr, &
+      call linear3d_bwd_sgemm(tmp%demd, tmp%rbuf, M%p2(ll*p2sz+1:), tmp%dr, &
           GR%p2(ll*p2sz+1:), G%B, G%T, dff, DD)
       call relu2_bwd(tmp%dr, C%f(ll*BT*dff+1:), tmp%df, BT*dff)
       call rmsnorm0(C%e1(ll*BT*DD+1:), tmp%xn, BT, DD, G%eps)
-      call linear3d_bwd(tmp%df, tmp%xn, M%fc(ll*fcsz+1:), tmp%dx1, GR%fc(ll*fcsz+1:), &
+      call linear3d_bwd_sgemm(tmp%df, tmp%xn, M%fc(ll*fcsz+1:), tmp%dx1, GR%fc(ll*fcsz+1:), &
           G%B, G%T, DD, dff)
       call rmsnorm0_bwd(tmp%dx1, C%e1(ll*BT*DD+1:), tmp%dx2, BT, DD, G%eps)
       !$omp parallel do simd
       do jj = 1, BT*DD
         tmp%demd(jj) = tmp%demd(jj) + tmp%dx2(jj)   ! de1 = demd + mlp path
       end do
-      call linear3d_bwd(tmp%demd, C%ao(ll*BT*DD+1:), M%p(ll*psz+1:), tmp%dao, &
+      call linear3d_bwd_sgemm(tmp%demd, C%ao(ll*BT*DD+1:), M%p(ll*psz+1:), tmp%dao, &
           GR%p(ll*psz+1:), G%B, G%T, DD, DD)
       tmp%dk = 0.0_wp; tmp%dv = 0.0_wp
       call attn_bwd(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
@@ -313,11 +313,11 @@ contains
           G%B, G%T, G%nh, G%nkv, G%hd)
       call rope_4d_bwd(tmp%dq, cos, sin, tmp%dqr, G%B, G%T, G%nh, G%hd)
       call rope_4d_bwd(tmp%dk, cos, sin, tmp%dkr, G%B, G%T, G%nkv, G%hd)
-      call linear3d_bwd(tmp%dqr, C%xa(ll*BT*DD+1:), M%q(ll*qsz+1:), tmp%dx1, &
+      call linear3d_bwd_sgemm(tmp%dqr, C%xa(ll*BT*DD+1:), M%q(ll*qsz+1:), tmp%dx1, &
           GR%q(ll*qsz+1:), G%B, G%T, DD, hdd)
-      call linear3d_bwd(tmp%dkr, C%xa(ll*BT*DD+1:), M%k(ll*ksz+1:), tmp%dx2, &
+      call linear3d_bwd_sgemm(tmp%dkr, C%xa(ll*BT*DD+1:), M%k(ll*ksz+1:), tmp%dx2, &
           GR%k(ll*ksz+1:), G%B, G%T, DD, kvd)
-      call linear3d_bwd(tmp%dv, C%xa(ll*BT*DD+1:), M%v(ll*ksz+1:), tmp%dx3, &
+      call linear3d_bwd_sgemm(tmp%dv, C%xa(ll*BT*DD+1:), M%v(ll*ksz+1:), tmp%dx3, &
           GR%v(ll*ksz+1:), G%B, G%T, DD, kvd)
       !$omp parallel do simd
       do jj = 1, BT*DD
