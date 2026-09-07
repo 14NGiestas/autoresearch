@@ -14,6 +14,11 @@ set -u
 OPENBLAS=/nix/store/qqgfxcvq0wqp5a842pv8bcyxrc8n4sd3-openblas-0.3.33
 export LD_LIBRARY_PATH="$OPENBLAS/lib:${LD_LIBRARY_PATH:-}"
 export LIBRARY_PATH="$OPENBLAS/lib:${LIBRARY_PATH:-}"
+# Threading: FAFO experiment 2026-09-07. Unexplained fixed 6-thread team
+# observed with clean env (16 threads exist, 10 parked forever). Pin both
+# runtimes to 16 and compare step cadence + R-count vs the 6R baseline.
+export OMP_NUM_THREADS=16
+export OPENBLAS_NUM_THREADS=16
 cd /home/pauli/autoresearch/src
 exec flock -n /tmp/w_10k/train.lock \
   fortran-fpm run --profile release --flag "-march=native -ffast-math" \
