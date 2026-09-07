@@ -4,10 +4,17 @@
 # usage: watch_phase1.sh <pid> <log> <watchfile>
 set -u
 PID="$1"; LOG="$2"; WATCH="$3"
-# Loud channels: terminal bell (tmux monitor-bell flags the window) +
-# desktop notification (best-effort). The agent cannot be auto-woken;
-# these ping the human instead.
-ring() { printf '\a'; notify-send -u critical "phase1: $1" "$2" 2>/dev/null || true; }
+# Loud channel: type a banner into the human's session (0, attached) and
+# the training window via tmux send-keys. Literal (-l) so nothing parses
+# as key names. Guarded: never fails the watcher. The agent cannot be
+# auto-woken; this pings the human instead.
+ring() {
+  printf '\a'
+  tmux send-keys -t 0 -l "echo '########## PHASE1 $1: $2 ##########'" 2>/dev/null || true
+  tmux send-keys -t 0 Enter 2>/dev/null || true
+  tmux send-keys -t curriculum:phase1 -l "echo '########## PHASE1 $1: $2 ##########'" 2>/dev/null || true
+  tmux send-keys -t curriculum:phase1 Enter 2>/dev/null || true
+}
 say() { echo "$(date +%H:%M) $*" > "$WATCH"; }
 if ! kill -0 "$PID" 2>/dev/null; then say "DEAD-AT-START tail: $(tail -1 "$LOG" 2>/dev/null)"; ring dead "process already gone"; exit 1; fi
 while kill -0 "$PID" 2>/dev/null; do
