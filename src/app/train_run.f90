@@ -175,8 +175,7 @@ contains
     integer, intent(in) :: first, nval
     integer :: v_idx(B*TT), v_tgt(B*TT), n, vv2, jj, tid, b2
     real(sp) :: out_nll, tn, tb
-    real(sp), allocatable :: nlls(:)
-    allocate(nlls(B*TT))
+    real(sp) :: nlls(B*TT)
     tn = 0.0_sp; tb = 0
     do b2 = 0, nval - 1
       call load_batch(rowsfile, first + b2, B, TT, v_idx, v_tgt, n)
@@ -197,8 +196,10 @@ contains
   subroutine forward_nlls(idx, targets, nlls)
     integer, intent(in) :: idx(:), targets(:)
     real(sp), intent(out) :: nlls(:)
-    real(sp), allocatable :: emd(:), xn(:), sub(:), qo(:), ko(:), vo(:)
-    real(sp), allocatable :: qrot(:), krot(:), ao(:), mlpd(:), lgt(:)
+    ! Val scratch = train temps (idle between steps): pointer-associated,
+    ! zero malloc. Shapes match tmp exactly (same B,T,D,V,hdd,dff).
+    real(sp), pointer :: emd(:), xn(:), sub(:), qo(:), ko(:), vo(:)
+    real(sp), pointer :: qrot(:), krot(:), ao(:), mlpd(:), lgt(:)
     integer :: BT, DD, hdd, dff, ll, jj, it, j2, tg
     integer :: qsz, ksz, psz, fcsz, p2sz
     real(sp) :: mx, sm
@@ -206,10 +207,10 @@ contains
     dff = 4 * DD
     qsz = hdd * DD; ksz = N_KV * HD * DD; psz = DD * hdd
     fcsz = dff * DD; p2sz = DD * dff
-    allocate(emd(BT*DD), xn(BT*DD), sub(BT*DD))
-    allocate(qo(BT*hdd), ko(BT*N_KV*HD), vo(BT*N_KV*HD))
-    allocate(qrot(BT*hdd), krot(BT*N_KV*HD), ao(BT*DD), mlpd(BT*dff))
-    allocate(lgt(BT*VV))
+    emd => tmp%emd; xn => tmp%xn; sub => tmp%sub
+    qo => tmp%qo; ko => tmp%ko; vo => tmp%vo
+    qrot => tmp%qrot; krot => tmp%krot; ao => tmp%ao; mlpd => tmp%mlpF
+    lgt => tmp%lgt
     call wte_lookup(idx, M%wte, emd, B, TT, VV, DD)
     call rmsnorm0(emd, xn, BT, DD, 1.0e-5_sp)
     emd = xn
@@ -243,7 +244,7 @@ contains
       end do
       nlls(it) = (mx + log(sm)) - lgt((it-1)*VV+tg)
     end do
-    deallocate(emd, xn, sub, qo, ko, vo, qrot, krot, ao, mlpd, lgt)
+
   end subroutine forward_nlls
 
   ! delete step_{t-2*save_every} dirs beyond keep_last (best/ untouched)

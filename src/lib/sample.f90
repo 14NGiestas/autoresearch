@@ -35,9 +35,8 @@ contains
     real(wp), intent(inout) :: logits(:)
     integer, intent(in) :: gen(:)
     real(wp), intent(in) :: pres, freq
-    logical, allocatable :: seen(:)
+    logical :: seen(0:V-1)
     integer :: i, j, cnt
-    allocate(seen(0:V-1))
     seen = .false.
     do i = 1, ngen
       if (gen(i) < 0 .or. gen(i) >= V) cycle
@@ -49,7 +48,6 @@ contains
       end do
       logits(gen(i)+1) = logits(gen(i)+1) - pres - freq * real(cnt, wp)
     end do
-    deallocate(seen)
   end subroutine apply_penalties
 
   ! CTRL-style repetition penalty (Keskar et al. 1909.05858):
@@ -60,10 +58,9 @@ contains
     real(wp), intent(inout) :: logits(:)
     integer, intent(in) :: gen(:)
     real(wp), intent(in) :: theta
-    logical, allocatable :: seen(:)
+    logical :: seen(0:V-1)
     integer :: i
     if (theta <= 1.0_wp .or. ngen == 0) return
-    allocate(seen(0:V-1))
     seen = .false.
     do i = 1, ngen
       if (gen(i) < 0 .or. gen(i) >= V) cycle
@@ -71,7 +68,6 @@ contains
       seen(gen(i)) = .true.
       logits(gen(i)+1) = logits(gen(i)+1) / theta
     end do
-    deallocate(seen)
   end subroutine apply_rep_penalty
 
   ! Windowed (forgetting) penalty (Zhu et al. 2310.14971):
@@ -84,11 +80,10 @@ contains
     integer, intent(in) :: gen(:)
     real(wp), intent(in) :: pres, freq, plen
     integer :: i, j, cnt, start
-    logical, allocatable :: seen(:)
+    logical :: seen(0:V-1)
     if (win <= 0 .or. ngen == 0) return
     start = max(1, ngen - win + 1)
     if (pres /= 0.0_wp .or. freq /= 0.0_wp) then
-      allocate(seen(0:V-1))
       seen = .false.
       do i = start, ngen
         if (gen(i) < 0 .or. gen(i) >= V) cycle
@@ -100,7 +95,6 @@ contains
         end do
         logits(gen(i)+1) = logits(gen(i)+1) - pres - freq * real(cnt, wp)
       end do
-      deallocate(seen)
     end if
     ! length penalty: if ngen < win, discourage EOS (assume EOS=0) from ending too short
     if (plen /= 0.0_wp .and. ngen < win) then
@@ -143,8 +137,7 @@ contains
     real(wp), intent(in) :: logits(:), temp, topp, pres, freq, rep, plen
     integer, intent(in) :: gen(:)
     integer(c_int64_t), intent(inout) :: state
-    real(wp), allocatable :: work(:)
-    allocate(work(V))
+    real(wp) :: work(V)
     work = logits
     if (pwin > 0) then
       call apply_windowed_penalties(work, V, gen, ngen, pres, freq, pwin, plen)
@@ -155,7 +148,6 @@ contains
     if (rep > 1.0_wp) call apply_rep_penalty(work, V, gen, ngen, rep)
     if (nblock >= 2) call block_ngram(work, V, gen, ngen, nblock)
     sample_next = sample_top_p(work, V, temp, topp, state)
-    deallocate(work)
   end function sample_next
 
   ! Temperature + nucleus sampling. topp>=1: full distribution.
@@ -163,8 +155,8 @@ contains
     integer, intent(in) :: V
     real(wp), intent(in) :: logits(:), temp, topp
     integer(c_int64_t), intent(inout) :: state
-    real(wp), allocatable :: sc(:), pr(:)
-    integer, allocatable :: ox(:)
+    real(wp) :: sc(V), pr(V)
+    integer :: ox(V)
     integer :: i, k, cut
     real(wp) :: m, s, u, acc, t
     t = temp
@@ -176,7 +168,6 @@ contains
       return
     end if
     if (t < 1.0e-6_wp) t = 1.0e-6_wp
-    allocate(sc(V), pr(V), ox(V))
     m = logits(1)
     do i = 2, V
       if (logits(i) > m) m = logits(i)
@@ -208,12 +199,10 @@ contains
       acc = acc + pr(k)
       if (acc >= u) then
         sample_top_p = ox(k)
-        deallocate(sc, pr, ox)
         return
       end if
     end do
     sample_top_p = ox(cut)
-    deallocate(sc, pr, ox)
   end function sample_top_p
 
   ! Quicksort (Lomuto, middle pivot) sorting pr desc, ox alongside.
@@ -252,7 +241,7 @@ contains
     real(wp) :: t
 
     t = temp
-    if (t <= 0.0_c_float) then
+    if (t <= 0.0_wp) then
       ! greedy
       sample_token = 1
       do i = 2, V
@@ -271,7 +260,7 @@ contains
       s = s + exp((logits(i) - m) / t)
     end do
     u = rand_u01(state) * s
-    acc = 0.0_c_float
+    acc = 0.0_wp
     do i = 1, V
       acc = acc + exp((logits(i) - m) / t)
       if (acc >= u) then

@@ -39,9 +39,8 @@ contains
     integer, intent(out) :: idx(:), targets(:)
     integer, intent(out) :: ngot
     integer :: u, ios, r, k
-    integer, allocatable :: full(:)
+    integer :: full(T + 1)
     character(len=ROW_BUF) :: line
-    allocate(full(T + 1))
     ngot = 0
     open (newunit=u, file=trim(path), status='old', action='read', &
         iostat=ios)

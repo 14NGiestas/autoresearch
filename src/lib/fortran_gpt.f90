@@ -36,7 +36,18 @@ module fortran_gpt_mod
   use fortran_attn_mod, only: causal_attn, relu2
   implicit none
 
-  ! (kernels resolve via the module use-statements above)
+  ! Inference workspace: allocated once, reused forever (no per-call
+  ! malloc). Serial callers only; dims-checked, reallocated on change.
+  type :: gpt_ws_t
+    real(wp), pointer :: emd(:) => null(), xn(:) => null()
+    real(wp), pointer :: sub_out(:) => null()
+    real(wp), pointer :: q(:) => null(), k(:) => null(), v(:) => null()
+    real(wp), pointer :: qrot(:) => null(), krot(:) => null()
+    real(wp), pointer :: ao(:) => null(), mlpd(:) => null()
+  end type gpt_ws_t
+  type(gpt_ws_t), save :: WS
+  integer, save :: WS_BT = -1, WS_DD = -1, WS_hdd = -1
+  integer, save :: WS_kvd = -1, WS_dff = -1
 contains
 
   subroutine gpt_forward(idx, cos_buf, sin_buf, &
@@ -72,10 +83,10 @@ contains
     ! working buffers: all flat row-major (B,T,...) to match PyTorch layout.
     ! (Declared 1-D on purpose: Fortran N-D arrays are column-major and would
     !  silently transpose the buffers the kernels read as row-major.)
-    real(wp), allocatable :: emd(:), xn(:), sub_out(:)
-    real(wp), allocatable :: q(:), k(:), v(:)
-    real(wp), allocatable :: qrot(:), krot(:)
-    real(wp), allocatable :: attn_out(:), mlpd(:)
+    real(wp), pointer :: emd(:), xn(:), sub_out(:)
+    real(wp), pointer :: q(:), k(:), v(:)
+    real(wp), pointer :: qrot(:), krot(:)
+    real(wp), pointer :: attn_out(:), mlpd(:)
 
     integer :: d_ff, d2, ll, jj
     integer :: qsz, ksz, psz, fcsz, p2sz
@@ -88,17 +99,21 @@ contains
     fcsz = 4*d_model*d_model
     p2sz = d_model*4*d_model
 
-    allocate(emd(BB*TT*d_model))
-    allocate(xn(BB*TT*d_model))
-    allocate(sub_out(BB*TT*d_model))
-
-    allocate(q(BB*TT*n_head*head_dim))
-    allocate(k(BB*TT*n_kv_head*head_dim))
-    allocate(v(BB*TT*n_kv_head*head_dim))
-    allocate(qrot(BB*TT*n_head*head_dim))
-    allocate(krot(BB*TT*n_kv_head*head_dim))
-    allocate(attn_out(BB*TT*d_model))
-    allocate(mlpd(BB*TT*d_ff))
+    if (WS_BT /= BB*TT .or. WS_DD /= d_model .or. WS_hdd /= n_head*head_dim &
+        .or. WS_kvd /= n_kv_head*head_dim .or. WS_dff /= 4*d_model) then
+      WS_BT = BB*TT; WS_DD = d_model; WS_hdd = n_head*head_dim
+      WS_kvd = n_kv_head*head_dim; WS_dff = 4*d_model
+      if (associated(WS%emd)) deallocate(WS%emd, WS%xn, WS%sub_out, &
+          WS%q, WS%k, WS%v, WS%qrot, WS%krot, WS%ao, WS%mlpd)
+      allocate(WS%emd(WS_BT*WS_DD), WS%xn(WS_BT*WS_DD), &
+          WS%sub_out(WS_BT*WS_DD))
+      allocate(WS%q(WS_BT*WS_hdd), WS%k(WS_BT*WS_kvd), WS%v(WS_BT*WS_kvd))
+      allocate(WS%qrot(WS_BT*WS_hdd), WS%krot(WS_BT*WS_kvd))
+      allocate(WS%ao(WS_BT*WS_DD), WS%mlpd(WS_BT*WS_dff))
+    end if
+    emd => WS%emd; xn => WS%xn; sub_out => WS%sub_out
+    q => WS%q; k => WS%k; v => WS%v
+    qrot => WS%qrot; krot => WS%krot; attn_out => WS%ao; mlpd => WS%mlpd
 
     ! ---- 1. token embedding --------------------------------
     call wte_lookup(idx, wte, emd, BB, TT, vocab_size, d_model)
@@ -150,7 +165,7 @@ contains
     ! ---- 5. LM head (nn.Linear n_embd -> vocab) ------------
     call linear3d_sgemm(xn, lm_head, outp, BB, TT, d_model, vocab_size)
 
-    deallocate(emd, xn, sub_out, q, k, v, qrot, krot, attn_out, mlpd)
+
 
   end subroutine gpt_forward
 

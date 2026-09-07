@@ -19,6 +19,19 @@ module fortran_recurrent_mod
   use fortran_rope_mod
   use fortran_attn_mod
   implicit none
+
+  ! Inference workspace: allocated once, reused forever (no per-call
+  ! malloc). Serial callers only; dims-checked, reallocated on change.
+  type :: rec_ws_t
+    real(wp), pointer :: emd(:) => null(), xn(:) => null()
+    real(wp), pointer :: sub_out(:) => null()
+    real(wp), pointer :: q(:) => null(), k(:) => null(), v(:) => null()
+    real(wp), pointer :: qrot(:) => null(), krot(:) => null()
+    real(wp), pointer :: ao(:) => null(), mlpd(:) => null()
+  end type rec_ws_t
+  type(rec_ws_t), save :: RWS
+  integer, save :: RWS_BT = -1, RWS_DD = -1, RWS_hdd = -1
+  integer, save :: RWS_kvd = -1, RWS_dff = -1
 contains
 
   subroutine recurrent_forward(idx, cos_buf, sin_buf, &
@@ -48,26 +61,31 @@ contains
 
     real(wp), intent(out) :: outp(:)
 
-    real(wp), allocatable :: emd(:), xn(:), sub_out(:)
-    real(wp), allocatable :: q(:), k(:), v(:)
-    real(wp), allocatable :: qrot(:), krot(:)
-    real(wp), allocatable :: attn_out(:), mlpd(:)
+    real(wp), pointer :: emd(:), xn(:), sub_out(:)
+    real(wp), pointer :: q(:), k(:), v(:)
+    real(wp), pointer :: qrot(:), krot(:)
+    real(wp), pointer :: attn_out(:), mlpd(:)
 
     integer :: d_ff, lr, jj
 
     d_ff = 4 * d_model
 
-    allocate(emd(BB*TT*d_model))
-    allocate(xn(BB*TT*d_model))
-    allocate(sub_out(BB*TT*d_model))
-
-    allocate(q(BB*TT*n_head*head_dim))
-    allocate(k(BB*TT*n_kv_head*head_dim))
-    allocate(v(BB*TT*n_kv_head*head_dim))
-    allocate(qrot(BB*TT*n_head*head_dim))
-    allocate(krot(BB*TT*n_kv_head*head_dim))
-    allocate(attn_out(BB*TT*d_model))
-    allocate(mlpd(BB*TT*d_ff))
+    if (RWS_BT /= BB*TT .or. RWS_DD /= d_model .or. RWS_hdd /= n_head*head_dim &
+        .or. RWS_kvd /= n_kv_head*head_dim .or. RWS_dff /= 4*d_model) then
+      RWS_BT = BB*TT; RWS_DD = d_model; RWS_hdd = n_head*head_dim
+      RWS_kvd = n_kv_head*head_dim; RWS_dff = 4*d_model
+      if (associated(RWS%emd)) deallocate(RWS%emd, RWS%xn, RWS%sub_out, &
+          RWS%q, RWS%k, RWS%v, RWS%qrot, RWS%krot, RWS%ao, RWS%mlpd)
+      allocate(RWS%emd(RWS_BT*RWS_DD), RWS%xn(RWS_BT*RWS_DD), &
+          RWS%sub_out(RWS_BT*RWS_DD))
+      allocate(RWS%q(RWS_BT*RWS_hdd), RWS%k(RWS_BT*RWS_kvd), &
+          RWS%v(RWS_BT*RWS_kvd))
+      allocate(RWS%qrot(RWS_BT*RWS_hdd), RWS%krot(RWS_BT*RWS_kvd))
+      allocate(RWS%ao(RWS_BT*RWS_DD), RWS%mlpd(RWS_BT*RWS_dff))
+    end if
+    emd => RWS%emd; xn => RWS%xn; sub_out => RWS%sub_out
+    q => RWS%q; k => RWS%k; v => RWS%v
+    qrot => RWS%qrot; krot => RWS%krot; attn_out => RWS%ao; mlpd => RWS%mlpd
 
     ! ---- 1. token embedding --------------------------------
     call wte_lookup(idx, wte, emd, BB, TT, vocab_size, d_model)
@@ -113,7 +131,7 @@ contains
     call rmsnorm0(emd, xn, BB*TT, d_model, eps)
     call linear3d_sgemm(xn, lm_head, outp, BB, TT, d_model, vocab_size)
 
-    deallocate(emd, xn, sub_out, q, k, v, qrot, krot, attn_out, mlpd)
+
 
   end subroutine recurrent_forward
 

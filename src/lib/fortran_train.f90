@@ -60,11 +60,15 @@ module fortran_train_mod
   ! Eliminates ~1GB/step malloc churn. Thread-safe because train_step
   ! runs serially (outer do-loop) and OpenMP only fires inside BLAS.
   type :: temp_t
-    ! forward
-    real(wp), allocatable :: emd(:), xn(:), sub(:)
-    real(wp), allocatable :: qo(:), ko(:), vo(:)
-    real(wp), allocatable :: qrot(:), krot(:), ao(:)
-    real(wp), allocatable :: mlpF(:), lgt(:), nl(:)   ! mlpF = MLP hidden (BT*dff)
+    ! forward: POINTERs (val path aliases them, zero copy). Allocated
+    ! once in init_temp; pointing at a pointer needs no TARGET anywhere.
+    real(wp), pointer :: emd(:) => null(), xn(:) => null()
+    real(wp), pointer :: sub(:) => null()
+    real(wp), pointer :: qo(:) => null(), ko(:) => null(), vo(:) => null()
+    real(wp), pointer :: qrot(:) => null(), krot(:) => null()
+    real(wp), pointer :: ao(:) => null()
+    real(wp), pointer :: mlpF(:) => null(), lgt(:) => null()   ! mlpF: BT*dff
+    real(wp), allocatable :: nl(:)
     ! backward (BT*dff >= BT*DD always since dff=4*DD)
     real(wp), allocatable :: xraw(:), lgt2(:), dlgt(:)
     real(wp), allocatable :: dxn(:), rbuf(:)
@@ -111,17 +115,17 @@ contains
 
   subroutine free_temp(tmp)
     type(temp_t), intent(inout) :: tmp
-    if (allocated(tmp%emd))   deallocate(tmp%emd)
-    if (allocated(tmp%xn))    deallocate(tmp%xn)
-    if (allocated(tmp%sub))   deallocate(tmp%sub)
-    if (allocated(tmp%qo))    deallocate(tmp%qo)
-    if (allocated(tmp%ko))    deallocate(tmp%ko)
-    if (allocated(tmp%vo))    deallocate(tmp%vo)
-    if (allocated(tmp%qrot))  deallocate(tmp%qrot)
-    if (allocated(tmp%krot))  deallocate(tmp%krot)
-    if (allocated(tmp%ao))    deallocate(tmp%ao)
-    if (allocated(tmp%mlpF))  deallocate(tmp%mlpF)
-    if (allocated(tmp%lgt))   deallocate(tmp%lgt)
+    if (associated(tmp%emd))   deallocate(tmp%emd)
+    if (associated(tmp%xn))    deallocate(tmp%xn)
+    if (associated(tmp%sub))   deallocate(tmp%sub)
+    if (associated(tmp%qo))    deallocate(tmp%qo)
+    if (associated(tmp%ko))    deallocate(tmp%ko)
+    if (associated(tmp%vo))    deallocate(tmp%vo)
+    if (associated(tmp%qrot))  deallocate(tmp%qrot)
+    if (associated(tmp%krot))  deallocate(tmp%krot)
+    if (associated(tmp%ao))    deallocate(tmp%ao)
+    if (associated(tmp%mlpF))  deallocate(tmp%mlpF)
+    if (associated(tmp%lgt))   deallocate(tmp%lgt)
     if (allocated(tmp%nl))    deallocate(tmp%nl)
     if (allocated(tmp%xraw))  deallocate(tmp%xraw)
     if (allocated(tmp%lgt2))  deallocate(tmp%lgt2)
