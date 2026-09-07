@@ -82,6 +82,26 @@ program train_run
   if (bytesfile == 'BYTES') &
       bytesfile = trim(wdir) // '/../tok_tables/token_bytes.txt'
 
+  ! Pre-create every checkpoint dir NOW (pools cold -> fork-safe).
+  ! Mid-run mkdir_p then only ever hits dir_exists -> no fork, no bind(C).
+  if (mkdir_p(trim(outdir)) /= 0) then
+    print '(2A)', 'cannot create out dir: ', trim(outdir)
+    call exit(1)
+  end if
+  if (mkdir_p(trim(outdir) // '/best') /= 0) then
+    print '(2A)', 'cannot create best dir: ', trim(outdir)
+    call exit(1)
+  end if
+  do k = 1, nsteps
+    if (mod(k, save_every) == 0 .or. k == nsteps) then
+      write (ckdir, '(A,I0)') trim(outdir) // '/step_', t0 + k - 1
+      if (mkdir_p(trim(ckdir)) /= 0) then
+        print '(2A)', 'cannot create ckpt dir: ', trim(ckdir)
+        call exit(1)
+      end if
+    end if
+  end do
+
   G%B = B; G%T = TT; G%V = VV; G%D = D
   G%nh = N_HEAD; G%nkv = N_KV; G%hd = HD; G%nl = N_LAYER
   G%eps = 1.0e-5_sp

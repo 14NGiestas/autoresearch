@@ -12,6 +12,10 @@ source-dir = "lib"
 [dependencies]
 openmp = "*"
 stdlib = "*"
+# NOTE: mfi (14NGiestas/mfi, branch mfi-fpm) was tried 2026-09-07 and
+# reverted the same day: its BLAS interfaces are LP64 (default integer)
+# but nixpkgs OpenBLAS is ILP64 (USE64BITINT) -> SIGFPE in gemm_driver.
+# See src/lib/fortran_blas.f90 header. Do not re-add without ILP64 BLAS.
 # NOTE: M_CLI2 vendored as src/lib/m_cli2.f90 (CC0-1.0, upstream:
 # github.com/urbanjost/M_CLI2) — fpm 0.10.1 ignores the dep's .F90
 # sources, so a git dependency builds nothing.
