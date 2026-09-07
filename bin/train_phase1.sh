@@ -19,6 +19,10 @@ export LIBRARY_PATH="$OPENBLAS/lib:${LIBRARY_PATH:-}"
 # runtimes to 16 and compare step cadence + R-count vs the 6R baseline.
 export OMP_NUM_THREADS=16
 export OPENBLAS_NUM_THREADS=16
+# FAFO round 2: 16R seen at startup decayed to stable 6R by step 3.
+# Prime suspect now libgomp DYNAMIC team adjustment shrinking teams
+# under load (OMP_NUM_THREADS alone does not disable it).
+export OMP_DYNAMIC=FALSE
 cd /home/pauli/autoresearch/src
 exec flock -n /tmp/w_10k/train.lock \
   fortran-fpm run --profile release --flag "-march=native -ffast-math" \
