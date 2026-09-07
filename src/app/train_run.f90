@@ -23,6 +23,7 @@ program train_run
   use fortran_rmsnorm_mod
   use fortran_rope_mod
   use fortran_attn_mod
+  use fortran_blas_mod, only: linear3d_sgemm
   implicit none
 
   integer, parameter :: sp = c_float
@@ -216,22 +217,23 @@ contains
     emd = xn
     do ll = 0, N_LAYER - 1
       call rmsnorm0(emd, xn, BT, DD, 1.0e-5_sp)
-      call linear3d(xn, M%q(ll*qsz+1:), qo, B, TT, DD, hdd)
-      call linear3d(xn, M%k(ll*ksz+1:), ko, B, TT, DD, N_KV*HD)
-      call linear3d(xn, M%v(ll*ksz+1:), vo, B, TT, DD, N_KV*HD)
+      call linear3d_sgemm(xn, M%q(ll*qsz+1:), qo, B, TT, DD, hdd)
+      call linear3d_sgemm(xn, M%k(ll*ksz+1:), ko, B, TT, DD, N_KV*HD)
+      call linear3d_sgemm(xn, M%v(ll*ksz+1:), vo, B, TT, DD, N_KV*HD)
       call rope_4d(qo, ct, st, qrot, B, TT, N_HEAD, HD)
       call rope_4d(ko, ct, st, krot, B, TT, N_KV, HD)
       call causal_attn(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD)
-      call linear3d(ao, M%p(ll*psz+1:), sub, B, TT, DD, DD)
+      call linear3d_sgemm(ao, M%p(ll*psz+1:), sub, B, TT, DD, DD)
       emd = emd + sub
       call rmsnorm0(emd, xn, BT, DD, 1.0e-5_sp)
-      call linear3d(xn, M%fc(ll*fcsz+1:), mlpd, B, TT, DD, dff)
+      call linear3d_sgemm(xn, M%fc(ll*fcsz+1:), mlpd, B, TT, DD, dff)
       call relu2(mlpd, BT*dff)
-      call linear3d(mlpd, M%p2(ll*p2sz+1:), sub, B, TT, dff, DD)
+      call linear3d_sgemm(mlpd, M%p2(ll*p2sz+1:), sub, B, TT, dff, DD)
       emd = emd + sub
     end do
     call rmsnorm0(emd, xn, BT, DD, 1.0e-5_sp)
-    call linear3d(xn, M%lm, lgt, B, TT, DD, VV)
+    call linear3d_sgemm(xn, M%lm, lgt, B, TT, DD, VV)
+    !$omp parallel do private(tg, j2, mx, sm)
     do it = 1, BT
       tg = targets(it) + 1
       mx = lgt((it-1)*VV+1)

@@ -66,6 +66,7 @@ contains
     real(wp), intent(out) :: out(:)
     integer :: ia, ib, ic
 
+    !$omp parallel do collapse(3) private(ia, ib, ic)
     do ia = 1, BR
       do ib = 1, TC
         do ic = 1, DMX

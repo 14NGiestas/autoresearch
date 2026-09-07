@@ -177,10 +177,9 @@ contains
       do ib = 1, TC
         id = idx((ia-1)*TC + ib)
         do ic = 1, DMX
-          !$omp critical
+          !$omp atomic update
           dwte(id*DMX + ic) = dwte(id*DMX + ic) + &
               dout(((ia-1)*TC + (ib-1))*DMX + ic)
-          !$omp end critical
         end do
       end do
     end do

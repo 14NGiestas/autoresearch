@@ -221,6 +221,7 @@ contains
     call linear3d_sgemm(tmp%xn, M%lm, tmp%lgt, G%B, G%T, DD, G%V)
     ! mean NLL over all positions (no mask in v1; drivers mask outside)
     nll = 0.0_wp
+    !$omp parallel do private(tg, jj, mx, sm) reduction(+:nll)
     do it = 1, BT
       tg = targets(it) + 1
       mx = tmp%lgt((it-1)*G%V+1)
@@ -267,6 +268,7 @@ contains
     call rmsnorm0(C%ef, tmp%xn, BT, DD, G%eps)
     call linear3d_sgemm(tmp%xn, M%lm, tmp%lgt2, G%B, G%T, DD, G%V)
     nll = 0.0_wp
+    !$omp parallel do private(tg, j2, ssum) reduction(+:nll)
     do it = 1, BT
       tg = targets(it) + 1
       tmp%mx(it) = tmp%lgt2((it-1)*G%V+1)
