@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# bin/run_curriculum.sh — 3-phase curriculum trainer.
+# bin/run_curriculum.sh — 4-phase curriculum trainer.
 #
 # Each phase trains on its own data file, resumes from the previous phase's
 # best checkpoint, and stops when val-bpb stops improving.
 #
 # Phases:
-#   1  code-python  code_python.txt      (~15k Alpaca-code rows, 2h)
-#   2  tool-use     tool_trajectories.txt  (curl/fetch/python trajectories, 2h)
-#   3  math-reason  math_reasoning.txt     (step-by-step math, 2h)
+#   1  code-python     code_python.txt         (~15k Alpaca-code rows)
+#   2  tool-use        tool_trajectories.txt   (curl/fetch/python tool trajectories)
+#   3  math-reason     math_reasoning.txt      (step-by-step math reasoning)
+#   4  fortran-tut     fortran_tutorial.txt    (fortran-lang webpage tutorials)
 #
 # After all 3 phases, best/ contains the curriculum-trained model.
 #
@@ -49,6 +50,7 @@ PHASES=(
     "1:code-python:${DATA_DIR}/code_python.txt:CodeAlpaca-20k Python instructions"
     "2:tool-use:${DATA_DIR}/tool_trajectories.txt:curl/fetch/python tool trajectories"
     "3:math-reason:${DATA_DIR}/math_reasoning.txt:Step-by-step math reasoning"
+    "4:fortran-tut:${DATA_DIR}/fortran_tutorial.txt:fortran-lang webpage tutorials"
 )
 
 # ---------------------------------------------------------------------------
@@ -60,17 +62,27 @@ warn() { echo "[$(date +%H:%M:%S)] WARNING: $*" >&2; }
 
 find_binary() {
     local bin
-    bin=$(ls -t "$SRC_DIR/build/gfortran_*/app/train_run" 2>/dev/null | head -1)
-    if [[ -z "$bin" || ! -x "$bin" ]]; then
-        log "Building train_run..."
-        (cd "$SRC_DIR" && $FPM build --target train_run 2>&1 | tail -3)
-        bin=$(ls -t "$SRC_DIR/build/gfortran_*/app/train_run" 2>/dev/null | head -1)
-    fi
-    if [[ -z "$bin" || ! -x "$bin" ]]; then
-        echo "ERROR: train_run binary not found" >&2
-        exit 1
-    fi
-    echo "$bin"
+    # Sort build dirs by mtime, newest first; use array to avoid subshell glob issues
+    mapfile -t dirs < <(ls -td "$SRC_DIR"/build/gfortran_*/ 2>/dev/null)
+    for d in "${dirs[@]}"; do
+        bin="$d/app/train_run"
+        if [[ -x "$bin" ]]; then
+            echo "$bin"
+            return 0
+        fi
+    done
+    log "Building train_run..."
+    (cd "$SRC_DIR" && $FPM build --no-color --target train_run 2>&1 | tail -3)
+    mapfile -t dirs < <(ls -td "$SRC_DIR"/build/gfortran_*/ 2>/dev/null)
+    for d in "${dirs[@]}"; do
+        bin="$d/app/train_run"
+        if [[ -x "$bin" ]]; then
+            echo "$bin"
+            return 0
+        fi
+    done
+    echo "ERROR: train_run binary not found" >&2
+    return 1
 }
 
 # Check that a rows file exists and has enough rows
@@ -117,6 +129,10 @@ run_phase() {
 
     local bin
     bin=$(find_binary)
+    if [[ -z "$bin" || ! -x "$bin" ]]; then
+        warn "train_run binary not found — aborting"
+        return 1
+    fi
 
     local rows_url=""
     case "$name" in
@@ -161,6 +177,7 @@ run_phase() {
         --val_every "$VAL_EVERY"
         --save_every "$SAVE_EVERY"
         --keep_last "$KEEP_LAST"
+        --bytes "$CACHE/tok_tables/token_bytes.txt"
     )
 
     echo "  cmd: ${cmd[*]}"
@@ -171,7 +188,12 @@ run_phase() {
 
     # Run; tee to a phase log
     mkdir -p "$phase_dir"
-    "${cmd[@]}" 2>&1 | tee "$phase_dir/phase_${phase_num}.log"
+    log "Running: ${cmd[*]}"
+    script -q /dev/null -c '${cmd[*]}' 2>&1 | tee "$phase_dir/phase_${phase_num}.log" || {
+        local ec=$?
+        warn "train_run exited with code $ec"
+        return 1
+    }
 
     # Verify best was saved
     if [[ -d "$best_dir" ]]; then

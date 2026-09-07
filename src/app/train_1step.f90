@@ -25,6 +25,7 @@ program train_1step
   type(params_t) :: M, GR
   type(state_t) :: S
   type(cache_t) :: C
+  type(temp_t) :: tmp
   character(len=512) :: wdir, rowsfile, outdir, arg
   integer :: idx(B*TT), targets(B*TT), ngot
   real(sp) :: cos_t(TT*(HD/2)), sin_t(TT*(HD/2))
@@ -59,6 +60,7 @@ program train_1step
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
   call init_state(M, S)
+  call init_temp(G, tmp)
   allocate(GR%wte(size(M%wte)), GR%lm(size(M%lm)))
   allocate(GR%q(size(M%q)), GR%k(size(M%k)), GR%v(size(M%v)))
   allocate(GR%p(size(M%p)), GR%fc(size(M%fc)), GR%p2(size(M%p2)))
@@ -78,8 +80,8 @@ program train_1step
     end do
   end do
 
-  call forward_save(idx, targets, cos_t, sin_t, M, G, C, nll0)
-  call train_step(idx, targets, cos_t, sin_t, M, S, G, GR, C, nll1, tstep, &
+  call forward_save(idx, targets, cos_t, sin_t, M, G, C, tmp, nll0)
+  call train_step(idx, targets, cos_t, sin_t, M, S, G, GR, C, tmp, nll1, tstep, &
       lr, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp)
   print '(A,F10.5,A,F10.5)', "nll before/after: ", nll0, " ", nll1
 

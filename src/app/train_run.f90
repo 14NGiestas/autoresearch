@@ -34,6 +34,7 @@ program train_run
   type(params_t) :: M, GR
   type(state_t) :: S
   type(cache_t) :: C
+  type(temp_t) :: tmp
   character(len=512) :: wdir, rowsfile, outdir, arg, ckdir, bytesfile
   integer :: idx(B*TT), targets(B*TT), ngot
   integer, allocatable :: tbytes(:)
@@ -87,6 +88,7 @@ program train_run
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
   call init_state(M, S)
+  call init_temp(G, tmp)
   allocate(GR%wte(size(M%wte)), GR%lm(size(M%lm)))
   allocate(GR%q(size(M%q)), GR%k(size(M%k)), GR%v(size(M%v)))
   allocate(GR%p(size(M%p)), GR%fc(size(M%fc)), GR%p2(size(M%p2)))
@@ -126,7 +128,7 @@ program train_run
       print '(A)', "rows file too short"
       call exit(1)
     end if
-    call train_step(idx, targets, ct, st, M, S, G, GR, C, nll, tstep, &
+    call train_step(idx, targets, ct, st, M, S, G, GR, C, tmp, nll, tstep, &
         lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp)
     if (mod(k, log_every) == 0 .or. k == nsteps) then
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &

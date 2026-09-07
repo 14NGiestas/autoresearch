@@ -1205,6 +1205,7 @@ contains
     type(params_t) :: M, GR
     type(state_t) :: S
     type(cache_t) :: C
+    type(temp_t) :: tmp
     real(sp), parameter :: H = 3.0e-4_sp
     integer :: idx(2), targets(2)
     real(sp) :: cos(4), sin(4)
@@ -1231,28 +1232,29 @@ contains
     allocate(GR%q(16), GR%k(16), GR%v(16), GR%p(16))
     allocate(GR%fc(64), GR%p2(64))
     call init_state(M, S)
+    call init_temp(G, tmp)
 
-    call forward_save(idx, targets, cos, sin, M, G, C, nll)
+    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll)
     call compute_grads(idx, targets, cos, sin, M, G, C, GR, nll)
     print '(A,F10.5)', "  nll =", nll
     call check(nll == nll .and. nll > 0.0_sp, "nll finite positive")
 
     max_err = 0.0_sp
-    call check_group(M%wte, GR%wte, "wte", max_err, M, G, C, idx, &
+    call check_group(M%wte, GR%wte, "wte", max_err, M, G, C, tmp, idx, &
         targets, cos, sin, H)
-    call check_group(M%lm, GR%lm, "lm", max_err, M, G, C, idx, &
+    call check_group(M%lm, GR%lm, "lm", max_err, M, G, C, tmp, idx, &
         targets, cos, sin, H)
-    call check_group(M%q, GR%q, "q", max_err, M, G, C, idx, &
+    call check_group(M%q, GR%q, "q", max_err, M, G, C, tmp, idx, &
         targets, cos, sin, H)
-    call check_group(M%k, GR%k, "k", max_err, M, G, C, idx, &
+    call check_group(M%k, GR%k, "k", max_err, M, G, C, tmp, idx, &
         targets, cos, sin, H)
-    call check_group(M%v, GR%v, "v", max_err, M, G, C, idx, &
+    call check_group(M%v, GR%v, "v", max_err, M, G, C, tmp, idx, &
         targets, cos, sin, H)
-    call check_group(M%p, GR%p, "proj", max_err, M, G, C, idx, &
+    call check_group(M%p, GR%p, "proj", max_err, M, G, C, tmp, idx, &
         targets, cos, sin, H)
-    call check_group(M%fc, GR%fc, "fc", max_err, M, G, C, idx, &
+    call check_group(M%fc, GR%fc, "fc", max_err, M, G, C, tmp, idx, &
         targets, cos, sin, H)
-    call check_group(M%p2, GR%p2, "p2", max_err, M, G, C, idx, &
+    call check_group(M%p2, GR%p2, "p2", max_err, M, G, C, tmp, idx, &
         targets, cos, sin, H)
     print '(A,E10.3)', "  max err all grads = ", max_err
     call check(max_err < 5.0e-3_sp, "whole-model grads")
@@ -1260,7 +1262,7 @@ contains
     ! overfit: 5 AdamW steps on this one batch must lower NLL
     n0 = nll
     do k = 1, 5
-      call train_step(idx, targets, cos, sin, M, S, G, GR, C, nll, k, &
+      call train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, nll, k, &
           0.02_sp, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp)
     end do
     n5 = nll
@@ -1421,7 +1423,7 @@ contains
     call check(size(cq2) == 4 .and. size(cf2) == 16, "shapes kept")
   end subroutine test_save_load
 
-  subroutine check_group(w, gr, label, max_err, M, G, C, idx, targets, &
+  subroutine check_group(w, gr, label, max_err, M, G, C, tmp, idx, targets, &
       cos, sin, Hh)
     ! group-local max printed separately (cumulative max_err hides origin)
     real(sp) :: glocal
@@ -1432,6 +1434,7 @@ contains
     type(params_t), intent(inout) :: M
     type(dims_t), intent(in) :: G
     type(cache_t), intent(inout) :: C
+    type(temp_t), intent(inout) :: tmp
     integer, intent(in) :: idx(*), targets(*)
     real(sp), intent(in) :: cos(*), sin(*)
     real(sp), intent(in) :: Hh
@@ -1442,9 +1445,9 @@ contains
     do ii = 1, size(w)
       w0 = w(ii)
       w(ii) = w0 + Hh
-      call forward_save(idx, targets, cos, sin, M, G, C, np_)
+      call forward_save(idx, targets, cos, sin, M, G, C, tmp, np_)
       w(ii) = w0 - Hh
-      call forward_save(idx, targets, cos, sin, M, G, C, nm_)
+      call forward_save(idx, targets, cos, sin, M, G, C, tmp, nm_)
       w(ii) = w0
       fdval = (np_ - nm_) / (2.0_sp * Hh)
       e = abs(gr(ii) - fdval)

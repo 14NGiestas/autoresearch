@@ -19,8 +19,8 @@ module fortran_train_mod
   use fortran_attn_mod
   implicit none
   private
-  public :: dims_t, params_t, state_t, cache_t
-  public :: forward_save, compute_grads, train_step, init_state
+  public :: dims_t, params_t, state_t, cache_t, temp_t
+  public :: forward_save, compute_grads, train_step, init_state, init_temp, free_temp
 
   type :: dims_t
     integer :: B, T, V, D, nh, nkv, hd, nl
@@ -51,6 +51,16 @@ module fortran_train_mod
     real(c_float), allocatable :: qr(:), kr(:)
   end type cache_t
 
+  ! Per-call temp buffers, pre-allocated once and reused forever.
+  ! Eliminates ~1GB/step malloc churn. Thread-safe because train_step
+  ! runs serially (outer do-loop) and OpenMP only fires inside BLAS.
+  type :: temp_t
+    real(c_float), allocatable :: emd(:), xn(:), sub(:)
+    real(c_float), allocatable :: qo(:), ko(:), vo(:)
+    real(c_float), allocatable :: qrot(:), krot(:), ao(:)
+    real(c_float), allocatable :: mlpd(:), lgt(:), nl(:)
+  end type temp_t
+
 contains
 
   subroutine alloc_like(dst, src)
@@ -60,19 +70,52 @@ contains
     dst = 0.0_c_float
   end subroutine alloc_like
 
-  subroutine forward_save(idx, targets, cos, sin, M, G, C, nll)
+  ! Allocate temp buffers once based on dims. Idempotent.
+  subroutine init_temp(G, tmp)
+    type(dims_t), intent(in) :: G
+    type(temp_t), intent(out) :: tmp
+    integer :: BT, DD, hdd, dff, kvd
+    BT = G%B * G%T; DD = G%D; hdd = G%nh * G%hd
+    dff = 4 * DD; kvd = G%nkv * G%hd
+    allocate(tmp%emd(BT*DD), tmp%xn(BT*DD), tmp%sub(BT*DD))
+    allocate(tmp%qo(BT*hdd), tmp%ko(BT*kvd), tmp%vo(BT*kvd))
+    allocate(tmp%qrot(BT*hdd), tmp%krot(BT*kvd), tmp%ao(BT*DD))
+    allocate(tmp%mlpd(BT*dff), tmp%lgt(BT*G%V))
+    allocate(tmp%nl(G%B))
+    tmp%emd  = 0.0_c_float; tmp%xn  = 0.0_c_float; tmp%sub = 0.0_c_float
+    tmp%qo   = 0.0_c_float; tmp%ko  = 0.0_c_float; tmp%vo  = 0.0_c_float
+    tmp%qrot = 0.0_c_float; tmp%krot= 0.0_c_float; tmp%ao  = 0.0_c_float
+    tmp%mlpd = 0.0_c_float; tmp%lgt = 0.0_c_float; tmp%nl   = 0.0_c_float
+  end subroutine init_temp
+
+  subroutine free_temp(tmp)
+    type(temp_t), intent(inout) :: tmp
+    if (allocated(tmp%emd))   deallocate(tmp%emd)
+    if (allocated(tmp%xn))    deallocate(tmp%xn)
+    if (allocated(tmp%sub))   deallocate(tmp%sub)
+    if (allocated(tmp%qo))    deallocate(tmp%qo)
+    if (allocated(tmp%ko))    deallocate(tmp%ko)
+    if (allocated(tmp%vo))    deallocate(tmp%vo)
+    if (allocated(tmp%qrot))  deallocate(tmp%qrot)
+    if (allocated(tmp%krot))  deallocate(tmp%krot)
+    if (allocated(tmp%ao))    deallocate(tmp%ao)
+    if (allocated(tmp%mlpd))  deallocate(tmp%mlpd)
+    if (allocated(tmp%lgt))   deallocate(tmp%lgt)
+    if (allocated(tmp%nl))    deallocate(tmp%nl)
+  end subroutine free_temp
+
+  subroutine forward_save(idx, targets, cos, sin, M, G, C, tmp, nll)
     integer(c_int), intent(in) :: idx(*), targets(*)
     real(c_float), intent(in) :: cos(*), sin(*)
     type(params_t), intent(in) :: M
     type(dims_t), intent(in) :: G
     type(cache_t), intent(inout) :: C
+    type(temp_t), intent(inout) :: tmp
     real(c_float), intent(out) :: nll
     integer :: BT, DD, d2, hdd, dff, ll, jj, it
     integer :: qsz, ksz, psz, fcsz, p2sz
-    real(c_float), allocatable :: emd(:), xn(:), sub(:), qo(:), ko(:), vo(:)
-    real(c_float), allocatable :: qrot(:), krot(:), ao(:), mlpd(:), lgt(:)
-    real(c_float), allocatable :: nl(:)
-    real(c_float) :: sc
+    real(c_float) :: sc, mx, sm
+  integer :: tg
 
     BT = G%B * G%T; DD = G%D; d2 = G%hd / 2; hdd = G%nh * G%hd
     dff = 4 * DD
@@ -80,81 +123,73 @@ contains
     fcsz = dff * DD; p2sz = DD * dff
     sc = 1.0_c_float / real(BT)
 
-    allocate(emd(BT*DD), xn(BT*DD), sub(BT*DD))
-    allocate(qo(BT*hdd), ko(BT*G%nkv*G%hd), vo(BT*G%nkv*G%hd))
-    allocate(qrot(BT*hdd), krot(BT*G%nkv*G%hd), ao(BT*DD), mlpd(BT*dff))
-    allocate(lgt(BT*G%V), nl(BT))
-    ! cache persists across calls (FD perturbs weights hundreds of times);
-    ! free the previous one first (all-or-nothing allocation invariant).
-    if (allocated(C%e)) deallocate(C%e, C%xa, C%q, C%k, C%v, C%ao, &
-        C%e1, C%f, C%ef, C%qr, C%kr)
-    allocate(C%e(G%nl*BT*DD), C%xa(G%nl*BT*DD))
-    allocate(C%q(G%nl*BT*hdd), C%k(G%nl*BT*G%nkv*G%hd))
-    allocate(C%v(G%nl*BT*G%nkv*G%hd), C%ao(G%nl*BT*DD))
-    allocate(C%e1(G%nl*BT*DD), C%f(G%nl*BT*dff))
-    allocate(C%ef(BT*DD))
-    allocate(C%qr(G%nl*BT*hdd), C%kr(G%nl*BT*G%nkv*G%hd))
+    ! cache: allocate once on first call, reuse afterward
+    if (.not. allocated(C%e)) then
+      allocate(C%e(G%nl*BT*DD), C%xa(G%nl*BT*DD))
+      allocate(C%q(G%nl*BT*hdd), C%k(G%nl*BT*G%nkv*G%hd))
+      allocate(C%v(G%nl*BT*G%nkv*G%hd), C%ao(G%nl*BT*DD))
+      allocate(C%e1(G%nl*BT*DD), C%f(G%nl*BT*dff))
+      allocate(C%ef(BT*DD))
+      allocate(C%qr(G%nl*BT*hdd), C%kr(G%nl*BT*G%nkv*G%hd))
+    end if
 
-    call wte_lookup(idx, M%wte, emd, G%B, G%T, G%V, DD)
-    call rmsnorm0(emd, xn, BT, DD, G%eps)
+    call wte_lookup(idx, M%wte, tmp%emd, G%B, G%T, G%V, DD)
+    call rmsnorm0(tmp%emd, tmp%xn, BT, DD, G%eps)
+    !$omp parallel do simd
     do jj = 1, BT*DD
-      emd(jj) = xn(jj)
+      tmp%emd(jj) = tmp%xn(jj)
     end do
 
     do ll = 0, G%nl - 1
-      C%e(ll*BT*DD+1:(ll+1)*BT*DD) = emd
-      call rmsnorm0(emd, xn, BT, DD, G%eps)
-      C%xa(ll*BT*DD+1:(ll+1)*BT*DD) = xn
-      call linear3d_sgemm(xn, M%q(ll*qsz+1:), qo, G%B, G%T, DD, hdd)
-      call linear3d_sgemm(xn, M%k(ll*ksz+1:), ko, G%B, G%T, DD, G%nkv*G%hd)
-      call linear3d_sgemm(xn, M%v(ll*ksz+1:), vo, G%B, G%T, DD, G%nkv*G%hd)
-      C%q(ll*BT*hdd+1:(ll+1)*BT*hdd) = qo
-      C%k(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = ko
-      C%v(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = vo
-      call rope_4d(qo, cos, sin, qrot, G%B, G%T, G%nh, G%hd)
-      call rope_4d(ko, cos, sin, krot, G%B, G%T, G%nkv, G%hd)
-      C%qr(ll*BT*hdd+1:(ll+1)*BT*hdd) = qrot
-      C%kr(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = krot
-      call causal_attn(qrot, krot, vo, ao, G%B, G%T, G%nh, G%nkv, G%hd)
-      C%ao(ll*BT*DD+1:(ll+1)*BT*DD) = ao
-      call linear3d_sgemm(ao, M%p(ll*psz+1:), sub, G%B, G%T, DD, DD)
+      C%e(ll*BT*DD+1:(ll+1)*BT*DD) = tmp%emd
+      call rmsnorm0(tmp%emd, tmp%xn, BT, DD, G%eps)
+      C%xa(ll*BT*DD+1:(ll+1)*BT*DD) = tmp%xn
+      call linear3d_sgemm(tmp%xn, M%q(ll*qsz+1:), tmp%qo, G%B, G%T, DD, hdd)
+      call linear3d_sgemm(tmp%xn, M%k(ll*ksz+1:), tmp%ko, G%B, G%T, DD, G%nkv*G%hd)
+      call linear3d_sgemm(tmp%xn, M%v(ll*ksz+1:), tmp%vo, G%B, G%T, DD, G%nkv*G%hd)
+      C%q(ll*BT*hdd+1:(ll+1)*BT*hdd) = tmp%qo
+      C%k(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = tmp%ko
+      C%v(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = tmp%vo
+      call rope_4d(tmp%qo, cos, sin, tmp%qrot, G%B, G%T, G%nh, G%hd)
+      call rope_4d(tmp%ko, cos, sin, tmp%krot, G%B, G%T, G%nkv, G%hd)
+      C%qr(ll*BT*hdd+1:(ll+1)*BT*hdd) = tmp%qrot
+      C%kr(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = tmp%krot
+      call causal_attn(tmp%qrot, tmp%krot, tmp%vo, tmp%ao, G%B, G%T, G%nh, G%nkv, G%hd)
+      C%ao(ll*BT*DD+1:(ll+1)*BT*DD) = tmp%ao
+      call linear3d_sgemm(tmp%ao, M%p(ll*psz+1:), tmp%sub, G%B, G%T, DD, DD)
+      !$omp parallel do simd
       do jj = 1, BT*DD
-        emd(jj) = emd(jj) + sub(jj)
+        tmp%emd(jj) = tmp%emd(jj) + tmp%sub(jj)
       end do
-      C%e1(ll*BT*DD+1:(ll+1)*BT*DD) = emd
-      call rmsnorm0(emd, xn, BT, DD, G%eps)
-      call linear3d_sgemm(xn, M%fc(ll*fcsz+1:), mlpd, G%B, G%T, DD, dff)
-      C%f(ll*BT*dff+1:(ll+1)*BT*dff) = mlpd
-      call relu2(mlpd, BT*dff)
-      call linear3d_sgemm(mlpd, M%p2(ll*p2sz+1:), sub, G%B, G%T, dff, DD)
+      C%e1(ll*BT*DD+1:(ll+1)*BT*DD) = tmp%emd
+      call rmsnorm0(tmp%emd, tmp%xn, BT, DD, G%eps)
+      call linear3d_sgemm(tmp%xn, M%fc(ll*fcsz+1:), tmp%mlpd, G%B, G%T, DD, dff)
+      C%f(ll*BT*dff+1:(ll+1)*BT*dff) = tmp%mlpd
+      call relu2(tmp%mlpd, BT*dff)
+      call linear3d_sgemm(tmp%mlpd, M%p2(ll*p2sz+1:), tmp%sub, G%B, G%T, dff, DD)
+      !$omp parallel do simd
       do jj = 1, BT*DD
-        emd(jj) = emd(jj) + sub(jj)
+        tmp%emd(jj) = tmp%emd(jj) + tmp%sub(jj)
       end do
     end do
 
-    C%ef = emd
-    call rmsnorm0(emd, xn, BT, DD, G%eps)
-    call linear3d_sgemm(xn, M%lm, lgt, G%B, G%T, DD, G%V)
+    C%ef = tmp%emd
+    call rmsnorm0(tmp%emd, tmp%xn, BT, DD, G%eps)
+    call linear3d_sgemm(tmp%xn, M%lm, tmp%lgt, G%B, G%T, DD, G%V)
     ! mean NLL over all positions (no mask in v1; drivers mask outside)
     nll = 0.0_c_float
     do it = 1, BT
-      block
-        integer :: j2, tg
-        real(c_float) :: mx, sm
-        tg = targets(it) + 1
-        mx = lgt((it-1)*G%V+1)
-        do j2 = 2, G%V
-          if (lgt((it-1)*G%V+j2) > mx) mx = lgt((it-1)*G%V+j2)
-        end do
-        sm = 0.0_c_float
-        do j2 = 1, G%V
-          sm = sm + exp(lgt((it-1)*G%V+j2) - mx)
-        end do
-        nl(it) = (mx + log(sm)) - lgt((it-1)*G%V+tg)
-        nll = nll + nl(it) * sc
-      end block
+      tg = targets(it) + 1
+      mx = tmp%lgt((it-1)*G%V+1)
+      do jj = 2, G%V
+        if (tmp%lgt((it-1)*G%V+jj) > mx) mx = tmp%lgt((it-1)*G%V+jj)
+      end do
+      sm = 0.0_c_float
+      do jj = 1, G%V
+        sm = sm + exp(tmp%lgt((it-1)*G%V+jj) - mx)
+      end do
+      nll = nll + ((mx + log(sm)) - tmp%lgt((it-1)*G%V+tg)) * sc
     end do
-    deallocate(emd, xn, sub, qo, ko, vo, qrot, krot, ao, mlpd, lgt, nl)
   end subroutine forward_save
 
   ! Full reverse pass over saved activations.
@@ -290,7 +325,7 @@ contains
   end subroutine apply_group
 
   ! One full training step: forward + backward + AdamW update.
-  subroutine train_step(idx, targets, cos, sin, M, S, G, GR, C, &
+  subroutine train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, &
       nll, tstep, lr, b1, b2, beps, wd)
     integer(c_int), intent(in) :: idx(*), targets(*)
     real(c_float), intent(in) :: cos(*), sin(*)
@@ -299,10 +334,11 @@ contains
     type(dims_t), intent(in) :: G
     type(params_t), intent(inout) :: GR
     type(cache_t), intent(inout) :: C
+    type(temp_t), intent(inout) :: tmp
     real(c_float), intent(out) :: nll
     integer, intent(in) :: tstep
     real(c_float), intent(in) :: lr, b1, b2, beps, wd
-    call forward_save(idx, targets, cos, sin, M, G, C, nll)
+    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll)
     call compute_grads(idx, targets, cos, sin, M, G, C, GR, nll)
     call apply_group(M%wte, GR%wte, S%wte, S%vwte, lr, b1, b2, beps, wd, tstep)
     call apply_group(M%lm, GR%lm, S%lm, S%vlm, lr, b1, b2, beps, wd, tstep)
