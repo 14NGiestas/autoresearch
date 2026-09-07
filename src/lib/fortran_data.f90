@@ -36,7 +36,7 @@ contains
   subroutine load_batch(path, start_row, B, T, idx, targets, ngot)
     character(*), intent(in) :: path
     integer, intent(in) :: start_row, B, T
-    integer, intent(out) :: idx(B*T), targets(B*T)
+    integer, intent(out) :: idx(:), targets(:)
     integer, intent(out) :: ngot
     integer :: u, ios, r, k
     integer, allocatable :: full(:)

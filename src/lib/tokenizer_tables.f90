@@ -149,7 +149,7 @@ contains
 
   ! rank of byte string key(1:klen), or -1 if absent (binary search)
   integer function rank_of(key, klen)
-    integer, intent(in) :: key(*), klen
+    integer, intent(in) :: key(:), klen
     integer :: lo, hi, mid, c
     lo = 0; hi = TOK_N - 1
     rank_of = -1
@@ -168,7 +168,7 @@ contains
   end function rank_of
 
   integer function key_cmp(key, klen, id)
-    integer, intent(in) :: key(*), klen, id
+    integer, intent(in) :: key(:), klen, id
     integer :: tl, k, n
     tl = tok_off(id+1) - tok_off(id)
     n = min(klen, tl)
@@ -193,7 +193,7 @@ contains
 
   ! decode one UTF-8 codepoint at bytes(pos..), 1-based. Invalid -> (b,1).
   subroutine codepoint_at(bytes, n, pos, cp, nb)
-    integer, intent(in) :: bytes(*), n, pos
+    integer, intent(in) :: bytes(:), n, pos
     integer, intent(out) :: cp, nb
     integer :: b0, b1, b2, b3
     b0 = bytes(pos)

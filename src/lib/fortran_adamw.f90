@@ -10,23 +10,23 @@
 
 module fortran_adamw_mod
   use iso_c_binding
+  use fortran_kinds_mod, only: wp
   implicit none
 contains
 
-  subroutine adamw_step(p, g, m, v, N, lr, b1, b2, eps, wd, t) &
-      bind(c, name='adamw_step')
+  subroutine adamw_step(p, g, m, v, N, lr, b1, b2, eps, wd, t)
     integer(c_int), intent(in) :: N, t
-    real(c_float), intent(inout) :: p(N)
-    real(c_float), intent(in)  :: g(N)
-    real(c_float), intent(inout) :: m(N), v(N)
-    real(c_float), value :: lr, b1, b2, eps, wd
+    real(wp), intent(inout) :: p(:)
+    real(wp), intent(in)  :: g(:)
+    real(wp), intent(inout) :: m(:), v(:)
+    real(wp), value :: lr, b1, b2, eps, wd
     integer :: i
-    real(c_float) :: mi, vi, mhat, vhat, bc1, bct1, bc2, bct2
+    real(wp) :: mi, vi, mhat, vhat, bc1, bct1, bc2, bct2
 
-    bc1 = 1.0_c_float - b1
-    bc2 = 1.0_c_float - b2
-    bct1 = 1.0_c_float - b1**t
-    bct2 = 1.0_c_float - b2**t
+    bc1 = 1.0_wp - b1
+    bc2 = 1.0_wp - b2
+    bct1 = 1.0_wp - b1**t
+    bct2 = 1.0_wp - b2**t
 
     !$omp parallel do private(mi, vi, mhat, vhat)
     do i = 1, N

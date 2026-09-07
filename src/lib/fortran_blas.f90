@@ -10,6 +10,7 @@
 
 module fortran_blas_mod
   use iso_c_binding
+  use fortran_kinds_mod, only: wp
   implicit none
 
   ! NOTE: nixpkgs OpenBLAS builds ILP64 (USE64BITINT): all Fortran
@@ -30,11 +31,12 @@ module fortran_blas_mod
 contains
 
   ! y(bt,o) = sum_i x(bt,i) * w(o,i); x:(BT,IF) w:(OF,IF) y:(BT,OF).
-  subroutine linear3d_sgemm(x, w, y, BB, TT, IF, OF) &
-      bind(c, name='linear3d_sgemm')
+  ! NOTE: sgemm_ below stays bind(C)/c_float — that faces OpenBLAS (C).
+  ! Only this Fortran wrapper drops the legacy ctypes export.
+  subroutine linear3d_sgemm(x, w, y, BB, TT, IF, OF)
     integer(c_int), intent(in) :: BB, TT, IF, OF
-    real(c_float), intent(in)  :: x(BB*TT*IF), w(OF*IF)
-    real(c_float), intent(out) :: y(BB*TT*OF)
+    real(wp), intent(in)  :: x(:), w(:)
+    real(wp), intent(out) :: y(:)
     integer(c_int64_t) :: m, n, k, lda, ldb, ldc
     m = int(OF, c_int64_t)
     n = int(BB, c_int64_t) * int(TT, c_int64_t)

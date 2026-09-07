@@ -13,22 +13,23 @@
 !     y2 = x1 * (-sin) + x2 * cos
 !   where  x1 = x[..., :d], x2 = x[..., d:]
 !
-! All arrays are row-major (C order) flat float32 buffers.
+! All arrays are row-major flat real(wp) buffers.
 ! Parallelized with OpenMP.
 
 module fortran_rope_mod
   use iso_c_binding
+  use fortran_kinds_mod, only: wp
   implicit none
 contains
 
-  subroutine rope_4d(x, cos_buf, sin_buf, y, B, T, H, D) bind(c, name='rope_4d')
+  subroutine rope_4d(x, cos_buf, sin_buf, y, B, T, H, D)
     integer(c_int), intent(in) :: B, T, H, D
-    real(c_float), intent(in)  :: x(B*T*H*D)
-    real(c_float), intent(in)  :: cos_buf(T*(D/2))
-    real(c_float), intent(in)  :: sin_buf(T*(D/2))
-    real(c_float), intent(out) :: y(B*T*H*D)
+    real(wp), intent(in)  :: x(:)
+    real(wp), intent(in)  :: cos_buf(:)
+    real(wp), intent(in)  :: sin_buf(:)
+    real(wp), intent(out) :: y(:)
     integer :: aa, bb, cc, dd, d2
-    real(c_float) :: x1, x2, c_, s_
+    real(wp) :: x1, x2, c_, s_
 
     d2 = D / 2
 

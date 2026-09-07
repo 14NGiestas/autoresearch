@@ -6,7 +6,7 @@ module fortran_chat_mod
 contains
 
   subroutine apply_template(inp, n_in, tmpl, sys, out, n_out)
-    integer, intent(in) :: inp(*), n_in
+    integer, intent(in) :: inp(:), n_in
     character(*), intent(in) :: tmpl, sys
     integer, allocatable, intent(out) :: out(:)
     integer, intent(out) :: n_out
@@ -73,7 +73,7 @@ contains
 
   subroutine truncate_at_stop(bytes, n, stops)
     integer, intent(inout) :: n
-    integer, intent(in) :: bytes(*)
+    integer, intent(in) :: bytes(:)
     character(*), intent(in) :: stops
     character(len=:), allocatable :: txt, stop1
     integer :: p, q, cut, best_cut

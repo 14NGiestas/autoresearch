@@ -7,11 +7,12 @@
 
 module sample_mod
   use iso_c_binding
+  use fortran_kinds_mod, only: wp
   implicit none
 contains
 
   ! uniform in [0,1): xorshift64* (Vigna), state updated in place.
-  real(c_float) function rand_u01(state)
+  real(wp) function rand_u01(state)
     integer(c_int64_t), intent(inout) :: state
     integer(c_int64_t) :: x
     if (state == 0) state = 2685821657736338717_c_int64_t
@@ -22,8 +23,8 @@ contains
     state = x
     x = x * 2685821657736338717_c_int64_t
     ! top 24 bits -> [0,1)
-    rand_u01 = real(iand(ishft(x, -40), 16777215_c_int64_t), c_float) &
-        / 16777216.0_c_float
+    rand_u01 = real(iand(ishft(x, -40), 16777215_c_int64_t), wp) &
+        / 16777216.0_wp
   end function rand_u01
 
   ! Presence + frequency penalties (in-place on caller-owned copy):
@@ -31,9 +32,9 @@ contains
   ! Breaks the rich-get-richer loop feedback directly.
   subroutine apply_penalties(logits, V, gen, ngen, pres, freq)
     integer, intent(in) :: V, ngen
-    real(c_float), intent(inout) :: logits(V)
-    integer, intent(in) :: gen(ngen)
-    real(c_float), intent(in) :: pres, freq
+    real(wp), intent(inout) :: logits(:)
+    integer, intent(in) :: gen(:)
+    real(wp), intent(in) :: pres, freq
     logical, allocatable :: seen(:)
     integer :: i, j, cnt
     allocate(seen(0:V-1))
@@ -46,7 +47,7 @@ contains
       do j = 1, ngen
         if (gen(j) == gen(i)) cnt = cnt + 1
       end do
-      logits(gen(i)+1) = logits(gen(i)+1) - pres - freq * real(cnt, c_float)
+      logits(gen(i)+1) = logits(gen(i)+1) - pres - freq * real(cnt, wp)
     end do
     deallocate(seen)
   end subroutine apply_penalties
@@ -56,12 +57,12 @@ contains
   ! Distinct from additive pres/freq; ~15 lines, multiplicative.
   subroutine apply_rep_penalty(logits, V, gen, ngen, theta)
     integer, intent(in) :: V, ngen
-    real(c_float), intent(inout) :: logits(V)
-    integer, intent(in) :: gen(ngen)
-    real(c_float), intent(in) :: theta
+    real(wp), intent(inout) :: logits(:)
+    integer, intent(in) :: gen(:)
+    real(wp), intent(in) :: theta
     logical, allocatable :: seen(:)
     integer :: i
-    if (theta <= 1.0_c_float .or. ngen == 0) return
+    if (theta <= 1.0_wp .or. ngen == 0) return
     allocate(seen(0:V-1))
     seen = .false.
     do i = 1, ngen
@@ -79,14 +80,14 @@ contains
   !   max(0, 1 - ngen/W)). Explains why full-history needs retuning.
   subroutine apply_windowed_penalties(logits, V, gen, ngen, pres, freq, win, plen)
     integer, intent(in) :: V, ngen, win
-    real(c_float), intent(inout) :: logits(V)
-    integer, intent(in) :: gen(ngen)
-    real(c_float), intent(in) :: pres, freq, plen
+    real(wp), intent(inout) :: logits(:)
+    integer, intent(in) :: gen(:)
+    real(wp), intent(in) :: pres, freq, plen
     integer :: i, j, cnt, start
     logical, allocatable :: seen(:)
     if (win <= 0 .or. ngen == 0) return
     start = max(1, ngen - win + 1)
-    if (pres /= 0.0_c_float .or. freq /= 0.0_c_float) then
+    if (pres /= 0.0_wp .or. freq /= 0.0_wp) then
       allocate(seen(0:V-1))
       seen = .false.
       do i = start, ngen
@@ -97,13 +98,13 @@ contains
         do j = start, ngen
           if (gen(j) == gen(i)) cnt = cnt + 1
         end do
-        logits(gen(i)+1) = logits(gen(i)+1) - pres - freq * real(cnt, c_float)
+        logits(gen(i)+1) = logits(gen(i)+1) - pres - freq * real(cnt, wp)
       end do
       deallocate(seen)
     end if
     ! length penalty: if ngen < win, discourage EOS (assume EOS=0) from ending too short
-    if (plen /= 0.0_c_float .and. ngen < win) then
-      logits(1) = logits(1) - plen * real(win - ngen, c_float) / real(win, c_float)
+    if (plen /= 0.0_wp .and. ngen < win) then
+      logits(1) = logits(1) - plen * real(win - ngen, wp) / real(win, wp)
     end if
   end subroutine apply_windowed_penalties
 
@@ -112,8 +113,8 @@ contains
   ! s <= ngen-nn+1 (strictly inside history; never self-compare).
   subroutine block_ngram(logits, V, gen, ngen, nn)
     integer, intent(in) :: V, ngen, nn
-    real(c_float), intent(inout) :: logits(V)
-    integer, intent(in) :: gen(ngen)
+    real(wp), intent(inout) :: logits(:)
+    integer, intent(in) :: gen(:)
     integer :: t, s, k
     logical :: match
     if (nn < 2 .or. ngen < nn) return
@@ -127,7 +128,7 @@ contains
           end if
         end do
         if (match .and. gen(s+nn-1) == t) then
-          logits(t+1) = -huge(1.0_c_float)
+          logits(t+1) = -huge(1.0_wp)
           exit
         end if
       end do
@@ -139,19 +140,19 @@ contains
   integer function sample_next(logits, V, temp, topp, pres, freq, rep, pwin, plen, &
       gen, ngen, nblock, state)
     integer, intent(in) :: V, ngen, nblock, pwin
-    real(c_float), intent(in) :: logits(V), temp, topp, pres, freq, rep, plen
-    integer, intent(in) :: gen(ngen)
+    real(wp), intent(in) :: logits(:), temp, topp, pres, freq, rep, plen
+    integer, intent(in) :: gen(:)
     integer(c_int64_t), intent(inout) :: state
-    real(c_float), allocatable :: work(:)
+    real(wp), allocatable :: work(:)
     allocate(work(V))
     work = logits
     if (pwin > 0) then
       call apply_windowed_penalties(work, V, gen, ngen, pres, freq, pwin, plen)
     else
-      if (pres /= 0.0_c_float .or. freq /= 0.0_c_float) &
+      if (pres /= 0.0_wp .or. freq /= 0.0_wp) &
           call apply_penalties(work, V, gen, ngen, pres, freq)
     end if
-    if (rep > 1.0_c_float) call apply_rep_penalty(work, V, gen, ngen, rep)
+    if (rep > 1.0_wp) call apply_rep_penalty(work, V, gen, ngen, rep)
     if (nblock >= 2) call block_ngram(work, V, gen, ngen, nblock)
     sample_next = sample_top_p(work, V, temp, topp, state)
     deallocate(work)
@@ -160,27 +161,27 @@ contains
   ! Temperature + nucleus sampling. topp>=1: full distribution.
   integer function sample_top_p(logits, V, temp, topp, state)
     integer, intent(in) :: V
-    real(c_float), intent(in) :: logits(V), temp, topp
+    real(wp), intent(in) :: logits(:), temp, topp
     integer(c_int64_t), intent(inout) :: state
-    real(c_float), allocatable :: sc(:), pr(:)
+    real(wp), allocatable :: sc(:), pr(:)
     integer, allocatable :: ox(:)
     integer :: i, k, cut
-    real(c_float) :: m, s, u, acc, t
+    real(wp) :: m, s, u, acc, t
     t = temp
-    if (t <= 0.0_c_float) then
+    if (t <= 0.0_wp) then
       sample_top_p = 1
       do i = 2, V
         if (logits(i) > logits(sample_top_p)) sample_top_p = i
       end do
       return
     end if
-    if (t < 1.0e-6_c_float) t = 1.0e-6_c_float
+    if (t < 1.0e-6_wp) t = 1.0e-6_wp
     allocate(sc(V), pr(V), ox(V))
     m = logits(1)
     do i = 2, V
       if (logits(i) > m) m = logits(i)
     end do
-    s = 0.0_c_float
+    s = 0.0_wp
     do i = 1, V
       sc(i) = exp((logits(i) - m) / t)
       s = s + sc(i)
@@ -190,10 +191,10 @@ contains
       pr(i) = sc(i) / s
     end do
     call sort_desc(pr, ox, V)
-    if (topp >= 1.0_c_float) then
+    if (topp >= 1.0_wp) then
       cut = V
     else
-      acc = 0.0_c_float
+      acc = 0.0_wp
       cut = 1
       do k = 1, V
         acc = acc + pr(k)
@@ -202,7 +203,7 @@ contains
       end do
     end if
     u = rand_u01(state) * sum(pr(1:cut))
-    acc = 0.0_c_float
+    acc = 0.0_wp
     do k = 1, cut
       acc = acc + pr(k)
       if (acc >= u) then
@@ -217,11 +218,11 @@ contains
 
   ! Quicksort (Lomuto, middle pivot) sorting pr desc, ox alongside.
   recursive subroutine sort_desc(pr, ox, n)
-    real(c_float), intent(inout) :: pr(*)
-    integer, intent(inout) :: ox(*)
+    real(wp), intent(inout) :: pr(:)
+    integer, intent(inout) :: ox(:)
     integer, intent(in) :: n
     integer :: i, j, ti, mid
-    real(c_float) :: pv, tp
+    real(wp) :: pv, tp
     if (n < 2) return
     mid = (n + 1) / 2
     tp = pr(mid); pr(mid) = pr(n); pr(n) = tp
@@ -238,17 +239,17 @@ contains
     tp = pr(i+1); pr(i+1) = pr(n); pr(n) = tp
     ti = ox(i+1); ox(i+1) = ox(n); ox(n) = ti
     call sort_desc(pr, ox, i)
-    if (n - i - 1 > 0) call sort_desc(pr(i+2), ox(i+2), n - i - 1)
+    if (n - i - 1 > 0) call sort_desc(pr(i+2:), ox(i+2:), n - i - 1)
   end subroutine sort_desc
 
   ! 1-based position of sampled token in logits(1:V).
   integer function sample_token(logits, V, temp, state)
     integer, intent(in) :: V
-    real(c_float), intent(in) :: logits(V), temp
+    real(wp), intent(in) :: logits(:), temp
     integer(c_int64_t), intent(inout) :: state
     integer :: i
-    real(c_float) :: m, s, u, acc
-    real(c_float) :: t
+    real(wp) :: m, s, u, acc
+    real(wp) :: t
 
     t = temp
     if (t <= 0.0_c_float) then
@@ -259,13 +260,13 @@ contains
       end do
       return
     end if
-    if (t < 1.0e-6_c_float) t = 1.0e-6_c_float
+    if (t < 1.0e-6_wp) t = 1.0e-6_wp
 
     m = logits(1)
     do i = 2, V
       if (logits(i) > m) m = logits(i)
     end do
-    s = 0.0_c_float
+    s = 0.0_wp
     do i = 1, V
       s = s + exp((logits(i) - m) / t)
     end do

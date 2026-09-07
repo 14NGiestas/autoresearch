@@ -14,6 +14,7 @@
 
 module fortran_kv_mod
   use iso_c_binding
+  use fortran_kinds_mod, only: wp
   use fortran_blas_mod
   use fortran_linear_mod
   use fortran_rmsnorm_mod
@@ -29,34 +30,34 @@ contains
        out1, &
        BB, vocab_size, d_model, &
        n_head, n_kv_head, head_dim, &
-       n_layer, eps) bind(c, name='gpt_step')
+       n_layer, eps)
 
     integer(c_int), intent(in) :: BB, vocab_size, d_model
     integer(c_int), intent(in) :: n_head, n_kv_head, head_dim, n_layer
     integer(c_int), intent(in) :: maxT
     integer(c_int), intent(inout) :: cache_len
-    real(c_float), value :: eps
+    real(wp), value :: eps
 
-    integer(c_int), intent(in) :: idx1(BB)
-    real(c_float), intent(in) :: cos1(head_dim/2), sin1(head_dim/2)
+    integer(c_int), intent(in) :: idx1(:)
+    real(wp), intent(in) :: cos1(:), sin1(:)
 
-    real(c_float), intent(in) :: wte(vocab_size*d_model)
-    real(c_float), intent(in) :: c_q(n_layer*n_head*head_dim*d_model)
-    real(c_float), intent(in) :: c_k(n_layer*n_kv_head*head_dim*d_model)
-    real(c_float), intent(in) :: c_v(n_layer*n_kv_head*head_dim*d_model)
-    real(c_float), intent(in) :: c_proj(n_layer*d_model*n_head*head_dim)
-    real(c_float), intent(in) :: c_fc(n_layer*4*d_model*d_model)
-    real(c_float), intent(in) :: c_proj2(n_layer*d_model*4*d_model)
-    real(c_float), intent(in) :: lm_head(vocab_size*d_model)
+    real(wp), intent(in) :: wte(:)
+    real(wp), intent(in) :: c_q(:)
+    real(wp), intent(in) :: c_k(:)
+    real(wp), intent(in) :: c_v(:)
+    real(wp), intent(in) :: c_proj(:)
+    real(wp), intent(in) :: c_fc(:)
+    real(wp), intent(in) :: c_proj2(:)
+    real(wp), intent(in) :: lm_head(:)
 
-    real(c_float), intent(inout) :: cache_k(n_layer*maxT*n_kv_head*head_dim)
-    real(c_float), intent(inout) :: cache_v(n_layer*maxT*n_kv_head*head_dim)
-    real(c_float), intent(out) :: out1(BB*vocab_size)
+    real(wp), intent(inout) :: cache_k(:)
+    real(wp), intent(inout) :: cache_v(:)
+    real(wp), intent(out) :: out1(:)
 
-    real(c_float), allocatable :: emd(:), xn(:), sub_out(:)
-    real(c_float), allocatable :: q(:), k1(:), v1(:)
-    real(c_float), allocatable :: qrot(:), krot(:)
-    real(c_float), allocatable :: attn_out(:), mlpd(:)
+    real(wp), allocatable :: emd(:), xn(:), sub_out(:)
+    real(wp), allocatable :: q(:), k1(:), v1(:)
+    real(wp), allocatable :: qrot(:), krot(:)
+    real(wp), allocatable :: attn_out(:), mlpd(:)
 
     integer :: d_ff, d2, ll, jj, tc, lk
     integer :: qsz, ksz, psz, fcsz, p2sz, dkh
@@ -149,8 +150,8 @@ contains
 
   ! flat copy used for cache appends (keeps the call sites readable)
   subroutine cache_copy(src, dst, n)
-    real(c_float), intent(in) :: src(n)
-    real(c_float), intent(out) :: dst(n)
+    real(wp), intent(in) :: src(:)
+    real(wp), intent(out) :: dst(:)
     integer, intent(in) :: n
     integer :: i
     do i = 1, n

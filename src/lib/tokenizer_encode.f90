@@ -16,8 +16,8 @@ contains
 
   ! Split bytes(1:n) into pieces; returns starts/lens (byte units) + count.
   subroutine pretokenize(bytes, n, pstart, plen, npieces)
-    integer, intent(in) :: bytes(*), n
-    integer, intent(out) :: pstart(*), plen(*), npieces
+    integer, intent(in) :: bytes(:), n
+    integer, intent(out) :: pstart(:), plen(:), npieces
     integer :: pos, epos
     npieces = 0
     pos = 1
@@ -31,7 +31,7 @@ contains
   end subroutine pretokenize
 
   subroutine next_piece(bytes, n, pos, epos)
-    integer, intent(in) :: bytes(*), n, pos
+    integer, intent(in) :: bytes(:), n, pos
     integer, intent(out) :: epos
     integer :: cp, nb, cur
     call codepoint_at(bytes, n, pos, cp, nb)
@@ -87,7 +87,7 @@ contains
   end subroutine next_piece
 
   logical function match_contraction(bytes, n, pos, epos)
-    integer, intent(in) :: bytes(*), n, pos
+    integer, intent(in) :: bytes(:), n, pos
     integer, intent(out) :: epos
     integer :: c1, c2
     match_contraction = .false.
@@ -118,7 +118,7 @@ contains
   end function fold
 
   logical function match_letters(bytes, n, pos, epos)
-    integer, intent(in) :: bytes(*), n, pos
+    integer, intent(in) :: bytes(:), n, pos
     integer, intent(out) :: epos
     integer :: cp, nb, cur
     match_letters = .false.
@@ -144,7 +144,7 @@ contains
   end function match_letters
 
   logical function match_punct(bytes, n, pos, epos)
-    integer, intent(in) :: bytes(*), n, pos
+    integer, intent(in) :: bytes(:), n, pos
     integer, intent(out) :: epos
     integer :: cp, nb, cur, npunct
     match_punct = .false.
@@ -167,7 +167,7 @@ contains
   end function match_punct
 
   logical function match_nl(bytes, n, pos, epos)
-    integer, intent(in) :: bytes(*), n, pos
+    integer, intent(in) :: bytes(:), n, pos
     integer, intent(out) :: epos
     integer :: cp, nb, cur, lastnl
     match_nl = .false.
@@ -186,8 +186,8 @@ contains
 
   ! BPE merge loop over piece bytes(s:s+plen-1); appends ranks to out().
   subroutine bpe_piece(bytes, s, plen, out, nout)
-    integer, intent(in) :: bytes(*), s, plen
-    integer, intent(inout) :: out(*)
+    integer, intent(in) :: bytes(:), s, plen
+    integer, intent(inout) :: out(:)
     integer, intent(inout) :: nout
     integer :: starts(1024), lens(1024), nparts, i, r, best, best_rank
     integer :: key(256), klen, k
@@ -245,7 +245,7 @@ contains
 
   ! Full encode: bytes -> 0-based ids (exact-size allocatable).
   subroutine encode(bytes, n, ids)
-    integer, intent(in) :: bytes(*), n
+    integer, intent(in) :: bytes(:), n
     integer, allocatable, intent(out) :: ids(:)
     integer, allocatable :: pstart(:), plen(:), tmp(:)
     integer :: npieces, i, nout
@@ -261,7 +261,7 @@ contains
 
   ! Decode: 0-based ids -> bytes (specials emitted as literal names).
   subroutine decode(ids, nids, bytes, nbytes)
-    integer, intent(in) :: ids(*), nids
+    integer, intent(in) :: ids(:), nids
     integer, allocatable, intent(out) :: bytes(:)
     integer, intent(out) :: nbytes
     integer :: i, tl, k, pos

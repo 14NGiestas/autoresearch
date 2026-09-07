@@ -4,25 +4,14 @@
 ! OMP_NUM_THREADS for the naive path, OPENBLAS_NUM_THREADS for sgemm.
 program bench_gemm
   use iso_c_binding
+  use fortran_linear_mod, only: linear3d
+  use fortran_blas_mod, only: linear3d_sgemm
   implicit none
   integer, parameter :: sp = c_float
   integer, parameter :: BT = 2048, IF = 768, OF = 768, REPS = 3
   real(sp), allocatable :: x(:), w(:), y(:)
   integer :: i, r, t0, t1, rate
   real(sp) :: gflops, t_naive, t_blas
-  interface
-    subroutine linear3d(x, w, y, B, T, IF, OF) bind(c, name='linear3d')
-      integer, intent(in) :: B, T, IF, OF
-      real, intent(in) :: x(*), w(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine linear3d_sgemm(x, w, y, B, T, IF, OF) &
-        bind(c, name='linear3d_sgemm')
-      integer, intent(in) :: B, T, IF, OF
-      real, intent(in) :: x(*), w(*)
-      real, intent(out) :: y(*)
-    end subroutine
-  end interface
 
   allocate(x(BT*IF), w(OF*IF), y(BT*OF))
   do i = 1, BT*IF

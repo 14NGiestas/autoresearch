@@ -28,158 +28,23 @@ program test_kernels
   use fortran_train_mod
   use fortran_data_mod, only: load_batch, count_rows
   use fortran_sys_mod, only: mkdir_p, dir_exists
+  use fortran_linear_mod, only: linear3d, linear3dT, wte_lookup
+  use fortran_rmsnorm_mod, only: rmsnorm, rmsnorm0
+  use fortran_rope_mod, only: rope_4d
+  use fortran_attn_mod, only: causal_attn, relu2, relu2_bwd, attn_bwd
+  use fortran_backward_mod, only: linear3d_bwd, rmsnorm0_bwd, rope_4d_bwd, &
+      xent_fwd, xent_bwd, wte_bwd
+  use fortran_adamw_mod, only: adamw_step
+  use fortran_blas_mod, only: linear3d_sgemm
+  use fortran_gpt_mod, only: gpt_forward
+  use fortran_kv_mod, only: gpt_step
+  use fortran_recurrent_mod, only: recurrent_forward
   implicit none
 
   integer, parameter :: sp = c_float
   integer :: seed = 42
   integer :: fail_count = 0
 
-  ! C-mangled interfaces — must be before CONTAINS in Fortran
-  interface
-    subroutine wte_lookup(idx, wte, out, B, T, V, D) bind(c, name='wte_lookup')
-      integer, intent(in) :: idx(*), B, T, V, D
-      real, intent(in) :: wte(*)
-      real, intent(out) :: out(*)
-    end subroutine
-    subroutine rmsnorm0(x, y, N, C, eps) bind(c, name='rmsnorm0')
-      integer, intent(in) :: N, C
-      real, intent(in) :: x(*)
-      real, intent(out) :: y(*)
-      real, value :: eps
-    end subroutine
-    subroutine linear3d(x, w, y, B, T, IF, OF) bind(c, name='linear3d')
-      integer, intent(in) :: B, T, IF, OF
-      real, intent(in) :: x(*), w(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine linear3dT(x, w, y, B, T, IF, OF) bind(c, name='linear3dT')
-      integer, intent(in) :: B, T, IF, OF
-      real, intent(in) :: x(*), w(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine rope_4d(x, cos, sin, y, B, T, H, D) bind(c, name='rope_4d')
-      integer, intent(in) :: B, T, H, D
-      real, intent(in) :: x(*), cos(*), sin(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine causal_attn(q, k, v, y, B, T, H, K_H, D) bind(c, name='causal_attn')
-      integer, intent(in) :: B, T, H, K_H, D
-      real, intent(in) :: q(*), k(*), v(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine relu2(x, N) bind(c, name='relu2')
-      integer, intent(in) :: N
-      real, intent(inout) :: x(*)
-    end subroutine
-    subroutine gpt_forward(idx, cos, sin, &
-        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
-        outp, B, T, V, D, n_head, n_kv_head, head_dim, n_layer, eps) &
-        bind(c, name='gpt_forward')
-      integer, intent(in) :: idx(*), B, T, V, D
-      integer, intent(in) :: n_head, n_kv_head, head_dim, n_layer
-      real, intent(in) :: cos(*), sin(*), wte(*)
-      real, intent(in) :: c_q(*), c_k(*), c_v(*), c_proj(*)
-      real, intent(in) :: c_fc(*), c_proj2(*), lm_head(*)
-      real, intent(out) :: outp(*)
-      real, value :: eps
-    end subroutine
-    subroutine gpt_step(idx1, cos1, sin1, &
-        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
-        cache_k, cache_v, cache_len, maxT, out1, &
-        B, V, D, n_head, n_kv_head, head_dim, n_layer, eps) &
-        bind(c, name='gpt_step')
-      integer, intent(in) :: idx1(*), B, V, D, maxT
-      integer, intent(inout) :: cache_len
-      integer, intent(in) :: n_head, n_kv_head, head_dim, n_layer
-      real, intent(in) :: cos1(*), sin1(*), wte(*)
-      real, intent(in) :: c_q(*), c_k(*), c_v(*), c_proj(*)
-      real, intent(in) :: c_fc(*), c_proj2(*), lm_head(*)
-      real, intent(inout) :: cache_k(*), cache_v(*)
-      real, intent(out) :: out1(*)
-      real, value :: eps
-    end subroutine
-    subroutine linear3d_bwd(dy, x, w, dx, dw, B, T, IF, OF) &
-        bind(c, name='linear3d_bwd')
-      integer, intent(in) :: B, T, IF, OF
-      real, intent(in) :: dy(*), x(*), w(*)
-      real, intent(out) :: dx(*), dw(*)
-    end subroutine
-    subroutine rmsnorm0_bwd(dy, x, dx, N, C, eps) bind(c, name='rmsnorm0_bwd')
-      integer, intent(in) :: N, C
-      real, intent(in) :: dy(*), x(*)
-      real, intent(out) :: dx(*)
-      real, value :: eps
-    end subroutine
-    subroutine rope_4d_bwd(dy, cos, sin, dx, B, T, H, D) \
-        bind(c, name='rope_4d_bwd')
-      integer, intent(in) :: B, T, H, D
-      real, intent(in) :: dy(*), cos(*), sin(*)
-      real, intent(out) :: dx(*)
-    end subroutine
-    subroutine xent_fwd(logits, targets, nll, B, T, V) \
-        bind(c, name='xent_fwd')
-      integer, intent(in) :: B, T, V
-      real, intent(in) :: logits(*)
-      integer, intent(in) :: targets(*)
-      real, intent(out) :: nll(*)
-    end subroutine
-    subroutine xent_bwd(logits, targets, dlogits, B, T, V, scale) \
-        bind(c, name='xent_bwd')
-      integer, intent(in) :: B, T, V
-      real, intent(in) :: logits(*)
-      integer, intent(in) :: targets(*)
-      real, intent(out) :: dlogits(*)
-      real, value :: scale
-    end subroutine
-    subroutine wte_bwd(idx, dout, dwte, B, T, V, D) bind(c, name='wte_bwd')
-      integer, intent(in) :: idx(*), B, T, V, D
-      real, intent(in) :: dout(*)
-      real, intent(inout) :: dwte(*)
-    end subroutine
-    subroutine attn_bwd(dy, q, k, v, dq, dk, dv, B, T, H, K_H, D) \
-        bind(c, name='attn_bwd')
-      integer, intent(in) :: B, T, H, K_H, D
-      real, intent(in) :: dy(*), q(*), k(*), v(*)
-      real, intent(out) :: dq(*)
-      real, intent(inout) :: dk(*), dv(*)
-    end subroutine
-    subroutine relu2_bwd(dy, x, dx, N) bind(c, name='relu2_bwd')
-      integer, intent(in) :: N
-      real, intent(in) :: dy(*), x(*)
-      real, intent(out) :: dx(*)
-    end subroutine
-    subroutine adamw_step(p, g, m, v, N, lr, b1, b2, eps, wd, t) \
-        bind(c, name='adamw_step')
-      integer, intent(in) :: N, t
-      real, intent(inout) :: p(*), m(*), v(*)
-      real, intent(in) :: g(*)
-      real, value :: lr, b1, b2, eps, wd
-    end subroutine
-    subroutine linear3d_sgemm(x, w, y, B, T, IF, OF) \
-        bind(c, name='linear3d_sgemm')
-      integer, intent(in) :: B, T, IF, OF
-      real, intent(in) :: x(*), w(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine rmsnorm(x, w, y, N, C, eps) bind(c, name='rmsnorm')
-      integer, intent(in) :: N, C
-      real, intent(in) :: x(*), w(*)
-      real, intent(out) :: y(*)
-      real, value :: eps
-    end subroutine
-    subroutine recurrent_forward(idx, cos, sin, &
-        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
-        outp, B, T, V, D, n_head, n_kv_head, head_dim, n_loops, eps) &
-        bind(c, name='recurrent_forward')
-      integer, intent(in) :: idx(*), B, T, V, D
-      integer, intent(in) :: n_head, n_kv_head, head_dim, n_loops
-      real, intent(in) :: cos(*), sin(*), wte(*)
-      real, intent(in) :: c_q(*), c_k(*), c_v(*), c_proj(*)
-      real, intent(in) :: c_fc(*), c_proj2(*), lm_head(*)
-      real, intent(out) :: outp(*)
-      real, value :: eps
-    end subroutine
-  end interface
 
   call test_rmsnorm()
   call test_rmsnorm0()
@@ -1235,7 +1100,7 @@ contains
     call init_temp(G, tmp)
 
     call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll)
-    call compute_grads(idx, targets, cos, sin, M, G, C, GR, nll)
+    call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll)
     print '(A,F10.5)', "  nll =", nll
     call check(nll == nll .and. nll > 0.0_sp, "nll finite positive")
 
@@ -1292,7 +1157,7 @@ contains
       e = abs(y1(i) - y2(i))
       if (e > max_err) max_err = e
     end do
-    print '(A,E10.3,A,E10.3)', "  max err = ", max_err, \
+    print '(A,E10.3,A,E10.3)', "  max err = ", max_err, &
         "  ref scale = ", maxval(abs(y1))
     call check(max_err < 1.0e-4_sp, "sgemm parity")
   end subroutine test_linear_blas
@@ -1435,8 +1300,8 @@ contains
     type(dims_t), intent(in) :: G
     type(cache_t), intent(inout) :: C
     type(temp_t), intent(inout) :: tmp
-    integer, intent(in) :: idx(*), targets(*)
-    real(sp), intent(in) :: cos(*), sin(*)
+    integer, intent(in) :: idx(:), targets(:)
+    real(sp), intent(in) :: cos(:), sin(:)
     real(sp), intent(in) :: Hh
     real(sp) :: w0, np_, nm_, e, fdval, fd_worst, an_worst
     integer :: ii, iworst

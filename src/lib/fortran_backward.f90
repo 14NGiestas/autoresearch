@@ -13,21 +13,21 @@
 
 module fortran_backward_mod
   use iso_c_binding
+  use fortran_kinds_mod, only: wp
   implicit none
 contains
 
-  subroutine linear3d_bwd(dy, x, w, dx, dw, BB, TT, IF, OF) &
-      bind(c, name='linear3d_bwd')
+  subroutine linear3d_bwd(dy, x, w, dx, dw, BB, TT, IF, OF)
     integer(c_int), intent(in) :: BB, TT, IF, OF
-    real(c_float), intent(in)  :: dy(BB*TT*OF), x(BB*TT*IF), w(OF*IF)
-    real(c_float), intent(out) :: dx(BB*TT*IF), dw(OF*IF)
+    real(wp), intent(in)  :: dy(:), x(:), w(:)
+    real(wp), intent(out) :: dx(:), dw(:)
     integer :: bt, oo, ii
-    real(c_float) :: acc
+    real(wp) :: acc
 
     !$omp parallel do collapse(2) private(acc, ii)
     do bt = 1, BB*TT
       do ii = 1, IF
-        acc = 0.0_c_float
+        acc = 0.0_wp
         do oo = 1, OF
           acc = acc + dy((bt-1)*OF + oo) * w((oo-1)*IF + ii)
         end do
@@ -39,7 +39,7 @@ contains
     !$omp parallel do collapse(2) private(acc, bt)
     do oo = 1, OF
       do ii = 1, IF
-        acc = 0.0_c_float
+        acc = 0.0_wp
         do bt = 1, BB*TT
           acc = acc + dy((bt-1)*OF + oo) * x((bt-1)*IF + ii)
         end do
@@ -49,26 +49,25 @@ contains
     !$omp end parallel do
   end subroutine linear3d_bwd
 
-  subroutine rmsnorm0_bwd(dy, x, dx, NN, CC, eps_val) &
-      bind(c, name='rmsnorm0_bwd')
+  subroutine rmsnorm0_bwd(dy, x, dx, NN, CC, eps_val)
     integer(c_int), intent(in) :: NN, CC
-    real(c_float), intent(in)  :: dy(NN*CC), x(NN*CC)
-    real(c_float), intent(out) :: dx(NN*CC)
-    real(c_float), value :: eps_val
+    real(wp), intent(in)  :: dy(:), x(:)
+    real(wp), intent(out) :: dx(:)
+    real(wp), value :: eps_val
     integer :: ii, jj
-    real(c_float) :: ss, inv, dot, coef
+    real(wp) :: ss, inv, dot, coef
 
     !$omp parallel do private(ss, inv, dot, coef)
     do ii = 1, NN
-      ss = 0.0_c_float
-      dot = 0.0_c_float
+      ss = 0.0_wp
+      dot = 0.0_wp
       do jj = 1, CC
         ss = ss + x((ii-1)*CC + jj) * x((ii-1)*CC + jj)
         dot = dot + dy((ii-1)*CC + jj) * x((ii-1)*CC + jj)
       end do
-      ss = ss / real(CC) + eps_val
-      inv = 1.0_c_float / sqrt(ss)
-      coef = dot / (real(CC) * ss * sqrt(ss))
+      ss = ss / real(CC, wp) + eps_val
+      inv = 1.0_wp / sqrt(ss)
+      coef = dot / (real(CC, wp) * ss * sqrt(ss))
       do jj = 1, CC
         dx((ii-1)*CC + jj) = dy((ii-1)*CC + jj) * inv &
             - x((ii-1)*CC + jj) * coef
@@ -79,15 +78,14 @@ contains
 
   ! RoPE backward (transpose of the forward rotation):
   !   dx1 = dy1*cos + dy2*(-sin),  dx2 = dy1*sin + dy2*cos
-  subroutine rope_4d_bwd(dy, cos_buf, sin_buf, dx, BB, TT, HH, DD) &
-      bind(c, name='rope_4d_bwd')
+  subroutine rope_4d_bwd(dy, cos_buf, sin_buf, dx, BB, TT, HH, DD)
     integer(c_int), intent(in) :: BB, TT, HH, DD
-    real(c_float), intent(in)  :: dy(BB*TT*HH*DD)
-    real(c_float), intent(in)  :: cos_buf(TT*(DD/2))
-    real(c_float), intent(in)  :: sin_buf(TT*(DD/2))
-    real(c_float), intent(out) :: dx(BB*TT*HH*DD)
+    real(wp), intent(in)  :: dy(:)
+    real(wp), intent(in)  :: cos_buf(:)
+    real(wp), intent(in)  :: sin_buf(:)
+    real(wp), intent(out) :: dx(:)
     integer :: ia, ib, ic, id, d2, i1, i2, cb
-    real(c_float) :: e1, e2, c_, s_
+    real(wp) :: e1, e2, c_, s_
 
     d2 = DD / 2
 
@@ -112,14 +110,13 @@ contains
 
   ! Per-position NLL (nats): nll(bt) = logsumexp(logits) - logit[target].
   ! Targets are 0-based ids; no ignore-index (callers mask outside).
-  subroutine xent_fwd(logits, targets, nll, BB, TT, VV) &
-      bind(c, name='xent_fwd')
+  subroutine xent_fwd(logits, targets, nll, BB, TT, VV)
     integer(c_int), intent(in) :: BB, TT, VV
-    real(c_float), intent(in)  :: logits(BB*TT*VV)
-    integer(c_int), intent(in) :: targets(BB*TT)
-    real(c_float), intent(out) :: nll(BB*TT)
+    real(wp), intent(in)  :: logits(:)
+    integer(c_int), intent(in) :: targets(:)
+    real(wp), intent(out) :: nll(:)
     integer :: bt, jj, tgt
-    real(c_float) :: m, s
+    real(wp) :: m, s
 
     !$omp parallel do private(bt, jj, tgt, m, s)
     do bt = 1, BB*TT
@@ -128,7 +125,7 @@ contains
       do jj = 2, VV
         if (logits((bt-1)*VV+jj) > m) m = logits((bt-1)*VV+jj)
       end do
-      s = 0.0_c_float
+      s = 0.0_wp
       do jj = 1, VV
         s = s + exp(logits((bt-1)*VV+jj) - m)
       end do
@@ -139,15 +136,14 @@ contains
 
   ! Softmax-CE backward (mean reduction):
   !   dlogits = (softmax(logits) - onehot(target)) * scale, scale = 1/N.
-  subroutine xent_bwd(logits, targets, dlogits, BB, TT, VV, scale_val) &
-      bind(c, name='xent_bwd')
+  subroutine xent_bwd(logits, targets, dlogits, BB, TT, VV, scale_val)
     integer(c_int), intent(in) :: BB, TT, VV
-    real(c_float), intent(in)  :: logits(BB*TT*VV)
-    integer(c_int), intent(in) :: targets(BB*TT)
-    real(c_float), intent(out) :: dlogits(BB*TT*VV)
-    real(c_float), value :: scale_val
+    real(wp), intent(in)  :: logits(:)
+    integer(c_int), intent(in) :: targets(:)
+    real(wp), intent(out) :: dlogits(:)
+    real(wp), value :: scale_val
     integer :: bt, jj, tgt
-    real(c_float) :: m, s, p
+    real(wp) :: m, s, p
 
     !$omp parallel do private(bt, jj, tgt, m, s, p)
     do bt = 1, BB*TT
@@ -156,13 +152,13 @@ contains
       do jj = 2, VV
         if (logits((bt-1)*VV+jj) > m) m = logits((bt-1)*VV+jj)
       end do
-      s = 0.0_c_float
+      s = 0.0_wp
       do jj = 1, VV
         s = s + exp(logits((bt-1)*VV+jj) - m)
       end do
       do jj = 1, VV
         p = exp(logits((bt-1)*VV+jj) - m) / s
-        if (jj == tgt) p = p - 1.0_c_float
+        if (jj == tgt) p = p - 1.0_wp
         dlogits((bt-1)*VV+jj) = p * scale_val
       end do
     end do
@@ -170,11 +166,10 @@ contains
   end subroutine xent_bwd
 
   ! dwte(v,:) += sum over (b,t) with idx=v of dout(b,t,:). 0-based ids.
-  subroutine wte_bwd(idx, dout, dwte, BR, TC, VMAX, DMX) &
-      bind(c, name='wte_bwd')
-    integer(c_int), intent(in) :: idx(BR*TC), BR, TC, VMAX, DMX
-    real(c_float), intent(in)  :: dout(BR*TC*DMX)
-    real(c_float), intent(inout) :: dwte(VMAX*DMX)
+  subroutine wte_bwd(idx, dout, dwte, BR, TC, VMAX, DMX)
+    integer(c_int), intent(in) :: idx(:), BR, TC, VMAX, DMX
+    real(wp), intent(in)  :: dout(:)
+    real(wp), intent(inout) :: dwte(:)
     integer :: ia, ib, ic, id
 
     !$omp parallel do collapse(2) private(ic, id)

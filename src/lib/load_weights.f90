@@ -9,14 +9,14 @@
 !   transformer_h_{L}_mlp_{c_fc,c_proj}_weight.npy   (L = 0-based)
 
 module load_weights_mod
-  use iso_c_binding
+  use fortran_kinds_mod, only: wp
   use stdlib_io_npy, only: load_npy, save_npy
   implicit none
 contains
 
   subroutine load1(path, a)
     character(*), intent(in) :: path
-    real(c_float), allocatable, intent(out) :: a(:)
+    real(wp), allocatable, intent(out) :: a(:)
     integer :: ios
     character(len=:), allocatable :: msg
     call load_npy(path, a, iostat=ios, iomsg=msg)
@@ -28,9 +28,9 @@ contains
 
   subroutine load_into(path, a, at)
     character(*), intent(in) :: path
-    real(c_float), intent(inout) :: a(*)
+    real(wp), intent(inout) :: a(:)
     integer, intent(in) :: at
-    real(c_float), allocatable :: tmp(:)
+    real(wp), allocatable :: tmp(:)
     call load1(path, tmp)
     a(at:at+size(tmp)-1) = tmp
     deallocate(tmp)
@@ -38,7 +38,7 @@ contains
 
   subroutine save1(path, a)
     character(*), intent(in) :: path
-    real(c_float), intent(in) :: a(:)
+    real(wp), intent(in) :: a(:)
     integer :: ios
     character(len=:), allocatable :: msg
     call save_npy(path, a, iostat=ios, iomsg=msg)
@@ -55,9 +55,9 @@ contains
     character(*), intent(in) :: wdir
     integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim
     integer, intent(in) :: vocab_size
-    real(c_float), intent(in) :: wte(:), lm_head(:)
-    real(c_float), intent(in) :: c_q(:), c_k(:), c_v(:)
-    real(c_float), intent(in) :: c_pr(:), c_fc(:), c_pr2(:)
+    real(wp), intent(in) :: wte(:), lm_head(:)
+    real(wp), intent(in) :: c_q(:), c_k(:), c_v(:)
+    real(wp), intent(in) :: c_pr(:), c_fc(:), c_pr2(:)
     integer :: ll, qsz, ksz, psz, fcsz, p2sz
     character(len=16) :: lstr
     qsz = n_head*head_dim*d_model
@@ -89,9 +89,9 @@ contains
     character(*), intent(in) :: wdir
     integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim
     integer, intent(in) :: vocab_size
-    real(c_float), allocatable, intent(out) :: wte(:), lm_head(:)
-    real(c_float), allocatable, intent(out) :: c_q(:), c_k(:), c_v(:)
-    real(c_float), allocatable, intent(out) :: c_pr(:), c_fc(:), c_pr2(:)
+    real(wp), allocatable, intent(out) :: wte(:), lm_head(:)
+    real(wp), allocatable, intent(out) :: c_q(:), c_k(:), c_v(:)
+    real(wp), allocatable, intent(out) :: c_pr(:), c_fc(:), c_pr2(:)
     integer :: ll
     character(len=16) :: lstr
 

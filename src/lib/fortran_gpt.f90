@@ -10,7 +10,7 @@
 !   x = norm(x)
 !   logits = lm_head(x)                             ! (B, T, vocab_size)
 !
-! Parameters (all flat row-major C-order float32 buffers):
+! Parameters (all flat row-major real(wp) buffers):
 !
 !   idx:        (B*T)           token IDs
 !   cos_buf:    (T * head_dim/2)   rotary cos table
@@ -28,52 +28,15 @@
 
 module fortran_gpt_mod
   use iso_c_binding
+  use fortran_kinds_mod, only: wp
+  use fortran_blas_mod, only: linear3d_sgemm
+  use fortran_linear_mod, only: wte_lookup
+  use fortran_rmsnorm_mod, only: rmsnorm0
+  use fortran_rope_mod, only: rope_4d
+  use fortran_attn_mod, only: causal_attn, relu2
   implicit none
 
-  ! C-mangled interfaces to subroutines in other modules
-  interface
-    subroutine wte_lookup(idx, wte, out, B, T, V, D) bind(c, name='wte_lookup')
-      integer, intent(in) :: idx(*), B, T, V, D
-      real, intent(in) :: wte(*)
-      real, intent(out) :: out(*)
-    end subroutine
-    subroutine rmsnorm0(x, y, N, C, eps) bind(c, name='rmsnorm0')
-      integer, intent(in) :: N, C
-      real, intent(in) :: x(*)
-      real, intent(out) :: y(*)
-      real, value :: eps
-    end subroutine
-    subroutine linear3d(x, w, y, B, T, IF, OF) bind(c, name='linear3d')
-      integer, intent(in) :: B, T, IF, OF
-      real, intent(in) :: x(*), w(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine linear3d_sgemm(x, w, y, B, T, IF, OF) \
-        bind(c, name='linear3d_sgemm')
-      integer, intent(in) :: B, T, IF, OF
-      real, intent(in) :: x(*), w(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine linear3dT(x, w, y, B, T, IF, OF) bind(c, name='linear3dT')
-      integer, intent(in) :: B, T, IF, OF
-      real, intent(in) :: x(*), w(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine rope_4d(x, cos, sin, y, B, T, H, D) bind(c, name='rope_4d')
-      integer, intent(in) :: B, T, H, D
-      real, intent(in) :: x(*), cos(*), sin(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine causal_attn(q, k, v, y, B, T, H, K_H, D) bind(c, name='causal_attn')
-      integer, intent(in) :: B, T, H, K_H, D
-      real, intent(in) :: q(*), k(*), v(*)
-      real, intent(out) :: y(*)
-    end subroutine
-    subroutine relu2(x, N) bind(c, name='relu2')
-      integer, intent(in) :: N
-      real, intent(inout) :: x(*)
-    end subroutine
-  end interface
+  ! (kernels resolve via the module use-statements above)
 contains
 
   subroutine gpt_forward(idx, cos_buf, sin_buf, &
@@ -82,37 +45,37 @@ contains
        outp, &
        BB, TT, vocab_size, d_model, &
        n_head, n_kv_head, head_dim, &
-       n_layer, eps) bind(c, name='gpt_forward')
+       n_layer, eps)
 
     integer(c_int), intent(in) :: BB, TT, vocab_size, d_model
     integer(c_int), intent(in) :: n_head, n_kv_head, head_dim, n_layer
-    real(c_float), value :: eps
+    real(wp), value :: eps
 
-    integer(c_int), intent(in) :: idx(BB*TT)
-    real(c_float), intent(in) :: cos_buf(TT*(head_dim/2))
-    real(c_float), intent(in) :: sin_buf(TT*(head_dim/2))
+    integer(c_int), intent(in) :: idx(:)
+    real(wp), intent(in) :: cos_buf(:)
+    real(wp), intent(in) :: sin_buf(:)
 
-    real(c_float), intent(in) :: wte(vocab_size*d_model)
+    real(wp), intent(in) :: wte(:)
     ! Per-layer weights, layer ll occupying [(ll-1)*per+1 : ll*per], row-major.
     ! (Real checkpoints have distinct weights per layer; tied weights = pass
     !  the same buffer n_layer times, but the signature models the general case.)
-    real(c_float), intent(in) :: c_q(n_layer*n_head*head_dim*d_model)
-    real(c_float), intent(in) :: c_k(n_layer*n_kv_head*head_dim*d_model)
-    real(c_float), intent(in) :: c_v(n_layer*n_kv_head*head_dim*d_model)
-    real(c_float), intent(in) :: c_proj(n_layer*d_model*n_head*head_dim)
-    real(c_float), intent(in) :: c_fc(n_layer*4*d_model*d_model)
-    real(c_float), intent(in) :: c_proj2(n_layer*d_model*4*d_model)
-    real(c_float), intent(in) :: lm_head(vocab_size*d_model)
+    real(wp), intent(in) :: c_q(:)
+    real(wp), intent(in) :: c_k(:)
+    real(wp), intent(in) :: c_v(:)
+    real(wp), intent(in) :: c_proj(:)
+    real(wp), intent(in) :: c_fc(:)
+    real(wp), intent(in) :: c_proj2(:)
+    real(wp), intent(in) :: lm_head(:)
 
-    real(c_float), intent(out) :: outp(BB*TT*vocab_size)
+    real(wp), intent(out) :: outp(:)
 
     ! working buffers: all flat row-major (B,T,...) to match PyTorch layout.
     ! (Declared 1-D on purpose: Fortran N-D arrays are column-major and would
     !  silently transpose the buffers the kernels read as row-major.)
-    real(c_float), allocatable :: emd(:), xn(:), sub_out(:)
-    real(c_float), allocatable :: q(:), k(:), v(:)
-    real(c_float), allocatable :: qrot(:), krot(:)
-    real(c_float), allocatable :: attn_out(:), mlpd(:)
+    real(wp), allocatable :: emd(:), xn(:), sub_out(:)
+    real(wp), allocatable :: q(:), k(:), v(:)
+    real(wp), allocatable :: qrot(:), krot(:)
+    real(wp), allocatable :: attn_out(:), mlpd(:)
 
     integer :: d_ff, d2, ll, jj
     integer :: qsz, ksz, psz, fcsz, p2sz

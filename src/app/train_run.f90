@@ -195,8 +195,8 @@ contains
 
   ! per-position NLLs for one batch (forward only)
   subroutine forward_nlls(idx, targets, nlls)
-    integer, intent(in) :: idx(*), targets(*)
-    real(sp), intent(out) :: nlls(*)
+    integer, intent(in) :: idx(:), targets(:)
+    real(sp), intent(out) :: nlls(:)
     real(sp), allocatable :: emd(:), xn(:), sub(:), qo(:), ko(:), vo(:)
     real(sp), allocatable :: qrot(:), krot(:), ao(:), mlpd(:), lgt(:)
     integer :: BT, DD, hdd, dff, ll, jj, it, j2, tg

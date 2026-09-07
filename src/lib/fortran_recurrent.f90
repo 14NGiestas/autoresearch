@@ -12,6 +12,7 @@
 
 module fortran_recurrent_mod
   use iso_c_binding
+  use fortran_kinds_mod, only: wp
   use fortran_blas_mod
   use fortran_linear_mod
   use fortran_rmsnorm_mod
@@ -26,31 +27,31 @@ contains
        outp, &
        BB, TT, vocab_size, d_model, &
        n_head, n_kv_head, head_dim, &
-       n_loops, eps) bind(c, name='recurrent_forward')
+       n_loops, eps)
 
     integer(c_int), intent(in) :: BB, TT, vocab_size, d_model
     integer(c_int), intent(in) :: n_head, n_kv_head, head_dim, n_loops
-    real(c_float), value :: eps
+    real(wp), value :: eps
 
-    integer(c_int), intent(in) :: idx(BB*TT)
-    real(c_float), intent(in) :: cos_buf(TT*(head_dim/2))
-    real(c_float), intent(in) :: sin_buf(TT*(head_dim/2))
+    integer(c_int), intent(in) :: idx(:)
+    real(wp), intent(in) :: cos_buf(:)
+    real(wp), intent(in) :: sin_buf(:)
 
-    real(c_float), intent(in) :: wte(vocab_size*d_model)
-    real(c_float), intent(in) :: c_q(n_head*head_dim*d_model)
-    real(c_float), intent(in) :: c_k(n_kv_head*head_dim*d_model)
-    real(c_float), intent(in) :: c_v(n_kv_head*head_dim*d_model)
-    real(c_float), intent(in) :: c_proj(d_model*n_head*head_dim)
-    real(c_float), intent(in) :: c_fc(4*d_model*d_model)
-    real(c_float), intent(in) :: c_proj2(d_model*4*d_model)
-    real(c_float), intent(in) :: lm_head(vocab_size*d_model)
+    real(wp), intent(in) :: wte(:)
+    real(wp), intent(in) :: c_q(:)
+    real(wp), intent(in) :: c_k(:)
+    real(wp), intent(in) :: c_v(:)
+    real(wp), intent(in) :: c_proj(:)
+    real(wp), intent(in) :: c_fc(:)
+    real(wp), intent(in) :: c_proj2(:)
+    real(wp), intent(in) :: lm_head(:)
 
-    real(c_float), intent(out) :: outp(BB*TT*vocab_size)
+    real(wp), intent(out) :: outp(:)
 
-    real(c_float), allocatable :: emd(:), xn(:), sub_out(:)
-    real(c_float), allocatable :: q(:), k(:), v(:)
-    real(c_float), allocatable :: qrot(:), krot(:)
-    real(c_float), allocatable :: attn_out(:), mlpd(:)
+    real(wp), allocatable :: emd(:), xn(:), sub_out(:)
+    real(wp), allocatable :: q(:), k(:), v(:)
+    real(wp), allocatable :: qrot(:), krot(:)
+    real(wp), allocatable :: attn_out(:), mlpd(:)
 
     integer :: d_ff, lr, jj
 
