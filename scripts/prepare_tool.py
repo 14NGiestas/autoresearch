@@ -57,11 +57,7 @@ TOOL_TEMPLATES = [
         "command": "curl -fsSL https://api.github.com/repos/python/cpython",
         "response": '{"name": "cpython", "full_name": "python/cpython", "description": "The Python programming language"}',
     },
-    {
-        "instruction": "Check if a URL is up using curl with a timeout of 5 seconds",
-        "command": "curl -fsSL --max-time 5 -o /dev/null -w '%{http_code}' https://httpbin.org/status/200",
-        "response": "200",
-    },
+
     {
         "instruction": "Fetch the first 100 bytes of example.com homepage",
         "command": "curl -fsSL --max-time 10 -r 0-99 https://example.com",
@@ -82,16 +78,8 @@ TOOL_TEMPLATES = [
         "command": "find . -name '*.txt' -exec wc -l {} + | tail -1",
         "response": "  12345 total",
     },
-    {
-        "instruction": "Run a Python one-liner to compute the sum of 1 to 1000",
-        "command": "python3 -c \"print(sum(range(1, 1001)))\"",
-        "response": "500500",
-    },
-    {
-        "instruction": "Use python to check if 1729 is prime",
-        "command": "python3 -c \"n=1729; print(any(n % i == 0 for i in range(2, int(n**0.5)+1)))\"",
-        "response": "True",
-    },
+
+
     {
         "instruction": "List files in /tmp modified in the last hour",
         "command": "find /tmp -type f -mmin -60 -ls 2>/dev/null | head -5",
@@ -102,16 +90,8 @@ TOOL_TEMPLATES = [
         "command": "curl -fsSL -X POST https://httpbin.org/post -H 'Content-Type: application/json' -d '{\"key\": \"value\"}'",
         "response": '{"url": "https://httpbin.org/post", "json": {"key": "value"}}',
     },
-    {
-        "instruction": "Check the disk usage of the home directory",
-        "command": "du -sh $HOME | cut -f1",
-        "response": "42G",
-    },
-    {
-        "instruction": "Get your public IP address using curl",
-        "command": "curl -fsSL https://ifconfig.me",
-        "response": "203.0.113.42",
-    },
+
+
     {
         "instruction": "Use awk to print the second column of a CSV file",
         "command": "awk -F, '{print $2}' data.csv | head -5",
@@ -135,32 +115,58 @@ def expand_template(t):
         f"{resp}\n"
     )
 
+# NOTE (2026-09-07): the old make_trajectories blindly .replace()d numbers
+# and domains across inst/cmd/resp independently: sum cmds computed X but
+# resps reported unrelated Y, prime resps were wrong ~50% (and answered
+# "has-divisor" instead of "is-prime"), domain swaps produced nonsense
+# URLs (api.api.github.com, posts to example.com answered by httpbin),
+# and cascades mangled ("1001" -> "8711", re-replaced random digits).
+# Every parameterized trajectory below samples ONCE and COMPUTES a
+# consistent (inst, cmd, resp). No .replace() anywhere in this file.
+def traj_sum():
+    n = random.randint(500, 5000)
+    return (f"Run a Python one-liner to compute the sum of 1 to {n}",
+            f'python3 -c "print(sum(range(1, {n + 1})))"',
+            str(n * (n + 1) // 2))
+
+def traj_prime():
+    n = random.randint(100, 9999)
+    is_p = n >= 2 and all(n % i != 0 for i in range(2, int(n ** 0.5) + 1))
+    return (f"Use python to check if {n} is prime",
+            f'python3 -c "n={n}; print(all(n % i != 0 for i in range(2, int(n**0.5)+1)))"',
+            "True" if is_p else "False")
+
+def traj_du():
+    g = random.randint(5, 200)
+    return ("Check the disk usage of the home directory",
+            "du -sh $HOME | cut -f1", f"{g}G")
+
+def traj_ip():
+    ip = (f"{random.randint(100, 255)}.{random.randint(0, 255)}."
+          f"{random.randint(0, 255)}.{random.randint(1, 254)}")
+    return ("Get your public IP address using curl",
+            "curl -fsSL https://ifconfig.me", ip)
+
+def traj_timeout():
+    t = random.randint(1, 30)
+    return (f"Check if a URL is up using curl with a timeout of {t} seconds",
+            f"curl -fsSL --max-time {t} -o /dev/null -w '%{{http_code}}' "
+            "https://httpbin.org/status/200",
+            "200")
+
+DYN_TRAJS = [traj_sum, traj_prime, traj_du, traj_ip, traj_timeout]
+
 def make_trajectories(n=2000):
     rows = []
     used = set()
     attempts = 0
     while len(rows) < n and attempts < n * 5:
         attempts += 1
-        t = random.choice(TOOL_TEMPLATES)
-        # Vary: different URLs, domains, numbers
-        inst = t["instruction"]
-        cmd = t["command"]
-        resp = t["response"]
-        # Swap domain to make each unique
-        domain = random.choice(["example.com", "httpbin.org", "api.github.com", "ifconfig.me", "httpbin.ip"])
-        cmd = cmd.replace("https://httpbin.org", f"https://{domain}")
-        cmd = cmd.replace("https://api.github.com", f"https://api.{domain}")
-        cmd = cmd.replace("https://example.com", f"https://{domain}")
-        cmd = cmd.replace("https://ifconfig.me", f"https://{domain}")
-        # Vary numbers
-        cmd = cmd.replace("1729", str(random.randint(100, 9999)))
-        cmd = cmd.replace("1000", str(random.randint(500, 5000)))
-        cmd = cmd.replace("42", str(random.randint(1, 99)))
-        cmd = cmd.replace("100", str(random.randint(50, 200)))
-        # Vary response
-        resp = resp.replace("203.0.113.42", f"{random.randint(100,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}")
-        resp = resp.replace("42G", f"{random.randint(5, 200)}G")
-        resp = resp.replace("500500", str(random.randint(10000, 500000)))
+        if random.random() < 0.7:
+            inst, cmd, resp = random.choice(DYN_TRAJS)()
+        else:
+            t = random.choice(TOOL_TEMPLATES)
+            inst, cmd, resp = t["instruction"], t["command"], t["response"]
         text = (
             f"### Instruction:\n{inst}\n\n"
             f"### Response:\n"
