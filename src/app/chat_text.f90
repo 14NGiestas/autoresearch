@@ -18,6 +18,7 @@ program chat_text
   use tokenizer_encode_mod
   use sample_mod, only: sample_token, sample_next
   use fortran_kv_mod, only: gpt_step
+  use fortran_recurrent_mod, only: recurrent_forward
   use M_CLI2, only: set_args, set_mode, sget, rget, iget, specified
   use fortran_chat_mod
   implicit none
@@ -35,6 +36,8 @@ program chat_text
   integer(c_int64_t) :: rng = 12345_c_int64_t
   real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp, rep = 1.0_sp, plen = 0.0_sp
   integer :: nblock = 0, pwin = 0
+  integer :: nloops = 1
+  real(sp), allocatable :: outR(:)
   logical :: dostats = .false.
   logical :: dostream = .true.
   integer :: s0, s1, srate
@@ -51,7 +54,7 @@ program chat_text
   call set_mode('response_file')
   call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 20 --temp 0.0' // &
       ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --pwin 0 --plen 0.0 --nblock 0' // &
-      ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream T', &
+      ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream T --loops 1', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  chat_text - pure-Fortran text-in/text-out GPT inference', &
@@ -71,6 +74,7 @@ program chat_text
       '  --pwin N      windowed penalty: only last W tokens (0=full history)', &
       '  --plen X      length penalty (with --pwin)', &
       '  --nblock N    no-repeat n-gram size (0 = off)', &
+      '  --loops N     recurrent passes/token on tied layer-0 (1 = plain GPT)', &
       '  --template S  chat template with {prompt} (default: chat)', &
       '                use "raw" for no wrapping (completion mode)', &
       '  --system S    system prompt (prepended as ### SYSTEM)', &
@@ -81,6 +85,7 @@ program chat_text
   tdir = trim(sget('tables'))
   wdir = trim(sget('weights'))
   n_gen = iget('n')
+  nloops = iget('loops')
   temp = rget('temp')
   rng = int(iget('seed'), c_int64_t)
   topp = rget('topp')
@@ -168,6 +173,7 @@ program chat_text
   cvv = 0.0_sp
   clen = 0
   allocate(out1(B*VV))
+  allocate(outR(B*ntot*VV))
 
   ! prefill prompt + generate, one cached step per token. Last forward
   ! needed is t=ntot-1 (its logits predict idx(ntot)); step ntot would
@@ -179,10 +185,18 @@ program chat_text
   do step = 1, ntot - 1
     tc = step
     if (dostats) call system_clock(s0)
-    call gpt_step(idx(tc:tc), cos_b((tc-1)*d2+1:), sin_b((tc-1)*d2+1:), &
-        wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
-        ckv, cvv, clen, ntot, out1, &
-        B, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
+    if (nloops > 1) then
+      call recurrent_forward(idx(1:tc), cos_b, sin_b, &
+          wte, c_q(1:N_HEAD*HD*D), c_k(1:N_KV*HD*D), c_v(1:N_KV*HD*D), &
+          c_pr(1:D*N_HEAD*HD), c_fc(1:4*D*D), c_pr2(1:D*4*D), lm, &
+          outR, B, tc, VV, D, N_HEAD, N_KV, HD, nloops, 1.0e-5_sp)
+      out1 = outR((tc-1)*VV+1:tc*VV)
+    else
+      call gpt_step(idx(tc:tc), cos_b((tc-1)*d2+1:), sin_b((tc-1)*d2+1:), &
+          wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
+          ckv, cvv, clen, ntot, out1, &
+          B, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
+    end if
     if (dostats) then
       call system_clock(s1)
       if (step < nprompt) then
