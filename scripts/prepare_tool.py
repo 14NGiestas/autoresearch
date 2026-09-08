@@ -21,23 +21,23 @@ import os, sys, json, time, urllib.request, hashlib, random
 
 BOS = 8188
 
+# CANONICAL cross-phase encoder (2026-09-07): ASCII -> raw byte (0-127),
+# non-ASCII -> 256+b per UTF-8 byte. Matches code_python.txt, which Phase 1
+# already trained on. ALL prepare scripts must use exactly this mapping.
+# No BPE preference: a per-script BPE silently retokens identical text
+# into unseen ids and breaks every later phase.
 class FallbackEncoder:
     def encode(self, text):
         ids = []
         for ch in text:
-            b = ch.encode("utf-8")
-            for byte in b:
-                ids.append(256 + byte if byte < 128 else byte)
+            if ord(ch) < 256:
+                ids.append(ord(ch))
+            else:
+                for b in ch.encode("utf-8"):
+                    ids.append(256 + b)
         return ids
 
-try:
-    import rustbpe; enc = rustbpe.Encoder()
-except ImportError:
-    try:
-        import tiktoken; enc = tiktoken.get_encoding("cl100k_base")
-    except ImportError:
-        print("No tokenizer, using fallback")
-        enc = FallbackEncoder()
+enc = FallbackEncoder()
 
 CACHE = os.path.expanduser("~/.cache/autoresearch")
 OUT = os.path.join(CACHE, "tool_trajectories.txt")

@@ -14,22 +14,23 @@ import os, sys, time, random, hashlib
 
 BOS = 8188
 
+# CANONICAL cross-phase encoder (2026-09-07): ASCII -> raw byte (0-127),
+# non-ASCII -> 256+b per UTF-8 byte. Matches code_python.txt, which Phase 1
+# already trained on. ALL prepare scripts must use exactly this mapping:
+# a per-script BPE (or a different fallback) silently retokens identical
+# text into unseen ids and breaks every later phase. No BPE preference.
 class FallbackEncoder:
     def encode(self, text):
         ids = []
         for ch in text:
-            b = ch.encode("utf-8")
-            for byte in b:
-                ids.append(256 + byte if byte < 128 else byte)
+            if ord(ch) < 256:
+                ids.append(ord(ch))
+            else:
+                for b in ch.encode("utf-8"):
+                    ids.append(256 + b)
         return ids
 
-try:
-    import rustbpe; enc = rustbpe.Encoder()  # noqa: F401
-except ImportError:
-    try:
-        import tiktoken; enc = tiktoken.get_encoding("cl100k_base")  # noqa: F401
-    except ImportError:
-        print("No tokenizer, fallback"); enc = FallbackEncoder()
+enc = FallbackEncoder()
 
 CACHE = os.path.expanduser("~/.cache/autoresearch")
 OUT = os.path.join(CACHE, "math_reasoning.txt")

@@ -42,18 +42,10 @@ class FallbackEncoder:
         return ids
 
 
-try:
-    import rustbpe
-    enc = rustbpe.Encoder()
-    print("Using rustbpe (BPE)")
-except ImportError:
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        print("Using tiktoken")
-    except ImportError:
-        print("No rustbpe/tiktoken, using byte-level fallback")
-        enc = FallbackEncoder()
+# Pinned to FallbackEncoder (canonical cross-phase mapping, see
+# prepare_math.py header). Never prefer BPE here: it would retokenize
+# identical text into unseen ids and break later phases.
+enc = FallbackEncoder()
 
 
 # ---------------------------------------------------------------------------
