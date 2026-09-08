@@ -24,10 +24,10 @@ class FallbackEncoder:
         return ids
 
 try:
-    import rustbpe; enc = rustbpe.Encoder()
+    import rustbpe; enc = rustbpe.Encoder()  # noqa: F401
 except ImportError:
     try:
-        import tiktoken; enc = tiktoken.get_encoding("cl100k_base")
+        import tiktoken; enc = tiktoken.get_encoding("cl100k_base")  # noqa: F401
     except ImportError:
         print("No tokenizer, fallback"); enc = FallbackEncoder()
 
@@ -84,11 +84,12 @@ def fib_n(n):
 
 def prime_check(n):
     if n < 2: return f"{n} is not prime (less than 2)."
-    is_p = all(n % i != 0 for i in range(2, int(n**0.5) + 1))
-    factors = [i for i in range(2, n) if n % i == 0] or []
+    sq = int(n**0.5)
+    is_p = all(n % i != 0 for i in range(2, sq + 1))
+    factors = [i for i in range(2, min(n, sq+1)) if n % i == 0] or []
     steps = [
         f"Let me check if {n} is prime.",
-        f"Test divisibility from 2 to {int(n**0.5)}.",
+        f"Test divisibility from 2 to {sq}.",
         f"Divisors found: {factors if factors else 'none'}.",
         f"Result: {n} is{' ' if is_p else ' not '}prime.",
     ]
@@ -131,16 +132,43 @@ def sum_to(n):
     ]
     return "\n".join(steps)
 
-PROBLEM_KINDS = [
-    lambda: ("Add", f"What is {random.randint(10,999)} + {random.randint(10,999)}?", arith_add(random.randint(10,999), random.randint(10,999))),
-    lambda: ("Multiply", f"What is {random.randint(2,99)} × {random.randint(2,99)}?", arith_mul(random.randint(2,99), random.randint(2,99))),
-    lambda: ("LCM", f"What is the LCM of {random.randint(2,30)} and {random.randint(2,30)}?", lcm(random.randint(2,30), random.randint(2,30))),
-    lambda: ("Fibonacci", f"List the first {random.randint(5,8)} Fibonacci numbers.", fib_n(random.randint(5,8))),
-    lambda: ("Prime", f"Is {random.randint(10,200)} prime?", prime_check(random.randint(10,200))),
-    lambda: ("Factorial", f"Compute {random.randint(3,10)}!", factorial(random.randint(3,10))),
-    lambda: ("Sum", f"What is 1 + 2 + ... + {random.randint(10,100)}?", sum_to(random.randint(10,100))),
-    lambda: ("Quadratic", f"Solve {random.randint(1,5)}x² + {random.randint(-9,9)}x + {random.randint(-9,9)} = 0.", quadratic(random.randint(1,5), random.randint(-9,9), random.randint(-9,9))),
-]
+def _add():
+    a, b = random.randint(10, 999), random.randint(10, 999)
+    return ("Add", f"What is {a} + {b}?", arith_add(a, b))
+
+def _mul():
+    a, b = random.randint(2, 99), random.randint(2, 99)
+    return ("Multiply", f"What is {a} × {b}?", arith_mul(a, b))
+
+def _lcm():
+    a, b = random.randint(2, 30), random.randint(2, 30)
+    return ("LCM", f"What is the LCM of {a} and {b}?", lcm(a, b))
+
+def _fib():
+    n = random.randint(5, 8)
+    return ("Fibonacci", f"List the first {n} Fibonacci numbers.", fib_n(n))
+
+def _prime():
+    n = random.randint(10, 200)
+    return ("Prime", f"Is {n} prime?", prime_check(n))
+
+def _fact():
+    n = random.randint(3, 10)
+    return ("Factorial", f"Compute {n}!", factorial(n))
+
+def _sum():
+    n = random.randint(10, 100)
+    return ("Sum", f"What is 1 + 2 + ... + {n}?", sum_to(n))
+
+def _quad():
+    a = random.randint(1, 5)
+    b, c = random.randint(-9, 9), random.randint(-9, 9)
+    return ("Quadratic", f"Solve {a}x² + {b}x + {c} = 0.", quadratic(a, b, c))
+
+# NOTE (2026-09-07): every builder samples its numbers ONCE and reuses
+# them in both instruction and solution. The old lambdas called randint
+# separately per field, so rows asked one question and solved another.
+PROBLEM_KINDS = [_add, _mul, _lcm, _fib, _prime, _fact, _sum, _quad]
 
 # ---------------------------------------------------------------------------
 # Write
