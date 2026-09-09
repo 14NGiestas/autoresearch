@@ -168,8 +168,11 @@ Status markers: HAVE (in `sample.f90`), NEXT (concrete slice), LATER.
   phases, never reset; (b) final-answer accuracy still lags ~30% → plan a
   MIXED-stage fine-tune as the last phase, not a pure hard stage.
   HAVE: run_curriculum.sh phase 5 mixed-all (skips until mixed_all.txt
-  is built). NEXT: persist Adam moments across phases — train_run
-  re-inits state_t per run (Fortran change + rebuild; never mid-phase).
+  is built); src/lib/fortran_adam_state.f90 persists the 16 state_t
+  moment arrays (adam_m/v_*.npy) with train_run load+save wired and
+  old checkpoints loading as zeros (both files syntax-checked, no
+  rebuild while a phase is live — takes effect at the next launcher
+  rebuild, i.e. Phase 3+).
 - Beyond Random Sampling (Zhang et al., arXiv:2506.11300, 200+ models):
   curriculum cuts 18-45% of steps to baseline; strongest as WARMUP before
   random sampling (sustained +3.5%). Best difficulty signals, all cheap

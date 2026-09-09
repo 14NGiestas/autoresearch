@@ -16,6 +16,7 @@ program train_run
   use iso_c_binding
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights
+  use fortran_adam_state_mod, only: load_adam_state, save_adam_state
   use fortran_data_mod, only: load_batch
   use M_CLI2, only: set_args, sget, rget, iget, specified
   use fortran_sys_mod, only: mkdir_p
@@ -41,6 +42,7 @@ program train_run
   integer, allocatable :: tbytes(:)
   real(sp) :: ct(TT*(HD/2)), st(TT*(HD/2))
   real(sp) :: nll, vnll, tnll, lr, lr_eff, best
+  logical :: adam_found
   integer :: nsteps, t0, log_every, save_every, start_row
   integer :: ntrain, val_every, nval, keep_last
   integer :: k, i, j, tstep, u, ios, r
@@ -109,6 +111,14 @@ program train_run
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
   call init_state(M, S)
+  ! Optimizer carry across phases (Cognivolve): old checkpoints without
+  ! adam_*.npy keep zeros = previous behavior.
+  call load_adam_state(trim(wdir), S, adam_found)
+  if (adam_found) then
+    print '(A)', "resumed Adam moments (optimizer carry across phases)"
+  else
+    print '(A)', "fresh Adam moments (no adam_*.npy in weights dir)"
+  end if
   call init_temp(G, tmp)
   allocate(GR%wte(size(M%wte)), GR%lm(size(M%lm)))
   allocate(GR%q(size(M%q)), GR%k(size(M%k)), GR%v(size(M%v)))
@@ -164,6 +174,7 @@ program train_run
       end if
       call save_gpt_weights(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
           M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
+      call save_adam_state(trim(ckdir), S)
       call rotate_ckpts(trim(outdir), tstep, save_every, keep_last)
     end if
     if (mod(k, val_every) == 0 .or. k == nsteps) then
@@ -184,6 +195,7 @@ program train_run
         call save_gpt_weights(trim(outdir) // "/best", N_LAYER, D, &
             N_HEAD, N_KV, HD, VV, M%wte, M%lm, M%q, M%k, M%v, M%p, &
             M%fc, M%p2)
+        call save_adam_state(trim(outdir) // "/best", S)
         print '(A)', "new best snapshot"
       end if
       flush (6)
