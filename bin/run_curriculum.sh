@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
-# bin/run_curriculum.sh — 4-phase curriculum trainer.
+# bin/run_curriculum.sh — 5-phase curriculum trainer (Cognivolve shape).
 #
 # Each phase trains on its own data file, resumes from the previous phase's
 # best checkpoint, and stops when val-bpb stops improving.
 #
-# Phases:
+# Phases (easy→hard, MIXED close — arXiv:2505.11643):
 #   1  code-python     code_python.txt         (~15k Alpaca-code rows)
 #   2  tool-use        tool_trajectories.txt   (curl/fetch/python tool trajectories)
 #   3  math-reason     math_reasoning.txt      (step-by-step math reasoning)
 #   4  fortran-tut     fortran_tutorial.txt    (fortran-lang webpage tutorials)
+#   5  mixed-all       mixed_all.txt           (uniform mix of 1-4; the close,
+#                                               never a pure-hard final)
 #
-# After all 3 phases, best/ contains the curriculum-trained model.
+# Optimizer carry (load-bearing per Cognivolve): train_run currently
+# re-inits Adam moments per phase (init_state in train_run.f90) — weights
+# chain via --weights but moments reset. NEXT: persist/load state_t
+# moments in checkpoints (needs a Fortran change + rebuild; do NOT do it
+# while a phase is live). Until then this is a known deviation.
+#
+# After all phases, best/ contains the curriculum-trained model.
 #
 # Usage:
 #   ./bin/run_curriculum.sh                # full 3-phase run
@@ -51,6 +59,7 @@ PHASES=(
     "2:tool-use:${DATA_DIR}/tool_trajectories.txt:curl/fetch/python tool trajectories"
     "3:math-reason:${DATA_DIR}/math_reasoning.txt:Step-by-step math reasoning"
     "4:fortran-tut:${DATA_DIR}/fortran_tutorial.txt:fortran-lang webpage tutorials"
+    "5:mixed-all:${DATA_DIR}/mixed_all.txt:MIXED close over phases 1-4 (build after probe_order)"
 )
 
 # ---------------------------------------------------------------------------

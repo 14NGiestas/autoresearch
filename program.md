@@ -158,6 +158,40 @@ Status markers: HAVE (in `sample.f90`), NEXT (concrete slice), LATER.
   our warmup covers the steps where nll is volatile (steps ~101-110
   showed 0.02→0.72 swings) rather than extending it blindly.
 
+### Curriculum learning (front: Phase 1-3 data, run_curriculum.sh)
+
+- Cognivolve (Fu et al., arXiv:2505.11643) — closest scale match (124M
+  GPT-2 ≈ ours): 4-stage easy→hard (lexical match → multi-step symbolic
+  inference) halves steps to target and 10x'es reasoning heads. Two
+  load-bearing details: (a) order is the effect — out-of-order or
+  optimizer resets kill the gains, so carry optimizer state across
+  phases, never reset; (b) final-answer accuracy still lags ~30% → plan a
+  MIXED-stage fine-tune as the last phase, not a pure hard stage.
+  HAVE: run_curriculum.sh phase 5 mixed-all (skips until mixed_all.txt
+  is built). NEXT: persist Adam moments across phases — train_run
+  re-inits state_t per run (Fortran change + rebuild; never mid-phase).
+- Beyond Random Sampling (Zhang et al., arXiv:2506.11300, 200+ models):
+  curriculum cuts 18-45% of steps to baseline; strongest as WARMUP before
+  random sampling (sustained +3.5%). Best difficulty signals, all cheap
+  to compute in prepare_*.py: compression ratio, MTLD lexical diversity,
+  Flesch Reading Ease. Prefer these over hand-rolled intuitions.
+  HAVE: scripts/difficulty.py (stdlib-only) wired into prepare_abduct.py
+  + prepare_debugdx.py (--order easy|none, default easy; sidecar
+  <out>.difficulty.jsonl with per-row score+metrics).
+- Model-perceived difficulty (arXiv:2508.15475): human-centered difficulty
+  metrics show limited success for LM pretraining; sorting by difficulty
+  AS OBSERVED DURING TRAINING (e.g. per-row loss from a short probe run)
+  is competitive. Two-pass protocol: probe → rank rows by loss → reorder.
+  HAVE: scripts/probe_order.py (eval_bpb stdout → easy-/hard-first
+  reorder of a TEXT JSONL corpus; rows untouched, order only). The
+  trn/val-gap logger (a0f1127) stays the aggregate monitor; per-row
+  signal comes from the probe pass.
+- Dynamics (arXiv:2601.21698, 14M–1B, AoA / word-freq / Verb-Variation
+  curricula): ordering changes learning dynamics, not just speed — track
+  per-phase val curves separately, never average across phases.
+- LATER — CGLS (arXiv:2506.11389): synchronize data difficulty with
+  progressive layer stacking. Only if we ever grow depth mid-training.
+
 ## Output format
 
 Report: what ran (commands), numbers (bpb/parity-err/tokenizer diffs),

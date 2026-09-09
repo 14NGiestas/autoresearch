@@ -30,6 +30,9 @@ import random
 import sys
 from collections import Counter
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from difficulty import metrics as diff_metrics, order as diff_order, score as diff_score
+
 CACHE = os.path.expanduser("~/.cache/autoresearch")
 OUT = os.path.join(CACHE, "abduct_reasoning.jsonl")
 
@@ -93,25 +96,36 @@ def play_game(secret, P, C, rng):
         if after == 1:
             think = (
                 f"Goal: identify the {P}-peg secret.\n"
-                f"Candidates consistent with all feedback: exactly 1.\n"
-                f"Eliminated this turn: {before - after} "
+                f"Candidates:\n"
+                f"  H1: {fmt_guess(list(possible[0]))} "
+                f"(only hypothesis consistent with all feedback).\n"
+                f"Discriminate: eliminated {before - after} this turn "
                 f"(e.g. {ex[0]}).\n"
-                f"Best: {fmt_guess(list(possible[0]))} "
-                f"(only consistent hypothesis).\n"
+                f"Select: H1 — {fmt_guess(list(possible[0]))} "
+                f"(the sole survivor).\n"
                 f"Confidence: certain.")
             rows.append((hist_txt, think,
-                         f"Secret: {fmt_guess(list(possible[0]))}"))
+                         f"Action: declare secret {fmt_guess(list(possible[0]))}"))
             break
         nxt = next(s for s in possible if s not in tried)
         think = (
             f"Goal: narrow {C ** P} possibilities.\n"
-            f"Candidates consistent: {after} "
-            f"(eliminated {before - after} this turn"
-            + (f", e.g. {ex[0]}" if ex else "") + ").\n"
-            f"Best next guess: {fmt_guess(list(nxt))} "
+            f"Candidates:\n"
+            + "\n".join(
+                f"  H{i+1}: {fmt_guess(list(s))} "
+                f"(consistent with all feedback)"
+                for i, s in enumerate(possible[:3]))
+            + (f"\n  ... {after - 3} more consistent hypotheses"
+               if after > 3 else "")
+            + "\n"
+            f"Discriminate: eliminated {before - after} this turn "
+            + (f"(e.g. {ex[0]})" if ex else "")
+            + "; choose the next guess that splits the consistent set.\n"
+            f"Select: {fmt_guess(list(nxt))} "
             f"(first untried consistent candidate).\n"
             f"Confidence: 1 of {after} consistent.")
-        rows.append((hist_txt, think, f"Guess: {fmt_guess(list(nxt))}"))
+        rows.append((hist_txt, think,
+                     f"Action: guess {fmt_guess(list(nxt))}"))
         guess = nxt
     else:
         raise AssertionError("solver did not converge")
@@ -124,31 +138,43 @@ def main():
     ap.add_argument("--pegs", type=int, default=4)
     ap.add_argument("--colors", type=int, default=6)
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--order", default="easy", choices=["easy", "none"],
+                    help="easy-first by cheap difficulty signals "
+                         "(2506.11300: compression/MTLD/Flesch)")
     args = ap.parse_args()
     rng = random.Random(args.seed)
     secrets = set()
     while len(secrets) < args.games:
         secrets.add(tuple(rng.randrange(args.colors)
                           for _ in range(args.pegs)))
-    nrows, nturns, seen = 0, [], set()
+    texts, seen = [], set()
+    nturns = []
+    for secret in sorted(secrets):
+        turns = play_game(secret, args.pegs, args.colors, rng)
+        nturns.append(len(turns))
+        for hist_txt, think, out in turns:
+            text = (
+                f"### Instruction:\nMastermind: secret is "
+                f"{args.pegs} pegs from {args.colors} colors.\n"
+                f"{hist_txt}\nFind the secret (or next best guess).\n\n"
+                f"### Response:\n<think>\n{think}\n</think>\n{out}\n")
+            h = hashlib.sha256(text.encode()).hexdigest()[:16]
+            if h in seen:
+                continue
+            seen.add(h)
+            texts.append(text)
+    texts = diff_order(texts, args.order)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT + ".tmp", "w") as f:
-        for secret in sorted(secrets):
-            turns = play_game(secret, args.pegs, args.colors, rng)
-            nturns.append(len(turns))
-            for hist_txt, think, out in turns:
-                text = (
-                    f"### Instruction:\nMastermind: secret is "
-                    f"{args.pegs} pegs from {args.colors} colors.\n"
-                    f"{hist_txt}\nFind the secret (or next best guess).\n\n"
-                    f"### Response:\n<think>\n{think}\n</think>\n{out}\n")
-                h = hashlib.sha256(text.encode()).hexdigest()[:16]
-                if h in seen:
-                    continue
-                seen.add(h)
-                f.write(json.dumps({"text": text}) + "\n")
-                nrows += 1
+        for text in texts:
+            f.write(json.dumps({"text": text}) + "\n")
     os.rename(OUT + ".tmp", OUT)
+    with open(OUT + ".difficulty.jsonl", "w") as f:
+        for text in texts:
+            h = hashlib.sha256(text.encode()).hexdigest()[:16]
+            f.write(json.dumps({"hash": h, "score": diff_score(text),
+                                "metrics": diff_metrics(text)}) + "\n")
+    nrows = len(texts)
     avg = sum(nturns) / len(nturns)
     print(f"games: {len(secrets)}, rows: {nrows}, avg turns: {avg:.2f} "
           f"-> {OUT}")
