@@ -14,6 +14,7 @@ export LIBRARY_PATH="$OPENBLAS/lib:${LIBRARY_PATH:-}"
 export OMP_NUM_THREADS=16
 export OPENBLAS_NUM_THREADS=16
 export OMP_DYNAMIC=FALSE
+mkdir -p /tmp/w_math  # flock does not create the lock dir
 cd /home/pauli/autoresearch/src
 exec flock -n /tmp/w_math/train.lock \
   fortran-fpm run --profile release --flag "-march=native -ffast-math" \
