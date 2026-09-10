@@ -48,3 +48,8 @@ ai_chat_hoarder/hoard/
 
 # Local fpm binary copy (see README)
 /fpm
+
+# compiler artifacts leaked to repo root
+*.mod
+# third-party PDF->md conversions (not ours to redistribute)
+src/docs/

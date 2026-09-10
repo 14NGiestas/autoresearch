@@ -84,6 +84,69 @@ contains
     end do
   end subroutine save_gpt_weights
 
+  ! Post-save integrity check: every expected file must exist with a real
+  ! payload. stdlib save_npy can return ios=0 yet leave 0-byte files when
+  ! the disk fills (flush/close errors are not reported) — this silently
+  ! destroyed phase-3 step_300/step_400 (2026-09-09, disk full from nix
+  ! store). Call after every save; abort LOUDLY on mismatch. Never train
+  ! on with garbage recovery points.
+  subroutine verify_ckpt_dir(wdir, n_layer, nbad, badpath)
+    character(*), intent(in) :: wdir
+    integer, intent(in) :: n_layer
+    integer, intent(out) :: nbad
+    character(len=:), allocatable, intent(out) :: badpath
+    character(len=16) :: lstr
+    character(len=3) :: mname(8) = ["wte", "lm ", "q  ", "k  ", "v  ", &
+                                    "p  ", "fc ", "p2 "]
+    integer :: ll, ii
+    nbad = 0
+    badpath = ""
+    call check1(trim(wdir) // "/transformer_wte_weight.npy")
+    call check1(trim(wdir) // "/lm_head_weight.npy")
+    do ll = 0, n_layer - 1
+      write (lstr, '(I0)') ll
+      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_attn_c_q_weight.npy")
+      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_attn_c_k_weight.npy")
+      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_attn_c_v_weight.npy")
+      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_attn_c_proj_weight.npy")
+      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_mlp_c_fc_weight.npy")
+      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+          "_mlp_c_proj_weight.npy")
+    end do
+    do ii = 1, 8
+      call check1(trim(wdir) // "/adam_m_" // trim(mname(ii)) // ".npy")
+      call check1(trim(wdir) // "/adam_v_" // trim(mname(ii)) // ".npy")
+    end do
+    call check_exists(trim(wdir) // "/template.txt")
+  contains
+    subroutine check1(path)
+      character(*), intent(in) :: path
+      logical :: ex
+      integer :: sz
+      if (nbad /= 0) return
+      inquire (file=path, exist=ex, size=sz)
+      if (.not. ex .or. sz <= 128) then
+        nbad = 1
+        badpath = path
+      end if
+    end subroutine check1
+    subroutine check_exists(path)
+      character(*), intent(in) :: path
+      logical :: ex
+      if (nbad /= 0) return
+      inquire (file=path, exist=ex)
+      if (.not. ex) then
+        nbad = 1
+        badpath = path
+      end if
+    end subroutine check_exists
+  end subroutine verify_ckpt_dir
+
   subroutine load_gpt_weights(wdir, n_layer, d_model, n_head, n_kv_head, &
       head_dim, vocab_size, wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
     character(*), intent(in) :: wdir

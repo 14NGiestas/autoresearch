@@ -15,7 +15,8 @@
 program train_run
   use iso_c_binding
   use fortran_train_mod
-  use load_weights_mod, only: load_gpt_weights, save_gpt_weights
+  use load_weights_mod, only: load_gpt_weights, save_gpt_weights, verify_ckpt_dir
+  use fortran_chat_mod, only: write_template_txt
   use fortran_adam_state_mod, only: load_adam_state, save_adam_state
   use fortran_data_mod, only: load_batch
   use M_CLI2, only: set_args, sget, rget, iget, specified
@@ -38,6 +39,7 @@ program train_run
   type(cache_t) :: C
   type(temp_t) :: tmp
   character(len=512) :: wdir, rowsfile, outdir, arg, ckdir, bytesfile
+  character(len=:), allocatable :: badpath
   integer :: idx(B*TT), targets(B*TT), ngot
   integer, allocatable :: tbytes(:)
   real(sp) :: ct(TT*(HD/2)), st(TT*(HD/2))
@@ -45,7 +47,7 @@ program train_run
   logical :: adam_found
   integer :: nsteps, t0, log_every, save_every, start_row
   integer :: ntrain, val_every, nval, keep_last
-  integer :: k, i, j, tstep, u, ios, r
+  integer :: k, i, j, tstep, u, ios, r, nbad
   real(sp) :: theta, ang
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
@@ -175,6 +177,12 @@ program train_run
       call save_gpt_weights(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
           M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
       call save_adam_state(trim(ckdir), S)
+      call write_template_txt(trim(ckdir))
+      call verify_ckpt_dir(trim(ckdir), N_LAYER, nbad, badpath)
+      if (nbad /= 0) then
+        print '(2A)', "checkpoint verify failed (disk full?): ", trim(badpath)
+        call exit(1)
+      end if
       call rotate_ckpts(trim(outdir), tstep, save_every, keep_last)
     end if
     if (mod(k, val_every) == 0 .or. k == nsteps) then
@@ -196,6 +204,12 @@ program train_run
             N_HEAD, N_KV, HD, VV, M%wte, M%lm, M%q, M%k, M%v, M%p, &
             M%fc, M%p2)
         call save_adam_state(trim(outdir) // "/best", S)
+        call write_template_txt(trim(outdir) // "/best")
+        call verify_ckpt_dir(trim(outdir) // "/best", N_LAYER, nbad, badpath)
+        if (nbad /= 0) then
+          print '(2A)', "best verify failed (disk full?): ", trim(badpath)
+          call exit(1)
+        end if
         print '(A)', "new best snapshot"
       end if
       flush (6)

@@ -71,6 +71,16 @@ warn() { echo "[$(date +%H:%M:%S)] WARNING: $*" >&2; }
 
 find_binary() {
     local bin
+    # Pinned canonical dir first (build roulette: newest gfortran_* is not
+    # necessarily freshest sources — 2026-09-09 incident). Fall back to
+    # newest-first scan only if live/ has no binary.
+    for d in $(ls -td "$SRC_DIR"/build/live/gfortran_*/ 2>/dev/null); do
+        bin="$d/app/train_run"
+        if [[ -x "$bin" ]]; then
+            echo "$bin"
+            return 0
+        fi
+    done
     # Sort build dirs by mtime, newest first; use array to avoid subshell glob issues
     mapfile -t dirs < <(ls -td "$SRC_DIR"/build/gfortran_*/ 2>/dev/null)
     for d in "${dirs[@]}"; do

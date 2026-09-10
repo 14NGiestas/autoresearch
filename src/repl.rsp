@@ -1,5 +1,5 @@
 --tables /home/pauli/.cache/autoresearch/tok_tables
---weights /tmp/w_long100/best
+--weights /tmp/w_math/step_1000
 --n 100
 --temp 0.7
 --pres 1.0
@@ -8,3 +8,4 @@
 --pwin 64
 --plen 0.5
 --nblock 3
+--stream T

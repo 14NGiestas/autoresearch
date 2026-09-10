@@ -23,7 +23,9 @@
         ] ++ (with pkgs; [
           zstd
           libxml2
-          ncurses
+          # NOTE: ncurses deliberately absent — its libtinfo shadows the
+          # system one via LD_LIBRARY_PATH and kills system bash (needs
+          # GLIBC_2.42 from nixos-unstable). Nothing here needs it.
         ]);
 
       in

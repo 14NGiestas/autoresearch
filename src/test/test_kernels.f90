@@ -31,13 +31,15 @@ program test_kernels
   use fortran_linear_mod, only: linear3d, linear3dT, wte_lookup
   use fortran_rmsnorm_mod, only: rmsnorm, rmsnorm0
   use fortran_rope_mod, only: rope_4d
-  use fortran_attn_mod, only: causal_attn, relu2, relu2_bwd, attn_bwd
+  use fortran_attn_mod, only: causal_attn, relu2, relu2_bwd, attn_bwd, &
+      attn_chunk, attn_step
   use fortran_backward_mod, only: linear3d_bwd, rmsnorm0_bwd, rope_4d_bwd, &
       xent_fwd, xent_bwd, wte_bwd
   use fortran_adamw_mod, only: adamw_step
   use fortran_blas_mod, only: linear3d_sgemm
   use fortran_gpt_mod, only: gpt_forward
-  use fortran_kv_mod, only: gpt_step
+  use fortran_kv_mod, only: gpt_step, gpt_step_multi
+  use fortran_spec_mod, only: accept_prefix, lookup_draft
   use fortran_recurrent_mod, only: recurrent_forward
   implicit none
 
@@ -60,6 +62,10 @@ program test_kernels
   call test_recurrent_loops()
   call test_sample()
   call test_kv_equiv()
+  call test_attn_chunk()
+  call test_kv_chunk_equiv()
+  call test_accept_prefix()
+  call test_lookup_draft()
   call test_linear_bwd()
   call test_rmsnorm_bwd()
   call test_wte_bwd()
@@ -726,6 +732,243 @@ contains
     print '(A,E10.3,A,I0)', "  max err = ", max_err, "  cache_len=", clen
     call check(clen == TC, "cache holds all positions")
     call check(max_err < 1.0e-6_sp, "cached steps == full forward")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! attn_chunk: chunked cached attention, checked against both references —
+  ! two chunks of CH rows must equal causal_attn over the whole sequence,
+  ! and the TB=1 case must equal attn_step.
+  subroutine test_attn_chunk()
+    integer, parameter :: B = 1, H = 2, KH = 2, D = 4, dkh = KH*D
+    integer, parameter :: T = 6, CH = 3
+    real(sp) :: q(B*T*H*D), k(B*T*KH*D), v(B*T*KH*D)
+    real(sp) :: yref(B*T*H*D), ychunk(B*T*H*D)
+    real(sp) :: ystep(H*D), y1(CH*H*D), y2(CH*H*D)
+    real(sp) :: ck(T*dkh), cv(T*dkh)
+    real(sp) :: max_err, e
+    integer :: i
+
+    print '(A)', "=== test_attn_chunk (chunks vs causal_attn / attn_step) ==="
+    call fill(q, B*T*H*D)
+    call fill(k, B*T*KH*D)
+    call fill(v, B*T*KH*D)
+    call causal_attn(q, k, v, yref, B, T, H, KH, D)
+
+    ! two chunks of 3, cache grown in place (caller appends before the call)
+    ck = 0.0_sp
+    cv = 0.0_sp
+    ck(1:CH*dkh) = k(1:CH*dkh)
+    cv(1:CH*dkh) = v(1:CH*dkh)
+    call attn_chunk(q, ck, cv, y1, B, H, KH, D, 0, CH)
+    ck(CH*dkh+1:T*dkh) = k(CH*dkh+1:T*dkh)
+    cv(CH*dkh+1:T*dkh) = v(CH*dkh+1:T*dkh)
+    call attn_chunk(q(CH*H*D+1:), ck, cv, y2, B, H, KH, D, CH, CH)
+    ychunk(1:CH*H*D) = y1
+    ychunk(CH*H*D+1:T*H*D) = y2
+
+    max_err = 0.0_sp
+    do i = 1, B*T*H*D
+      e = abs(yref(i) - ychunk(i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err (2x3 chunks vs causal) = ", max_err
+    call check(max_err < 1.0e-6_sp, "chunked attention == causal_attn")
+
+    ! last position, single query, full cache: must equal last chunk row
+    call attn_step(q((T-1)*H*D+1:), ck, cv, ystep, B, H, KH, D, T)
+    max_err = 0.0_sp
+    do i = 1, H*D
+      e = abs(ystep(i) - ychunk((T-1)*H*D+i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err (TB=1 vs attn_step) = ", max_err
+    call check(max_err < 1.0e-6_sp, "TB=1 chunk == attn_step")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! gpt_step_multi: chunked cached forward (prefill / spec verification)
+  ! must reproduce both gpt_forward and per-token gpt_step row by row.
+  subroutine test_kv_chunk_equiv()
+    integer, parameter :: BR = 1, TC = 6, VV = 16, DD = 8
+    integer, parameter :: n_head = 2, n_kv_head = 2, head_dim = 4
+    integer, parameter :: dkh = n_kv_head*head_dim, MAXT = 6, CH = 3
+    integer :: idx(BR*TC)
+    real(sp) :: cos_buf(TC*(head_dim/2)), sin_buf(TC*(head_dim/2))
+    real(sp) :: wte(VV*DD)
+    real(sp) :: c_q(n_head*head_dim*DD)
+    real(sp) :: c_k(n_kv_head*head_dim*DD)
+    real(sp) :: c_v(n_kv_head*head_dim*DD)
+    real(sp) :: c_proj(DD*n_head*head_dim)
+    real(sp) :: c_fc(4*DD*DD)
+    real(sp) :: c_proj2(DD*4*DD)
+    real(sp) :: lm_head(VV*DD)
+    real(sp) :: out_full(BR*TC*VV), out_steps(BR*TC*VV)
+    real(sp) :: out_chunk(BR*TC*VV), outc(CH*VV), out1(VV)
+    real(sp) :: ck(MAXT*dkh), cv(MAXT*dkh)
+    integer :: i, t, clen, srow, tb
+    real(sp) :: e, max_err_s, max_err_c
+    integer :: d2
+
+    print '(A)', "=== test_kv_chunk_equiv (chunks vs steps vs forward) ==="
+    d2 = head_dim / 2
+    do i = 1, BR*TC
+      idx(i) = 1 + mod(i, 7)
+    end do
+    call fill(cos_buf, TC*d2)
+    call fill(sin_buf, TC*d2)
+    call fill(wte, VV*DD, 0.1_sp)
+    call fill(c_q, n_head*head_dim*DD, 0.05_sp)
+    call fill(c_k, n_kv_head*head_dim*DD, 0.05_sp)
+    call fill(c_v, n_kv_head*head_dim*DD, 0.05_sp)
+    call fill(c_proj, DD*n_head*head_dim, 0.05_sp)
+    call fill(c_fc, 4*DD*DD, 0.05_sp)
+    call fill(c_proj2, DD*4*DD, 0.05_sp)
+    call fill(lm_head, VV*DD, 0.05_sp)
+
+    call gpt_forward(idx, cos_buf, sin_buf, &
+        wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+        out_full, BR, TC, VV, DD, n_head, n_kv_head, head_dim, 1, 1.0e-5_sp)
+
+    ck = 0.0_sp
+    cv = 0.0_sp
+    clen = 0
+    do t = 1, TC
+      call gpt_step(idx(t:t), cos_buf((t-1)*d2+1:), sin_buf((t-1)*d2+1:), &
+          wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+          ck, cv, clen, MAXT, out1, &
+          BR, VV, DD, n_head, n_kv_head, head_dim, 1, 1.0e-5_sp)
+      out_steps((t-1)*VV+1:t*VV) = out1
+    end do
+    call check(clen == TC, "per-token cache holds all positions")
+
+    ck = 0.0_sp
+    cv = 0.0_sp
+    clen = 0
+    srow = 1
+    do while (srow <= TC)
+      tb = min(CH, TC - srow + 1)
+      call gpt_step_multi(idx(srow:srow+tb-1), &
+          cos_buf((srow-1)*d2+1:), sin_buf((srow-1)*d2+1:), &
+          wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
+          ck, cv, clen, MAXT, outc, &
+          BR, VV, DD, n_head, n_kv_head, head_dim, 1, tb, 1.0e-5_sp)
+      out_chunk((srow-1)*VV+1:srow*VV) = outc(1:tb*VV)
+      srow = srow + tb
+    end do
+
+    max_err_s = 0.0_sp
+    max_err_c = 0.0_sp
+    do i = 1, BR*TC*VV
+      e = abs(out_full(i) - out_steps(i))
+      if (e > max_err_s) max_err_s = e
+      e = abs(out_full(i) - out_chunk(i))
+      if (e > max_err_c) max_err_c = e
+    end do
+    print '(A,E10.3,A,E10.3,A,I0)', "  err steps=", max_err_s, &
+        " chunks=", max_err_c, " cache_len=", clen
+    call check(clen == TC, "chunked cache holds all positions")
+    call check(max_err_s < 1.0e-6_sp, "per-token steps == full forward")
+    call check(max_err_c < 1.0e-6_sp, "chunked steps == full forward")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! accept_prefix: the greedy speculative commit rule.
+  ! (a) table cases; (b) protocol simulation — the committed stream must be
+  ! exactly the target's greedy stream and must always advance (>=1 token).
+  subroutine test_accept_prefix()
+    integer, parameter :: K = 5, NT = 40
+    integer :: draft(K), targ(K+1), tg(NT+K+1), buf(NT+K+1)
+    integer :: na, corr, p, j, ncomm, npass, ncorr
+
+    print '(A)', "=== test_accept_prefix (greedy spec commit rule) ==="
+
+    ! (a) table cases
+    draft(1:4) = [1, 2, 3, 4]
+    targ(1:5) = [1, 2, 9, 9, 7]
+    call accept_prefix(draft, targ, 4, na, corr)
+    call check(na == 2 .and. corr == 9, "partial match: 2 accepted, next from target")
+
+    draft(1:3) = [1, 2, 3]
+    targ(1:4) = [1, 2, 3, 5]
+    call accept_prefix(draft, targ, 3, na, corr)
+    call check(na == 3 .and. corr == 5, "all match: bonus row committed")
+
+    draft(1:2) = [1, 2]
+    targ(1:3) = [7, 8, 9]
+    call accept_prefix(draft, targ, 2, na, corr)
+    call check(na == 0 .and. corr == 7, "first rejected: target token only")
+
+    targ(1) = 4
+    call accept_prefix(draft, targ, 0, na, corr)
+    call check(na == 0 .and. corr == 4, "k=0: degenerate case is a plain step")
+
+    ! (b) protocol simulation against a deterministic greedy target stream.
+    ! A drafter that agrees except at one position every 7th window must
+    ! reproduce the target stream exactly, with >=1 token per pass.
+    do j = 1, NT + K + 1
+      tg(j) = mod(j*7 + 3, 11)
+    end do
+    p = 1
+    ncomm = 0
+    npass = 0
+    ncorr = 0
+    do while (ncomm < NT .and. p <= NT)
+      do j = 1, K
+        draft(j) = tg(p + j - 1)
+      end do
+      if (mod(p, 7) == 0) draft(3) = mod(draft(3) + 1, 11)  ! planted mismatch
+      do j = 1, K + 1
+        targ(j) = tg(p + j - 1)
+      end do
+      call accept_prefix(draft, targ, K, na, corr)
+      if (na + 1 < 1) call check(.false., "pass must commit >= 1 token")
+      if (corr /= targ(na + 1)) call check(.false., "correction is target token")
+      do j = 1, na
+        buf(ncomm + j) = draft(j)
+      end do
+      buf(ncomm + na + 1) = corr
+      if (na < K) ncorr = ncorr + 1
+      ncomm = ncomm + na + 1
+      p = p + na + 1
+      npass = npass + 1
+    end do
+    call check(ncomm >= NT, "simulation commits the requested span")
+    call check(all(buf(1:ncomm) == tg(1:ncomm)), &
+        "committed stream == target greedy stream")
+    print '(A,I0,A,I0,A,F5.2)', "  passes=", npass, " tokens=", ncomm, &
+        " tokens/pass=", real(ncomm, sp) / real(npass, sp)
+    call check(ncorr > 0, "planted mismatch actually exercised the reject path")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! lookup_draft: prompt-lookup proposals (zero-cost drafter).
+  subroutine test_lookup_draft()
+    integer :: ids(9), d(6), kk
+
+    print '(A)', "=== test_lookup_draft (prompt-lookup drafter) ==="
+    ! suffix ids(6:8)=[1,2,3]; the most recent earlier occurrence is ids(2:4)
+    ids = [5, 1, 2, 3, 9, 1, 2, 3, 7]
+    call lookup_draft(ids, 8, 3, 6, d, kk)
+    call check(kk == 4 .and. all(d(1:4) == [9, 1, 2, 3]), &
+        "match found: continuation copied (capped at known ids)")
+    call lookup_draft(ids, 8, 3, 2, d, kk)
+    call check(kk == 2 .and. all(d(1:2) == [9, 1]), "k truncates proposals")
+
+    ! match length clamps to the available prefix; nothing earlier -> miss
+    ids(1:3) = [5, 1, 2]
+    call lookup_draft(ids, 3, 5, 4, d, kk)
+    call check(kk == 0, "m > p-1 is a miss, not an out-of-bounds read")
+
+    ! no earlier occurrence -> miss (plain step fallback)
+    ids(1:6) = [1, 2, 3, 4, 5, 6]
+    call lookup_draft(ids, 6, 2, 3, d, kk)
+    call check(kk == 0, "no earlier occurrence -> no proposal")
+
+    ! occurrence at the very start of the context
+    ids(1:6) = [7, 8, 9, 7, 8, 9]
+    call lookup_draft(ids, 6, 3, 5, d, kk)
+    call check(kk == 3 .and. all(d(1:3) == [7, 8, 9]), &
+        "match at position 1 is usable")
   end subroutine
 
   ! ------------------------------------------------------------------------

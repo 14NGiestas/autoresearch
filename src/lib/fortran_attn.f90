@@ -115,6 +115,66 @@ contains
     !$omp end parallel do
   end subroutine attn_step
 
+  ! Chunked cached attention: TB queries against a KV cache that already
+  ! contains the chunk's own K/V entries (caller appends them first).
+  !   q, y: (B, TB, H, D)
+  !   K, V: cache slice from the layer base, contiguous positions 1..TCPREV+TB
+  !         (B=1 layout, as in attn_step — the batch stride is not carried)
+  ! Query at chunk position iq (1-based) attends to cache positions
+  ! 1..TCPREV+iq: full past, causal inside the chunk.
+  ! Equivalences (both asserted in src/test/test_kernels.f90):
+  !   TB=1          -> attn_step(..., TC=TCPREV+1)
+  !   TCPREV=0      -> causal_attn on the same rows (same op order)
+  ! This is the prefill/spec-verify kernel: chunked passes replace one call
+  ! per token, turning T=1 GEMVs into T=TB GEMMs at identical semantics.
+  subroutine attn_chunk(q, K, V, y, BB, HH, K_HH, DD, TC_PREV, TB)
+    integer(c_int), intent(in) :: BB, HH, K_HH, DD, TC_PREV, TB
+    real(wp), intent(in)  :: q(:)
+    real(wp), intent(in)  :: K(:), V(:)
+    real(wp), intent(out) :: y(:)
+    integer :: ia, iq, ib, nvalid, ss, id, kb, rep
+    real(wp) :: scale, sm, inv, acc, m
+    real(wp) :: sc(TC_PREV + TB)
+
+    scale = 1.0_wp / sqrt(real(DD, wp))
+    rep = HH / K_HH
+
+    !$omp parallel do collapse(2) private(iq, ib, nvalid, ss, id, kb, sc, m, sm, inv, acc)
+    do ia = 1, BB
+      do iq = 1, TB
+        nvalid = TC_PREV + iq
+        do ib = 1, HH
+          kb = (ib - 1) / rep + 1
+          m = -huge(1.0_wp)
+          do ss = 1, nvalid
+            acc = 0.0_wp
+            do id = 1, DD
+              acc = acc + q(((ia-1)*TB + (iq-1))*HH*DD + (ib-1)*DD + id) &
+                  * K(((ss-1)*K_HH + (kb-1))*DD + id)
+            end do
+            sc(ss) = acc * scale
+            if (sc(ss) > m) m = sc(ss)
+          end do
+          sm = 0.0_wp
+          do ss = 1, nvalid
+            sc(ss) = exp(sc(ss) - m)
+            sm = sm + sc(ss)
+          end do
+          inv = 1.0_wp / sm
+          do id = 1, DD
+            acc = 0.0_wp
+            do ss = 1, nvalid
+              acc = acc + sc(ss) * inv &
+                  * V(((ss-1)*K_HH + (kb-1))*DD + id)
+            end do
+            y(((ia-1)*TB + (iq-1))*HH*DD + (ib-1)*DD + id) = acc
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine attn_chunk
+
   ! SDPA backward with GQA (recomputes scores/softmax: checkpoint style).
   ! Forward per (b,h,t): s_i = (q_t.k_i)/sqrt(D), i<=t; p = softmax(s);
   !   y_d = sum_i p_i * v_{i,d}.
