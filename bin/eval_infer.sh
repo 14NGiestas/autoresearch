@@ -11,20 +11,34 @@
 #                            one OOD-modern and one EN control; each case gets
 #                            a novelty/repetition metric, because bpb alone
 #                            cannot tell "coherent prose" from "confident loop"
-# Usage: bin/eval_infer.sh --weights DIR [--n 20] [--only core|residue|chat|security|all]
+# Usage: bin/eval_infer.sh --weights DIR [--n 20] [--only core|residue|chat|security|multilingual|prose|all]
+#        [--chat PATH] [--label NAME]
+# --chat overrides the inference binary (default: newest src/build/live/*/app/chat_text)
+# --label stamps the run (default: hostname + date) so results from another
+# machine (e.g. a quiet i9 used for eval while the trainer owns this box) are
+# self-documenting: timings are only comparable at equal host + BLAS + flags.
 # Gate rule: a new phase must not regress core, must shrink residue (except
 # wanted retention), must move >=1 chat case at SFT time.
 set -u
-W=""; N=20; ONLY="all"
+W=""; N=20; ONLY="all"; CHAT_OVERRIDE=""; LABEL=""
 while [ $# -gt 0 ]; do case "$1" in
-  --weights) W="$2"; shift 2;; --n) N="$2"; shift 2;; --only) ONLY="$2"; shift 2;; *) shift;; esac; done
+  --weights) W="$2"; shift 2;; --n) N="$2"; shift 2;; --only) ONLY="$2"; shift 2;;
+  --chat) CHAT_OVERRIDE="$2"; shift 2;; --label) LABEL="$2"; shift 2;; *) shift;; esac; done
 [ -z "$W" ] && { echo "need --weights DIR"; exit 1; }
-CHAT=src/build/gfortran_837A057CAE07FB0C/app/chat_text
+if [ -n "$CHAT_OVERRIDE" ]; then
+  CHAT="$CHAT_OVERRIDE"
+else
+  CHAT=$(ls -t src/build/live/*/app/chat_text 2>/dev/null | head -1)
+fi
+[ -x "$CHAT" ] || { echo "no chat_text binary (build it or pass --chat)"; exit 1; }
+[ -z "$LABEL" ] && LABEL="$(hostname -s) $(date '+%Y-%m-%d %H:%M')"
 TABS=~/.cache/autoresearch/tok_tables
+export OMP_NUM_THREADS="${EVAL_OMP:-4}"
+export OPENBLAS_NUM_THREADS="${EVAL_OMP:-4}"
 run() {
   local label="$1"; shift
   printf '=== %s\n' "$label"
-  printf '%s' "$PROMPT" | OMP_NUM_THREADS=2 "$CHAT" --tables "$TABS" \
+  printf '%s' "$PROMPT" | "$CHAT" --tables "$TABS" \
     --weights "$W" --n "$N" "$@" --stream F 2>/dev/null
   printf '\n'
 }
@@ -109,6 +123,7 @@ battery_prose() {
   PROMPT='It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.'
   run_metric 'prose/en-control temp0' --temp 0.0 --seed 7 --template raw
 }
+echo "### host: $LABEL | binary: $CHAT"
 case "$ONLY" in
   all) battery_core; battery_residue; battery_chat; battery_security; battery_multilingual; battery_prose;;
   core|residue|chat|security|multilingual|prose) "battery_$ONLY";;
