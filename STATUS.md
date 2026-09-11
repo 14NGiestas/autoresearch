@@ -302,3 +302,42 @@ para BPE preservando ordem, split e TEXTO:
 
 Próximo: empacotar em T fixo e treinar do zero ~10M params, T=1024, ~4 épocas
 (200M tokens) quando um box liberar.
+
+## Calculadora de estimativas: scripts/planner.py
+
+Escolhe o modelo a partir de três limites (treino rápido / cabe na RAM / tem dado)
+com as constantes MEDIDAS, e se AUTOVALIDA contra o que já medimos:
+
+  validação treino: 811 MFLOP/token x 2049 tokens / 288 GFLOP/s = 5,77 s/passo
+                    (medido no fermi: 5,77 s/passo)
+  validação infer.: 4N = 390 MB por token / 23 GB/s = 59 tok/s
+                    (medido no repl: 60 tok/s em 4 threads)
+
+Fórmulas: N = 12*L*d^2 + 2*V*d; treino = 6N + 12*L*T*d (atenção O(T^2));
+inferência = BANDA, não FLOPs (cada token lê todos os pesos: 23 GB/s de banda
+efetiva medida). Correção importante do que eu disse antes: a atenção é 28% dos
+FLOPs de treino a T=2048, não 43,6% (eu contei a atenção 2x no bench).
+
+Com os dados de HOJE (53,7M tokens), T=1024, 4 épocas, 2 dias, 475 GFLOP/s:
+
+| params | d | MFLOP/tok | épocas | dias | RAM fp32 | tok/s infer | veredito |
+|---|---|---|---|---|---|---|---|
+| 3M | 98 | 32 | 1,1 | 0,05 | 0,01G | 1917 | OK |
+| 6M | 155 | 59 | 2,2 | 0,17 | 0,02G | 958 | OK |
+| **10M** | **213** | **91** | **3,7** | **0,45** | **0,04G** | **575** | **OK** |
+| 25M | 364 | 204 | 9,3 | 2,48 | 0,10G | 230 | x dado+tempo |
+| 50M | 535 | 379 | 18,6 | 9,23 | 0,20G | 115 | x dado+tempo |
+| 100M | 778 | 715 | 37,2 | 34,8 | 0,40G | 58 | x dado+tempo |
+
+Leituras:
+- O custo até Chinchilla cresce com **N^2** (tokens ~ N, FLOPs/token ~ N): cada
+  dobra de tamanho custa 4x mais dias. É por isso que "modelo menor" é a resposta
+  no nosso orçamento -- não por falta de ambição.
+- **Caber na RAM nunca é o limite nestas escalas** (100M fp32 = 0,4 GB). O limite é
+  DADO e depois TEMPO. RAM vira restrição só com contexto longo (cache KV) ou
+  modelos bem maiores.
+- O corpus de hoje (53,7M tokens = 336 livros) sustenta 2,7M params em 1 época ou
+  10,7M em 4.
+- Para crescer: 25M pede 1,3 GB de texto (~3.100 livros) e 2 dias; 50M pede 2,5 GB
+  (~6.200 livros) e 9 dias; 100M pede 5 GB (~12.500 livros) e 35 dias. Gutenberg PT
+  sozinho provavelmente não cobre isso; web.archive pode.
