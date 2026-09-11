@@ -281,3 +281,24 @@ Próximo passo do P2: re-tokenizar a prosa para o espaço BPE gerando rows no me
 formato das fases 1-4 (BOS + ids), preservando o split held-out, com portão de
 round-trip (ids -> texto -> ids idêntico). Depois treinar do zero ~10M params,
 T=1024 BPE, ~4 épocas.
+
+## P2 passo 1 FEITO: corpus de prosa no espaço BPE
+
+`scripts/tokenize_prose_bpe.py` (35 s, single-core) converteu o corpus byte-level
+para BPE preservando ordem, split e TEXTO:
+
+- 64.335 linhas x 2.049 bytes (131,8M tokens byte-level) -> **53,7M tokens BPE**,
+  2,502 bytes/token (bate com a medição independente de 2,498 do P1).
+- **Portão de integridade: OK em todas as linhas** -- o texto decodificado dos ids
+  BPE é idêntico ao dos ids byte-level, linha a linha (decode_bytes_ids é o espelho
+  exato do decode_bytes do Fortran, inclusive a remontagem UTF-8 do travessão).
+  Sem esse portão a troca de espaço poderia perder texto e o bpb perder sentido.
+- Artefatos: `/tmp/prose/prose_bpe_all.txt` (226 MB, BOS 8188 + ids, treino e
+  depois validação) e `/tmp/prose/prose_bpe_val.txt` (4.950 linhas, para o
+  agregador de bpb). Mesmas 59.385 linhas de treino e 4.950 de validação.
+- Linhas de ~865 tokens BPE (as linhas do corpus têm 2.049 BYTES, que viram ~865
+  tokens): T=1024 cobre quase tudo com padding; o que passar de 1024 é re-cortado
+  em mais de uma linha (mantendo tudo o que é texto, sem truncar).
+
+Próximo: empacotar em T fixo e treinar do zero ~10M params, T=1024, ~4 épocas
+(200M tokens) quando um box liberar.
