@@ -53,3 +53,4 @@ ai_chat_hoarder/hoard/
 *.mod
 # third-party PDF->md conversions (not ours to redistribute)
 src/docs/
+tools/

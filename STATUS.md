@@ -405,3 +405,29 @@ independente de gênero.
 A mistura não é fé: temos o instrumento para medi-la (bateria core/residue/prose/
 multilingual + bpb em prosa PT held-out). Adicionar Wikipedia/SE é um A/B: se
 ajudar a prosa held-out e não derrubar o core, fica.
+
+## ptwiki: download em andamento (Wikipedia em português)
+
+- Arquivo: `ptwiki-latest-pages-articles.xml.bz2` (dumps.wikimedia.org/ptwiki/latest/),
+  **2,72 GB**, versão de 01/set/2026, baixando com wget -c em `/tmp/ptwiki/`
+  (uma conexão, User-Agent identificado -- é a política da Wikimedia).
+- Extrator: **wikiextractor** (attardi), obtido por clone (não vendorizado; tools/
+  está no .gitignore). Receita:
+    git clone --depth 1 https://github.com/attardi/wikiextractor.git tools/wikiextractor
+    cd tools/wikiextractor && .venv-numpy/bin/python3 -m wikiextractor.WikiExtractor \
+        --json --no-templates -o OUT --processes N DUMP.xml
+  (o master é pacote com imports relativos: precisa rodar como módulo, de dentro
+  do repo clonado; um WikiExtractor.py solto falha com ImportError.)
+
+### Método (medir na amostra ANTES de extrair 2,7 GB)
+
+1. `bunzip2 -t` para validar o stream (o bzip2 tem CRC por bloco; o `.md5` do
+   dump 404 porque o nome do arquivo de checksums é outro).
+2. Amostra: `bzcat dump | head -c 300MB > sample.xml` -> extrair -> medir
+   **bytes de texto e tokens BPE por MB de XML**. Isso projeta o rendimento total
+   (o mix pede 15-20% de ptwiki num alvo de 1-2 GB de texto) antes de gastar
+   CPU/hora extraindo tudo.
+3. Extração completa com `nice -n 19` e poucos processos: os dois boxes estão
+   treinando (fermi até 21:32 e depois o v5 encadeado; halfbeast até 05:23).
+4. Limpeza/dedupe -> tokenizar em BPE (mesma receita do P1) -> contabilizar o mix
+   (base prosa PT 60-70% / ptwiki 15-20% / instrução+Fortran 10% / SE 5-10%).
