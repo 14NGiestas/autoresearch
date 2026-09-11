@@ -301,6 +301,36 @@ contains
     !$omp end parallel do
   end subroutine attn_chunk
 
+  ! ---------------------------------------------------------------------------
+  ! TODO(next session): attn_bwd_sgemm -- the missing half of the attention work.
+  !
+  ! Why it is the big prize: attn_bwd is a hand-written O(T^2) loop with
+  ! !$omp atomic on dk/dv, and it is ~309 GFLOP of a training step's ~1.5 TFLOP
+  ! (B=1,T=2048,L=12) at ~8 GFLOP/s, where the forward's attn_sgemm runs at
+  ! ~103 GFLOP/s. Forward alone: ~20 s/step -> ~1.5 s. Both: step ~46 s ->
+  ! ~10-15 s, i.e. every future phase gets ~3-4x cheaper.
+  !
+  ! Formulation, with S = Q K^T (unscaled), P = softmax(scale*S + causal mask),
+  ! Y = P V, and per (batch, kv-head):
+  !   dV   = P^T dY                 sgemm('T','N', D,T,T, P, dY)
+  !   dP   = dY V^T                 sgemm('N','T', T,T,D, dY, V)
+  !   dS   = P * (dP - rowsum(P*dP))      elementwise, O(T^2) memory-bound
+  !   dQ   = scale * dS K           sgemm('N','N', T,D,T, dS, K)
+  !   dK   = scale * dS^T Q         sgemm('T','N', T,D,T, dS, Q)
+  ! remembering the codebase's row-major-as-column-major trick: a row-major
+  ! (T,D) buffer IS the column-major matrix (D,T), so every operand above needs
+  ! its transposed view spelled out the way attn_sgemm does it.
+  !
+  ! GQA: with H > K_H several query heads share a kv head. The naive kernel
+  ! uses atomics; do NOT copy that -- accumulate the rep heads' dK/dV into a
+  ! scratch per kv head and add once, which is both faster and deterministic.
+  !
+  ! Verification is already scaffolded: test_attn_bwd does finite differences on
+  ! the naive kernel. Mirror it for the sgemm twin: same tolerances, plus the
+  ! T=1 and no-GQA cases, and only then wire it behind an explicit switch
+  ! (never swap attention kernels under a live phase -- the last-bit drift would
+  ! silently invalidate the val curve and the bpb self-check).
+  !
   ! SDPA backward with GQA (recomputes scores/softmax: checkpoint style).
   ! Forward per (b,h,t): s_i = (q_t.k_i)/sqrt(D), i<=t; p = softmax(s);
   !   y_d = sum_i p_i * v_{i,d}.

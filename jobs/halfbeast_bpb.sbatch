@@ -22,16 +22,17 @@ WIDE="$EV/prose_val300.txt"      # optional wider slice: tighter bpb, ~5x the co
 TB="$EV/tok_tables/token_bytes.txt"
 CHAT="$EV/portable/run_chat.sh"
 
-bpb_of() {   # bpb_of <ckpt> <rows-file> <nrows>
-    local ck="$1" rows="$2" n="$3"
+bpb_of() {   # bpb_of <ckpt> <rows-file> <nrows> [naive|blas]
+    local ck="$1" rows="$2" n="$3" mode="${4:-blas}"
     [ -x "$EV/portable/bin/eval_bpb" ] || return 1
     # stderr goes to the job log, not /dev/null: a silent failure here cost a
     # whole 30-minute job (missing aggregator, hidden by 2>/dev/null)
     "$EV/portable/run_eval_bpb.sh" --weights "$EV/$ck" --rows "$rows" \
-        > "/tmp/bpb_${ck}_$(basename "$rows")" || {
+        --attn "$mode" > "/tmp/bpb_${ck}_$(basename "$rows")" || {
         echo "  (eval_bpb failed for $ck -- see job log)"
         return 1
     }
+    printf '  [%s] ' "$mode"
     python3 scripts/bpb_from_eval.py "/tmp/bpb_${ck}_$(basename "$rows")" "$rows" "$TB" "$n"
 }
 
@@ -57,7 +58,13 @@ for spec in "$@"; do
     # same loader via the shipped chat binary is not possible, so fall back to
     # the bundle's eval_bpb if present, else skip with a clear message.
     if [ -x "$EV/portable/bin/eval_bpb" ]; then
-        printf '  %-22s %s\n' "$lbl" "$(bpb_of "$ck" "$ROWS" 60)"
+        # the self-check checkpoint MUST use the kernel the trainer used (naive),
+        # otherwise it stops being a self-check; everything else takes the fast
+        # kernel (bpb agrees to ~1e-5, measured 10x on 3 rows)
+        mode=blas
+        [ "$ck" = "p5_step_300" ] && mode=naive
+        printf '  %-22s\n' "$lbl"
+        bpb_of "$ck" "$ROWS" 60 "$mode"
     else
         echo "  $lbl: portable eval_bpb not shipped (see bin/sync_eval.sh note)"
     fi

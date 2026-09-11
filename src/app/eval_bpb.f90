@@ -34,16 +34,23 @@ program eval_bpb
   real(sp), allocatable :: outp(:)
   real(sp) :: theta, ang, m, s, nll
   character(len=65536) :: buf
+  logical :: attn_blas = .false.
 
-  call set_args('--weights WEIGHTS --rows ROWS', &
+  call set_args('--weights WEIGHTS --rows ROWS --attn naive', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  eval_bpb - bits-per-byte evaluation (prints per-position NLLs)', &
       'SYNOPSIS', &
-      '  eval_bpb --weights DIR --rows FILE'], &
-      version_text=[character(len=80) :: 'eval_bpb 1.0'])
+      '  eval_bpb --weights DIR --rows FILE [--attn naive|blas]', &
+      'OPTIONS', &
+      '  --attn MODE   naive (default, the kernel every recorded bpb used) or', &
+      '                blas: attn_sgemm, ~13x faster at T=2048, agrees to', &
+      '                ~3e-06. Use blas to make a bpb pass affordable; use', &
+      '                naive to reproduce an older number exactly.'], &
+      version_text=[character(len=80) :: 'eval_bpb 1.1'])
   wdir = trim(sget('weights'))
   rowsfile = trim(sget('rows'))
+  attn_blas = trim(sget('attn')) == 'blas'
   if (.not. specified('weights') .or. .not. specified('rows')) then
     print '(A)', 'require --weights DIR --rows FILE (--help for all)'
     call exit(2)
@@ -79,7 +86,8 @@ program eval_bpb
 
     call gpt_forward(idx, cos_b, sin_b, &
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
-        outp, B, TT, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
+        outp, B, TT, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp, &
+        attn_blas=attn_blas)
 
     ! per-position NLL in nats: logsumexp(logits) - logit[target]
     do tc = 1, TT
