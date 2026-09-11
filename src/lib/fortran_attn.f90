@@ -67,6 +67,62 @@ contains
     !$omp end parallel do
   end subroutine causal_attn
 
+  ! Document-masked causal attention. Identical to causal_attn except that a
+  ! query only attends to positions >= docstart(query): our rows are packed
+  ! token streams where BOS separates documents, and without this mask the
+  ! model spends most of its attention budget on pairs that never co-occur at
+  ! inference (measured on math_reasoning.txt: ~12.5 docs/row, only 8.1% of
+  ! causal pairs are within-document). docstart is (B,T) flat, 1-based.
+  ! With docstart == 1 everywhere this must equal causal_attn bit-exactly
+  ! (same accumulation order), which is what test_causal_attn_doc asserts.
+  subroutine causal_attn_doc(q, k, v, y, B, T, H, K_H, D, docstart)
+    integer(c_int), intent(in) :: B, T, H, K_H, D
+    real(wp), intent(in)  :: q(:), k(:), v(:)
+    integer(c_int), intent(in) :: docstart(:)
+    real(wp), intent(out) :: y(:)
+    integer :: aa, bb, cc, ss, dd, kb, rep, s0
+    real(wp) :: scale, sm, inv, acc
+    real(wp) :: sc(T), m
+
+    scale = 1.0_wp / sqrt(real(D, wp))
+    rep = H / K_H
+
+    !$omp parallel do collapse(2) private(bb, cc, ss, dd, kb, s0, sc, m, sm, inv, acc)
+    do aa = 1, B
+      do bb = 1, H
+        kb = (bb - 1) / rep + 1
+        do cc = 1, T
+          s0 = docstart((aa-1)*T + cc)
+          m = -huge(1.0_wp)
+          do ss = s0, cc
+            acc = 0.0_wp
+            do dd = 1, D
+              acc = acc + q(((aa-1)*T + (cc-1))*H*D + (bb-1)*D + dd) &
+                         * k(((aa-1)*T + (ss-1))*K_H*D + (kb-1)*D + dd)
+            end do
+            sc(ss) = acc * scale
+            if (sc(ss) > m) m = sc(ss)
+          end do
+          sm = 0.0_wp
+          do ss = s0, cc
+            sc(ss) = exp(sc(ss) - m)
+            sm = sm + sc(ss)
+          end do
+          inv = 1.0_wp / sm
+          do dd = 1, D
+            acc = 0.0_wp
+            do ss = s0, cc
+              acc = acc + sc(ss) * inv &
+                  * v(((aa-1)*T + (ss-1))*K_H*D + (kb-1)*D + dd)
+            end do
+            y(((aa-1)*T + (cc-1))*H*D + (bb-1)*D + dd) = acc
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine causal_attn_doc
+
   ! Single-query attention over a KV cache (decoding step).
   ! q: (B, H, D) current query (already RoPE'd)  K, V: (B, Tc, K_H, D)
   ! y: (B, H, D). No causal mask: the cache holds only past positions.

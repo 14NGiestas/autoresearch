@@ -32,7 +32,7 @@ program test_kernels
   use fortran_rmsnorm_mod, only: rmsnorm, rmsnorm0
   use fortran_rope_mod, only: rope_4d
   use fortran_attn_mod, only: causal_attn, relu2, relu2_bwd, attn_bwd, &
-      attn_chunk, attn_step
+      attn_chunk, attn_step, causal_attn_doc
   use fortran_backward_mod, only: linear3d_bwd, rmsnorm0_bwd, rope_4d_bwd, &
       xent_fwd, xent_bwd, wte_bwd
   use fortran_adamw_mod, only: adamw_step
@@ -57,6 +57,7 @@ program test_kernels
   call test_relu2()
   call test_causal_attn()
   call test_causal_attn_gqa()
+  call test_causal_attn_doc()
   call test_gpt_forward_shape()
   call test_recurrent_equiv()
   call test_recurrent_loops()
@@ -732,6 +733,56 @@ contains
     print '(A,E10.3,A,I0)', "  max err = ", max_err, "  cache_len=", clen
     call check(clen == TC, "cache holds all positions")
     call check(max_err < 1.0e-6_sp, "cached steps == full forward")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! causal_attn_doc: with docstart == 1 it must equal causal_attn bit-exactly;
+  ! with a boundary at position 5, the rows after it must equal running plain
+  ! causal attention on those rows alone -- that is what the mask means.
+  subroutine test_causal_attn_doc()
+    integer, parameter :: B = 1, T = 8, H = 2, KH = 2, D = 4
+    integer, parameter :: TB = 4          ! second document: rows 5..8
+    real(sp) :: q(B*T*H*D), k(B*T*KH*D), v(B*T*KH*D)
+    real(sp) :: yref(B*T*H*D), ydoc(B*T*H*D), ysub(TB*H*D)
+    real(sp) :: q2(TB*H*D), k2(TB*KH*D), v2(TB*KH*D)
+    integer(c_int) :: ds(B*T)
+    real(sp) :: max_err, e
+    integer :: i
+
+    print '(A)', "=== test_causal_attn_doc (document mask) ==="
+    call fill(q, B*T*H*D)
+    call fill(k, B*T*KH*D)
+    call fill(v, B*T*KH*D)
+
+    ds = 1
+    call causal_attn(q, k, v, yref, B, T, H, KH, D)
+    call causal_attn_doc(q, k, v, ydoc, B, T, H, KH, D, ds)
+    max_err = 0.0_sp
+    do i = 1, B*T*H*D
+      e = abs(yref(i) - ydoc(i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err (docstart all 1 vs causal) = ", max_err
+    call check(max_err == 0.0_sp, "no-boundary mask is bit-exact vs causal")
+
+    do i = 1, 4
+      ds(i) = 1_c_int
+    end do
+    do i = 5, T
+      ds(i) = 5_c_int
+    end do
+    call causal_attn_doc(q, k, v, ydoc, B, T, H, KH, D, ds)
+    q2 = q(4*H*D+1:T*H*D)
+    k2 = k(4*KH*D+1:T*KH*D)
+    v2 = v(4*KH*D+1:T*KH*D)
+    call causal_attn(q2, k2, v2, ysub, 1, TB, H, KH, D)
+    max_err = 0.0_sp
+    do i = 1, TB*H*D
+      e = abs(ysub(i) - ydoc(4*H*D+i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err (doc 2 rows vs its own causal) = ", max_err
+    call check(max_err == 0.0_sp, "rows after a boundary ignore the earlier doc")
   end subroutine
 
   ! ------------------------------------------------------------------------
