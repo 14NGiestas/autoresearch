@@ -29,9 +29,12 @@ program tokdiff
       version_text=[character(len=80) :: 'tokdiff 1.0'])
   tdir = trim(sget('tables'))
   listfile = trim(sget('list'))
-  rowsfile = trim(sget('rows'))
-  space = trim(sget('space'))
-  if (len_trim(space) == 0) space = 'bpe'
+  ! M_CLI2's sget() returns the KEYWORD NAME when unspecified, so gate on
+  ! specified() instead of testing emptiness -- 'ROWS' is not a file.
+  rowsfile = ''
+  if (specified('rows')) rowsfile = trim(sget('rows'))
+  space = 'bpe'
+  if (specified('space')) space = trim(sget('space'))
   nrt = 0
   if (specified('roundtrip')) nrt = int(read_num(sget('roundtrip')))
   if (.not. specified('tables') .or. &
