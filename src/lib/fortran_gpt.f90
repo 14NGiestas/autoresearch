@@ -33,7 +33,7 @@ module fortran_gpt_mod
   use fortran_linear_mod, only: wte_lookup
   use fortran_rmsnorm_mod, only: rmsnorm0
   use fortran_rope_mod, only: rope_4d
-  use fortran_attn_mod, only: causal_attn, relu2
+  use fortran_attn_mod, only: causal_attn, relu2, attn_sgemm
   implicit none
 
   ! Inference workspace: allocated once, reused forever (no per-call
@@ -56,11 +56,19 @@ contains
        outp, &
        BB, TT, vocab_size, d_model, &
        n_head, n_kv_head, head_dim, &
-       n_layer, eps)
+       n_layer, eps, attn_blas)
 
     integer(c_int), intent(in) :: BB, TT, vocab_size, d_model
     integer(c_int), intent(in) :: n_head, n_kv_head, head_dim, n_layer
     real(wp), value :: eps
+    ! Optional: route the attention through sgemm (attn_sgemm) instead of the
+    ! hand-written causal_attn. ~13x faster at T=2048 (7.9 -> 102.8 GFLOP/s)
+    ! and equal to ~2.6e-06, but a different summation order -- so it is opt-in
+    ! and stays off by default, which is what keeps previously recorded bpb
+    ! numbers comparable (see eval_bpb --attn).
+    logical, intent(in), optional :: attn_blas
+    logical :: useblas
+    real(wp), allocatable :: Satt(:)
 
     integer(c_int), intent(in) :: idx(:)
     real(wp), intent(in) :: cos_buf(:)
@@ -92,6 +100,9 @@ contains
     integer :: qsz, ksz, psz, fcsz, p2sz
 
     d_ff = 4 * d_model
+    useblas = .false.
+    if (present(attn_blas)) useblas = attn_blas
+    if (useblas) allocate (Satt(TT*TT))
     d2   = head_dim / 2
     qsz  = n_head*head_dim*d_model
     ksz  = n_kv_head*head_dim*d_model
@@ -137,7 +148,13 @@ contains
       call rope_4d(q, cos_buf, sin_buf, qrot, BB, TT, n_head, head_dim)
       call rope_4d(k, cos_buf, sin_buf, krot, BB, TT, n_kv_head, head_dim)
 
-      call causal_attn(qrot, krot, v, attn_out, BB, TT, n_head, n_kv_head, head_dim)
+      if (useblas) then
+        call attn_sgemm(qrot, krot, v, attn_out, BB, TT, n_head, n_kv_head, &
+            head_dim, Satt)
+      else
+        call causal_attn(qrot, krot, v, attn_out, BB, TT, n_head, n_kv_head, &
+            head_dim)
+      end if
 
       call linear3d_sgemm(attn_out, c_proj((ll-1)*psz+1:), sub_out, BB, TT, d_model, d_model)
 
@@ -167,6 +184,7 @@ contains
 
 
 
+    if (allocated(Satt)) deallocate (Satt)
   end subroutine gpt_forward
 
 end module fortran_gpt_mod
