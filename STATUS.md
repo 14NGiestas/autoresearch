@@ -177,3 +177,67 @@ Estado dos ramos às 21h: fermi v3 val @800 2,26959; halfbeast v2 val @600 2,296
 -- **ambos já abaixo do 2,40226 da fase 5 final, em linhas inéditas, ainda caindo**,
 com attn blas idêntico ao naive. Confirma: o platô da fase 5 era saturação daquelas
 1000 linhas, não dos dados.
+
+## P0 MORTO: o lote não compra nada (medido, app/bench_batch.f90)
+
+Bench nas formas do modelo (d=768, f=4, T=2048), 2 threads, sgemm do projeto:
+
+| forma | B=1 | B=2 | B=4 | B=8 |
+|---|---|---|---|---|
+| attn/proj (M,768)x(768,768) | 95,5 GFLOP/s | 0,71x | 0,88x | 0,75x |
+| mlp fc (M,768)x(768,3072) | 91,5 GFLOP/s | 0,95x | **1,16x** | 1,16x |
+
+A premissa ("o sgemm recebe matrizes pequenas") estava errada: M=2048 com K=768 já
+roda perto do teto prático. Ganho máximo 1,16x, e na GEMM da atenção chega a
+piorar. Não vale escrever o attn_bwd mascarado + treinador em lote por isso.
+
+**Descoberta que veio junto (e que corrige o plano do MoE): a atenção é 43,6% dos
+FLOPs de treino** por sequência a T=2048 (927,7 de 2.125,8 GFLOP). A atenção NÃO
+encolhe com MoE (é compartilhada entre experts), então o "8x mais barato por
+token" que eu estimei estava errado: com 8 experts de 12M ativos seriam ~2x, não
+8x. MoE vira alavanca de CAPACIDADE, não de velocidade.
+
+### A aritmética que decide (FLOPs/token = 6N + 12*2*T*768*2*3; 288 GFLOP/s medidos)
+
+| modelo | T | MFLOP/tok | tok/s | tokens p/ 20/param | dias (2 boxes) |
+|---|---|---|---|---|---|
+| 25M | 512 | 207 | 1394 | 0,50B | **2,1** |
+| 50M | 1024 | 413 | 697 | 1,00B | 8,3 |
+| 97,5M | 2048 | 811 | 355 | 1,95B | 31,8 |
+
+Custo para Chinchilla escala ~N^2 (tokens ~ N, custo/token ~ N). Num orçamento de
+dias, o ponto acessível em dois CPUs é ~25M params com contexto curto.
+
+### A alavanca que sobrou é a TOKENIZAÇÃO
+
+Byte-level custa 1 token por caractere. Com ~3 caracteres por token (BPE):
+
+| espaço | tok/s | caracteres/s |
+|---|---|---|
+| byte-level (hoje) | 355 | 355 |
+| BPE ~3 chars/tok | 1065 | **3194** |
+
+Ou seja **~9x mais texto por segundo** (lineares: 3x menos tokens para o mesmo
+texto; atenção O(T^2): 9x menos FLOPs por caractere). É maior que qualquer ganho
+de kernel que sobrou, e o maquinário já existe e é o MAIS testado do projeto:
+tokenize_corpus.py (regra corrigida), ranks.txt, o encoder BPE em Fortran com
+pretokenizer KSPLIT e o teste diferencial contra tiktoken (tokdiff --space bpe).
+Bônus: com BPE os acentos viram tokens normais e a família inteira de bugs #1/#3
+(espaços de ids divergentes) desaparece -- um espaço só, verificado contra tiktoken.
+
+Restrição honesta que isso expõe: o corpus de prosa tem 122M bytes = ~40M tokens
+BPE. Chinchilla para 25M params pede 500M tokens = 12 passadas no MESMO texto.
+Logo, para crescer de verdade o próximo recurso escasso é DADO (mais livros), não
+compute.
+
+### Plano revisado
+
+- **P1 (nova prioridade):** re-tokenizar a prosa em BPE, provar paridade (tokdiff +
+  Python, mesmo rigor de 100% match) e medir os chars/token reais em português.
+- **P2:** treinar do zero ~10-25M params com T=1024 BPE (~3 mil caracteres de
+  contexto), ~3 épocas = ~120M tokens, **~1 dia** nos dois boxes. É o maior modelo
+  que o nosso orçamento de dados e de compute sustentam honestamente.
+- **P3:** crescer o corpus (mais livros PT) — porque 122M bytes é o limite que
+  aparece assim que o compute deixa de ser o gargalo.
+- **Descartado:** lote>1 (medido, 1,16x). **Adiado:** MoE (agora é capacidade, ~2x,
+  não velocidade).
