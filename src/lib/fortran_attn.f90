@@ -414,7 +414,6 @@ contains
     end do
     !$omp end parallel do
   end subroutine attn_bwd
-
   ! ReLU^2 backward: y = max(0,x)^2  ->  dx = 2*max(0,x) * dy.
   subroutine relu2_bwd(dy, x, dx, N)
     integer(c_int), intent(in) :: N
@@ -447,5 +446,127 @@ contains
     end do
     !$omp end parallel do
   end subroutine relu2
+
+  ! BLAS-backed backward of the attention (gradient of the forward in
+  ! attn_sgemm). Same math as attn_bwd, but the four matmuls go through sgemm;
+  ! the softmax backward is the only O(T^2) elementwise part, and GQA heads are
+  ! ACCUMULATED in scratch instead of using !$omp atomic (deterministic, and
+  ! the naive kernel's atomics serialise).
+  !   dV = P^T dY           sgemm('N','T', D,T,T, dY, P, beta=1)
+  !   dP = dY V^T           sgemm('T','N', T,T,D, V,  dY)
+  !   dS = P*(dP - rowsum(P*dP))     masked to j <= i, scaled inside
+  !   dQ = scale*dS K       sgemm('N','N', D,T,T, K,  dS, beta=0)
+  !   dK = scale*dS^T Q     sgemm('N','T', D,T,T, Q,  dS, beta=1)
+  ! Layout: as everywhere else in this file, a row-major (T,D) buffer IS the
+  ! column-major matrix (D,T), so each operand's transposed view is spelled
+  ! out explicitly. Scratch (caller-owned, reused across layers):
+  !   SP, dPbuf, dSbuf : (TT*TT), dkv: (2*TT*K_HH*DD) for the dK/dV accumulators.
+  subroutine attn_bwd_sgemm(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, &
+       SP, dPbuf, dSbuf, dkv)
+    integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
+    real(wp), intent(in)  :: dy(:), q(:), k(:), v(:)
+    real(wp), intent(out) :: dq(:)
+    real(wp), intent(inout) :: dk(:), dv(:)
+    real(wp), intent(inout) :: SP(:), dPbuf(:), dSbuf(:), dkv(:)
+    integer :: ia, kb, ib, ii, jj
+    integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
+    real(wp) :: scale, mx, sm, inv, rowsum
+
+    scale = 1.0_wp / sqrt(real(DD, wp))
+
+    do ia = 1, BB
+      do kb = 1, K_HH
+        ! zero this kv head's accumulators (strided: one head of every token)
+        do ii = 1, TT
+          do jj = 1, DD
+            dkv((ii-1)*K_HH*DD + (kb-1)*DD + jj) = 0.0_wp
+            dkv(TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) = 0.0_wp
+          end do
+        end do
+        do ib = (kb-1)*(HH/K_HH) + 1, kb*(HH/K_HH)
+          ! ---- P = softmax(scale*Q K^T) with the causal mask (row-major) ----
+          m = int(TT, c_int64_t); n = int(TT, c_int64_t); kk = int(DD, c_int64_t)
+          lda = int(K_HH*DD, c_int64_t); ldb = int(HH*DD, c_int64_t)
+          ldc = int(TT, c_int64_t)
+          call sgemm('T', 'N', m, n, kk, scale, &
+               k((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, &
+               q((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldb, &
+               0.0_wp, SP, ldc)
+          do ii = 1, TT
+            mx = -huge(1.0_wp)
+            do jj = 1, ii
+              if (SP((ii-1)*TT + jj) > mx) mx = SP((ii-1)*TT + jj)
+            end do
+            sm = 0.0_wp
+            do jj = 1, ii
+              SP((ii-1)*TT + jj) = exp(SP((ii-1)*TT + jj) - mx)
+              sm = sm + SP((ii-1)*TT + jj)
+            end do
+            inv = 1.0_wp/sm
+            do jj = 1, ii
+              SP((ii-1)*TT + jj) = SP((ii-1)*TT + jj)*inv
+            end do
+            do jj = ii + 1, TT
+              SP((ii-1)*TT + jj) = 0.0_wp
+            end do
+          end do
+          ! ---- dV += P^T dY ----
+          m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
+          lda = int(HH*DD, c_int64_t); ldb = int(TT, c_int64_t)
+          ldc = int(K_HH*DD, c_int64_t)
+          call sgemm('N', 'T', m, n, kk, 1.0_wp, &
+               dy((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), lda, SP, ldb, &
+               1.0_wp, dkv(TT*K_HH*DD + (kb-1)*DD + 1:), ldc)
+          ! ---- dP = dY V^T ----
+          m = int(TT, c_int64_t); n = int(TT, c_int64_t); kk = int(DD, c_int64_t)
+          lda = int(K_HH*DD, c_int64_t); ldb = int(HH*DD, c_int64_t)
+          ldc = int(TT, c_int64_t)
+          call sgemm('T', 'N', m, n, kk, 1.0_wp, &
+               v((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, &
+               dy((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldb, &
+               0.0_wp, dPbuf, ldc)
+          ! ---- softmax backward -> dS (masked), staged in dSbuf ----
+          do ii = 1, TT
+            rowsum = 0.0_wp
+            do jj = 1, ii
+              rowsum = rowsum + SP((ii-1)*TT + jj)*dPbuf((ii-1)*TT + jj)
+            end do
+            do jj = 1, ii
+              dSbuf((ii-1)*TT + jj) = SP((ii-1)*TT + jj) &
+                  * (dPbuf((ii-1)*TT + jj) - rowsum)
+            end do
+            do jj = ii + 1, TT
+              dSbuf((ii-1)*TT + jj) = 0.0_wp
+            end do
+          end do
+          ! ---- dQ = scale * dS K (unique per query head: plain write) ----
+          m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
+          lda = int(K_HH*DD, c_int64_t); ldb = int(TT, c_int64_t)
+          ldc = int(HH*DD, c_int64_t)
+          call sgemm('N', 'N', m, n, kk, scale, &
+               k((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, dSbuf, ldb, &
+               0.0_wp, dq((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldc)
+          ! ---- dK += scale * dS^T Q (accumulated over the GQA group) ----
+          m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
+          lda = int(HH*DD, c_int64_t); ldb = int(TT, c_int64_t)
+          ldc = int(K_HH*DD, c_int64_t)
+          call sgemm('N', 'T', m, n, kk, scale, &
+               q((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), lda, dSbuf, ldb, &
+               1.0_wp, dkv((kb-1)*DD + 1:), ldc)
+        end do
+        ! ---- fold the accumulated dK/dV of this kv head into the outputs ----
+        do ii = 1, TT
+          do jj = 1, DD
+            dk((ia-1)*TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) = &
+                dk((ia-1)*TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) &
+                + dkv((kb-1)*DD + (ii-1)*K_HH*DD + jj)
+            dv((ia-1)*TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) = &
+                dv((ia-1)*TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) &
+                + dkv(TT*K_HH*DD + (kb-1)*DD + (ii-1)*K_HH*DD + jj)
+          end do
+        end do
+      end do
+    end do
+  end subroutine attn_bwd_sgemm
 
 end module fortran_attn_mod

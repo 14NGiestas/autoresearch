@@ -32,7 +32,7 @@ program test_kernels
   use fortran_rmsnorm_mod, only: rmsnorm, rmsnorm0
   use fortran_rope_mod, only: rope_4d
   use fortran_attn_mod, only: causal_attn, relu2, relu2_bwd, attn_bwd, &
-      attn_chunk, attn_step, causal_attn_doc, attn_sgemm
+      attn_chunk, attn_step, causal_attn_doc, attn_sgemm, attn_bwd_sgemm
   use fortran_backward_mod, only: linear3d_bwd, rmsnorm0_bwd, rope_4d_bwd, &
       xent_fwd, xent_bwd, wte_bwd
   use fortran_adamw_mod, only: adamw_step
@@ -59,6 +59,7 @@ program test_kernels
   call test_causal_attn_gqa()
   call test_causal_attn_doc()
   call test_attn_sgemm()
+  call test_attn_bwd_sgemm()
   call test_gpt_forward_shape()
   call test_recurrent_equiv()
   call test_recurrent_loops()
@@ -734,6 +735,75 @@ contains
     print '(A,E10.3,A,I0)', "  max err = ", max_err, "  cache_len=", clen
     call check(clen == TC, "cache holds all positions")
     call check(max_err < 1.0e-6_sp, "cached steps == full forward")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! attn_bwd_sgemm: finite differences of L = <dy, y> with y from
+  ! causal_attn, which is exactly what the analytic kernel must reproduce.
+  ! Two cases: no GQA sharing (H == K_H, the tight-stride path) and a GQA
+  ! group (H = 2*K_H) where dK/dV must accumulate across query heads.
+  subroutine test_attn_bwd_sgemm()
+    integer, parameter :: B = 1, T = 4, DD = 4
+    integer, parameter :: H = 4, KH = 2          ! rep = 2: GQA accumulation
+    real(sp) :: q(B*T*H*DD), k(B*T*KH*DD), v(B*T*KH*DD), dy(B*T*H*DD)
+    real(sp) :: y(B*T*H*DD), qp(B*T*H*DD), kp(B*T*KH*DD), vp(B*T*KH*DD)
+    real(sp) :: dq(B*T*H*DD), dk(B*T*KH*DD), dv(B*T*KH*DD)
+    real(sp) :: Swork(T*T), dP(T*T), dS(T*T), dkv(2*T*KH*DD)
+    real(sp), parameter :: HH = 1.0e-3_sp
+    real(sp) :: lp, lm, err, worst
+    integer :: i
+
+    print '(A)', "=== test_attn_bwd_sgemm (finite differences, GQA H=4 K_H=2) ==="
+    call fill(q, B*T*H*DD, 0.5_sp)
+    call fill(k, B*T*KH*DD, 0.5_sp)
+    call fill(v, B*T*KH*DD, 0.5_sp)
+    call fill(dy, B*T*H*DD, 0.5_sp)
+
+    dq = 0.0_sp; dk = 0.0_sp; dv = 0.0_sp
+    call attn_bwd_sgemm(dy, q, k, v, dq, dk, dv, B, T, H, KH, DD, &
+        Swork, dP, dS, dkv)
+
+    worst = 0.0_sp
+    do i = 1, B*T*H*DD
+      qp = q; qp(i) = qp(i) + HH
+      call causal_attn(qp, k, v, y, B, T, H, KH, DD)
+      lp = sum(dy*y)
+      qp = q; qp(i) = qp(i) - HH
+      call causal_attn(qp, k, v, y, B, T, H, KH, DD)
+      lm = sum(dy*y)
+      err = abs((lp - lm)/(2.0_sp*HH) - dq(i))
+      if (err > worst) worst = err
+    end do
+    print '(A,E10.3)', "  worst |dL/dq - dq| = ", worst
+    call check(worst < 2.0e-3_sp, "dQ matches finite differences")
+
+    worst = 0.0_sp
+    do i = 1, B*T*KH*DD
+      kp = k; kp(i) = kp(i) + HH
+      call causal_attn(q, kp, v, y, B, T, H, KH, DD)
+      lp = sum(dy*y)
+      kp = k; kp(i) = kp(i) - HH
+      call causal_attn(q, kp, v, y, B, T, H, KH, DD)
+      lm = sum(dy*y)
+      err = abs((lp - lm)/(2.0_sp*HH) - dk(i))
+      if (err > worst) worst = err
+    end do
+    print '(A,E10.3)', "  worst |dL/dk - dk| = ", worst
+    call check(worst < 2.0e-3_sp, "dK matches finite differences (GQA sum)")
+
+    worst = 0.0_sp
+    do i = 1, B*T*KH*DD
+      vp = v; vp(i) = vp(i) + HH
+      call causal_attn(q, k, vp, y, B, T, H, KH, DD)
+      lp = sum(dy*y)
+      vp = v; vp(i) = vp(i) - HH
+      call causal_attn(q, k, vp, y, B, T, H, KH, DD)
+      lm = sum(dy*y)
+      err = abs((lp - lm)/(2.0_sp*HH) - dv(i))
+      if (err > worst) worst = err
+    end do
+    print '(A,E10.3)', "  worst |dL/dv - dv| = ", worst
+    call check(worst < 2.0e-3_sp, "dV matches finite differences (GQA sum)")
   end subroutine
 
   ! ------------------------------------------------------------------------
