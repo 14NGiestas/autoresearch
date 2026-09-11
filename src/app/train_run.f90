@@ -46,18 +46,19 @@ program train_run
   real(sp) :: nll, vnll, tnll, lr, lr_eff, best
   logical :: adam_found
   integer :: nsteps, t0, log_every, save_every, start_row
-  integer :: ntrain, val_every, nval, keep_last
+  integer :: ntrain, val_every, nval, keep_last, nprobe, nprobe_opt
   integer :: k, i, j, tstep, u, ios, r, nbad
   real(sp) :: theta, ang
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
   ntrain = 40; val_every = 5; nval = 8; keep_last = 2
+  nprobe = 0
   bytesfile = ""
   nsteps = -1
   call set_args('--weights WEIGHTS --rows ROWS --out OUT --nsteps 20' // &
       ' --lr 0.0003 --t0 1 --log_every 1 --save_every 10' // &
       ' --start_row 0 --ntrain 40 --val_every 5 --nval 8 --keep_last 2' // &
-      ' --bytes BYTES', &
+      ' --trn_probe 0 --bytes BYTES', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  train_run - multi-batch trainer (slice 3)', &
@@ -74,6 +75,7 @@ program train_run
   save_every = iget('save_every')
   start_row = iget('start_row')
   ntrain = iget('ntrain')
+  nprobe_opt = iget('trn_probe')
   val_every = iget('val_every')
   nval = iget('nval')
   keep_last = iget('keep_last')
@@ -187,10 +189,16 @@ program train_run
     end if
     if (mod(k, val_every) == 0 .or. k == nsteps) then
       vnll = val_bpb(trim(rowsfile), start_row + ntrain, nval)
-      ! train-bpb on a held-out slice of the train pool (start_row+nval to
-      ! start_row+ntrain) so train/val are on the same scale. Lets us see
-      ! overfitting (train << val bpb) and pick best-checkpoint fairly.
-      tnll = val_bpb(trim(rowsfile), start_row + nval, ntrain - nval)
+      ! train-bpb on a probe slice of the train pool. Default (0) keeps the
+      ! original behaviour: the whole pool after the val slice, which is what
+      ! "same scale" meant at 120-row corpora. Big row files need a cap: the
+      ! probe is a full forward of T=2048 per row, so ntrain - nval rows would
+      ! cost hours per validation (a 59k-row prose pool is ~65 h). Capping it
+      ! samples the TAIL of the pool (start_row+ntrain-nprobe), i.e. rows this
+      ! phase does not train on, which is the number we actually want.
+      nprobe = ntrain - nval
+      if (nprobe_opt > 0) nprobe = min(nprobe_opt, ntrain - nval)
+      tnll = val_bpb(trim(rowsfile), start_row + ntrain - nprobe, nprobe)
       print '(A,I0,A,F10.5)', "val @", tstep, " bpb    ", vnll
       print '(A,I0,A,F10.5)', "trn @", tstep, " bpb    ", tnll
       print '(A,I0,A,F10.5)', "gap @", tstep, " bpb    ", vnll - tnll
