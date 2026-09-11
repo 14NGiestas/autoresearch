@@ -103,3 +103,38 @@ ganhar dos dois pais, o paralelismo vira multiplicador de throughput legítimo.
    penalidades o argmax da linha não é a escolha do alvo; a solução é aplicar
    penalidade linha a linha na verificação — o mecanismo já existe em
    `fortran_spec_mod`).
+
+## BUG #3 (mesma família do #1) — o mapa dos ACENTOS
+
+Pedido do usuário: casar `encode_bytes` caractere por caractere com o Python.
+Fazendo isso apareceu que havia **três regras** em jogo:
+
+| fonte | regra para cp 128..255 | 'ã' (cp 227) |
+|---|---|---|
+| **corpus (a verdade)** | `256 + cp` | **483** |
+| `scripts/tokenize_corpus.py` | `cp` | 227 (nunca usado) |
+| Fortran (antes) | `256 + byte UTF-8` | 451, 419 |
+
+Prova de que o corpus é `256+cp`: 200 linhas amostradas têm **zero** ids em
+128..255 e **2271** ocorrências do id 483; decodificar com essa regra devolve
+"em suas mãos … De avôs a netos"; acumulação UTF-8 devolve mojibake. Consequência
+prática: a inferência alimentava o modelo com 451/419 onde ele aprendeu 483, e
+imprimia bytes latin-1 num terminal UTF-8 (acento ilegível).
+
+Consertado nos dois sentidos: `encode_bytes` decodifica UTF-8 em codepoints e
+aplica a regra do corpus; `decode_bytes` devolve UTF-8 e só remonta uma corrida
+256..511 quando ela forma sequência UTF-8 válida com codepoint ≥256 (é o caso do
+travessão; acento nunca dispara). `tokenize_corpus.py` corrigido também.
+
+**Paridade provada** (`test_corpus_golden`, `tokdiff --space byte|--roundtrip`):
+vetor-ouro da linha 1 do corpus id a id; round-trip em 300 linhas = 614.400 ids,
+**0 divergências**; encode direto de texto acentuado Fortran == Python (69 ids,
+493='í', 483='ã', travessão 482/384/404). Logo: Fortran == corpus == Python.
+Commits `673842b`, `f63604c`.
+
+## Treino estendido (o pedido 3)
+
+- halfbeast: v2 (linhas 1000+, 2000 passos) rodando; **job 6011 enfileirado**
+  (`--dependency=afterok:6010`) = +2500 passos no bloco v4 (linhas 5000+).
+- fermi: v3 (linhas 3000+, 2000 passos) rodando.
+- Ambos `--attn blas`, fiz threads, val nos mesmos livros held-out.
