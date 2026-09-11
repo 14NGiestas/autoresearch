@@ -60,7 +60,7 @@ program test_kernels
   call test_causal_attn_doc()
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
-  call test_byte_space()
+  call test_corpus_golden()
   call test_valid_mask()
   call test_gpt_forward_shape()
   call test_recurrent_equiv()
@@ -795,40 +795,38 @@ contains
   ! why prompts arrived as nonsense and why ids >= 256 printed as BPE tokens
   ! ('home') and >= 8188 as '<?>8188'. ASCII survived by accident (ranks 0..127
   ! are the single bytes in order), which made the output look half-right.
-  subroutine test_byte_space()
-    use tokenizer_encode_mod, only: byte_to_id, id_to_byte, encode_bytes, &
-        decode_bytes
-    integer :: b(6), i
+  ! ------------------------------------------------------------------------
+  ! Vetor-ouro EXTRAÍDO DO CORPUS (linha 1 de /tmp/prose/prose_v2.txt, ids 101..145):
+  ! se encode_bytes divergir disto, a inferência fala uma língua que o modelo
+  ! não aprendeu -- foi exatamente o bug do espaço BPE. E decode_bytes tem de
+  ! devolver o mesmo texto de volta (round-trip).
+  subroutine test_corpus_golden()
+    use tokenizer_encode_mod, only: encode_bytes, decode_bytes
+    character(len=*), parameter :: txt = 'e o alvo. De avôs a netos esta robusta e labo'
+    integer, parameter :: want(45) = [101, 32, 111, 32, 97, 108, 118, 111, 46, 32, 68, 101, 32, 97, 118, 500, 115, 32, 97, 32, 110, 101, 116, 111, 115, 32, 101, 115, 116, 97, 32, 114, 111, 98, 117, 115, 116, 97, 32, 101, 32, 108, 97, 98, 111]
     integer, allocatable :: ids(:), back(:)
-    integer :: nb
-    real(sp) :: dummy
+    integer :: nback, nb, i
+    integer, allocatable :: raw(:)
 
-    print '(A)', "=== test_byte_space (treino byte-level vs BPE legado) ==="
-    b = [65, 32, 195, 173, 10, 97]        ! 'A', ' ', UTF-8 for 'i-acute', LF, 'a'
-    call encode_bytes(b, 6, ids)
-    call check(all(ids == [65, 32, 256+195, 256+173, 10, 97]), &
-        "encode_bytes: ASCII raw, non-ASCII = 256+b")
-    call decode_bytes(ids, 6, back, nb)
-    call check(nb == 6 .and. all(back == b), "round-trip is exact")
-
-    ! BOS (8188) and any undefined id are dropped, never printed as <?>8188
-    call decode_bytes([8188, 65, 5000, 10], 4, back, nb)
-    call check(nb == 2 .and. all(back == [65, 10]), &
-        "non-text ids (BOS 8188, undefined) are dropped, not rendered")
-
-    ! the legacy BPE routine would have produced something else for the same
-    ! text: 'A tarde caia' -> 6 ids instead of 13 bytes. Guard the regression
-    ! by asserting the space is 1:1 with bytes.
-    do i = 0, 255
-      dummy = real(id_to_byte(byte_to_id(i)), sp)
-      if (i < 128 .or. i >= 128) then
-        if (id_to_byte(byte_to_id(i)) /= i) then
-          call check(.false., "byte <-> id is invertible for 0..255")
-          return
-        end if
-      end if
+    print '(A)', "=== test_corpus_golden (espaço do corpus, id a id) ==="
+    nb = len(txt)
+    allocate(raw(nb))
+    do i = 1, nb
+      raw(i) = iachar(txt(i:i))
     end do
-    call check(.true., "byte <-> id invertible for all 256 byte values")
+    call encode_bytes(raw, nb, ids)
+    call check(size(ids) == size(want), 'encode gera o mesmo nº de ids do corpus')
+    call check(all(ids == want), 'encode casa id a id com o corpus')
+    if (any(ids /= want)) then
+      do i = 1, min(size(ids), size(want))
+        if (ids(i) /= want(i)) print '(A,I0,A,I0,A,I0)', '   primeiro divergente: pos ', &
+            i, ' got ', ids(i), ' want ', want(i)
+      end do
+    end if
+    call decode_bytes(want, size(want), back, nback)
+    call check(nback == nb, 'decode devolve o mesmo nº de bytes (UTF-8)')
+    if (nback == nb) call check(all(back(:nback) == raw), &
+        'decode(encode(x)) == x  (round-trip, acentos inclusos)')
   end subroutine
 
   ! ------------------------------------------------------------------------

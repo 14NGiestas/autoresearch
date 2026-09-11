@@ -295,20 +295,29 @@ contains
   end subroutine decode
 
   ! ------------------------------------------------------------------------
-  ! Byte-level space: the mapping the TRAINING CORPORA use (see
-  ! scripts/tokenize_corpus.py: "ASCII -> raw byte (0-127), non-ASCII -> 256+b
-  ! per UTF-8 byte, BOS 8188"), and therefore the space the model speaks.
+  ! Corpus space = the mapping the TRAINING CORPORA actually use, taken from
+  ! the rows themselves. It is NOT the byte rule I first assumed, and NOT what
+  ! scripts/tokenize_corpus.py says either -- three different rules existed:
   !
-  ! The BPE routines above (encode/decode over ranks.txt) are the legacy
-  ! tokenizer. Using them at inference was a REAL BUG: the prompt went in as
-  ! BPE ids (e.g. "A tarde caia" -> 6 ids instead of 13 bytes) so the model
-  ! never received a coherent prompt, and generated ids >= 256 were displayed
-  ! as BPE tokens (428 -> "home") and ids >= 8188 as "<?>8188". ASCII happened
-  ! to survive because ranks 0..127 are the single bytes in order, which is
-  ! exactly why the output looked half-right.
+  !   cp < 128          -> id = cp            (ASCII byte)
+  !   128 <= cp < 256   -> id = 256 + cp      ('a'-tilde -> 483, NOT 227)
+  !   cp >= 256         -> id = 256 + b for each UTF-8 byte of the char
   !
-  ! These routines need no tables and are their own inverse; a round-trip test
-  ! asserts that (test_byte_space).
+  ! Evidence, from 200 sampled rows of /tmp/prose: ZERO ids in 128..255, and
+  ! 2271 occurrences of 483 (= 256+227, 'a'-tilde -- the commonest accented
+  ! letter of Portuguese), plus 481/487/489/499/500 for acute-a, c-cedilla,
+  ! acute-e, acute-o, circumflex-o. Decoding with this rule gives readable text
+  ! ("em suas maos, ... De avos a netos"); UTF-8 accumulation gives mojibake.
+  ! The script's `ord(ch) < 256` rule would have emitted 227, so it never ran
+  ! on these corpora -- and the rows are the truth: they are what the model saw.
+  !
+  ! The consequence for inference is the third bug of this family: taking the
+  ! terminal's UTF-8 bytes raw (as we did) turns 'a'-tilde (C3 A3) into ids
+  ! 451/419 instead of 483, and emitting raw latin-1 bytes on the way out made
+  ! accents unreadable on a UTF-8 terminal. Both directions are fixed here.
+  !
+  ! The BPE routines above remain the legacy tokenizer: using them at inference
+  ! was the original bug (prompt in as 6 BPE ids instead of 13 bytes).
   integer function byte_to_id(b)
     integer, intent(in) :: b
     if (b < 128) then
@@ -318,7 +327,25 @@ contains
     end if
   end function byte_to_id
 
-  ! -1 = not a byte-level id (BOS and anything else are not text)
+  ! UTF-8 bytes of a codepoint, for turning ids back into terminal-ready text.
+  subroutine utf8_of_cp(cp, buf, nb)
+    integer, intent(in) :: cp
+    integer, intent(out) :: buf(4), nb
+    if (cp < 128) then
+      nb = 1; buf(1) = cp
+    else if (cp < 2048) then
+      nb = 2; buf(1) = 192 + cp / 64; buf(2) = 128 + mod(cp, 64)
+    else if (cp < 65536) then
+      nb = 3; buf(1) = 224 + cp / 4096
+      buf(2) = 128 + mod(cp / 64, 64); buf(3) = 128 + mod(cp, 64)
+    else
+      nb = 4; buf(1) = 240 + cp / 262144
+      buf(2) = 128 + mod(cp / 4096, 64); buf(3) = 128 + mod(cp / 64, 64)
+      buf(4) = 128 + mod(cp, 64)
+    end if
+  end subroutine utf8_of_cp
+
+  ! -1 = not a text id (BOS 8188 and anything undefined are not text)
   integer function id_to_byte(i)
     integer, intent(in) :: i
     if (i >= 0 .and. i < 128) then
@@ -330,36 +357,111 @@ contains
     end if
   end function id_to_byte
 
+  ! Text (UTF-8 bytes) -> corpus ids. One id per ASCII byte, but for non-ASCII
+  ! the CODEPOINT decides: below 256 it becomes 256+cp (one id), at or above it
+  ! it becomes one id per UTF-8 byte (256+b). That asymmetry is the corpus's,
+  ! not ours -- it is what the books produced when they were tokenized.
   subroutine encode_bytes(bytes, n, ids)
     integer, intent(in) :: bytes(:), n
     integer, allocatable, intent(out) :: ids(:)
-    integer :: i
-    allocate(ids(n))
-    do i = 1, n
-      ids(i) = byte_to_id(bytes(i))
+    integer, allocatable :: tmp(:)
+    integer :: pos, cp, nb, k, m
+    allocate(tmp(4 * n + 8))
+    m = 0
+    pos = 1
+    do while (pos <= n)
+      call codepoint_at(bytes, n, pos, cp, nb)
+      if (cp < 128) then
+        m = m + 1; tmp(m) = cp
+      else if (cp < 256) then
+        m = m + 1; tmp(m) = 256 + cp
+      else
+        do k = 1, nb
+          m = m + 1; tmp(m) = 256 + bytes(pos + k - 1)
+        end do
+      end if
+      pos = pos + nb
     end do
+    allocate(ids(m))
+    if (m > 0) ids = tmp(:m)
   end subroutine encode_bytes
 
-  ! Decodes byte-level ids to bytes, SILENTLY DROPPING non-text ids (BOS 8188
-  ! and anything undefined) instead of printing "<?>N" into the user's face.
+  ! Corpus ids -> UTF-8 bytes for display. Drops non-text ids (no more "<?>N").
+  ! An id in 256..511 is a codepoint (id-256) by the rule above; but when a run
+  ! of such ids forms a VALID UTF-8 sequence whose codepoint is >= 256, that is
+  ! what it must have been (a character like an em dash, whose UTF-8 bytes were
+  ! stored as 256+b) and we reassemble it -- otherwise "--" style punctuation
+  ! would print as mojibake. Accented letters never trigger this: a lone
+  ! 256..511 id decodes to a codepoint < 256, which is the common case.
   subroutine decode_bytes(ids, nids, bytes, nbytes)
     integer, intent(in) :: ids(:), nids
     integer, allocatable, intent(out) :: bytes(:)
     integer, intent(out) :: nbytes
-    integer :: i, b
+    integer :: i, b, cp, k, need, j, ok, buf(4), nb
+    integer :: seq(4)
+    allocate(bytes(4 * nids + 8))
     nbytes = 0
-    do i = 1, nids
-      if (id_to_byte(ids(i)) >= 0) nbytes = nbytes + 1
-    end do
-    allocate(bytes(nbytes))
-    nbytes = 0
-    do i = 1, nids
+    i = 1
+    do while (i <= nids)
       b = id_to_byte(ids(i))
-      if (b >= 0) then
-        nbytes = nbytes + 1
-        bytes(nbytes) = b
+      if (b < 0) then
+        i = i + 1
+        cycle
       end if
+      if (ids(i) < 128) then
+        nbytes = nbytes + 1; bytes(nbytes) = b
+        i = i + 1
+        cycle
+      end if
+      ! try to reassemble a multi-byte character from following 256..511 ids
+      if (b >= 194 .and. b <= 244) then
+        if (b < 224) then; need = 1
+        else if (b < 240) then; need = 2
+        else; need = 3
+        end if
+        ok = 0
+        if (i + need <= nids) then
+          seq(1) = b
+          ok = 1
+          do j = 1, need
+            if (ids(i + j) < 256 .or. ids(i + j) >= 512) then
+              ok = 0
+              exit
+            end if
+            seq(j + 1) = ids(i + j) - 256
+            if (seq(j + 1) < 128 .or. seq(j + 1) > 191) then
+              ok = 0
+              exit
+            end if
+          end do
+        end if
+        if (ok == 1) then
+          if (need == 1) then
+            cp = mod(seq(1), 32) * 64 + mod(seq(2), 64)
+          else if (need == 2) then
+            cp = mod(seq(1), 16) * 4096 + mod(seq(2), 64) * 64 + mod(seq(3), 64)
+          else
+            cp = mod(seq(1), 8) * 262144 + mod(seq(2), 64) * 4096 + &
+                mod(seq(3), 64) * 64 + mod(seq(4), 64)
+          end if
+          if (cp >= 256) then
+            call utf8_of_cp(cp, buf, nb)
+            do k = 1, nb
+              nbytes = nbytes + 1; bytes(nbytes) = buf(k)
+            end do
+            i = i + need + 1
+            cycle
+          end if
+        end if
+      end if
+      ! plain single codepoint 256..511 -> UTF-8 (so accents reach the terminal)
+      call utf8_of_cp(b, buf, nb)
+      do k = 1, nb
+        nbytes = nbytes + 1; bytes(nbytes) = buf(k)
+      end do
+      i = i + 1
     end do
+    bytes = bytes(:nbytes)
   end subroutine decode_bytes
 
 end module tokenizer_encode_mod

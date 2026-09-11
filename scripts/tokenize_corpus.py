@@ -28,8 +28,14 @@ class CanonicalEncoder:
     def encode(self, text):
         ids = []
         for ch in text:
-            if ord(ch) < 256:
+            if ord(ch) < 128:
                 ids.append(ord(ch))
+            elif ord(ch) < 256:
+                # 256+cp, NOT cp: the corpora on disk prove it (0 ids in
+                # 128..255, 2271 hits on 483 = 256+227 for a-tilde). This rule
+                # was wrong here and disagreed with every corpus ever built
+                # from this script's siblings; the rows are the truth.
+                ids.append(256 + ord(ch))
             else:
                 for b in ch.encode("utf-8"):
                     ids.append(256 + b)
