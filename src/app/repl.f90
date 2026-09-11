@@ -282,7 +282,7 @@ program repl
             nhist = pp + jj - 1 - nprompt
             targ(jj) = sample_next(outspec((jj-1)*VV+1:jj*VV), VV, temp, &
                 topp, pres, freq, rep, pwin, plen, idx(nprompt+1:), nhist, &
-                nblock, rng) - 1
+                nblock, rng, byte_space=.true.) - 1
             if (jj <= keff) then
               if (draft(jj) /= targ(jj)) exit
               na = na + 1
@@ -322,7 +322,7 @@ program repl
             call exit(1)
           end if
           best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &
-              idx(nprompt+1:), pp - nprompt, nblock, rng)
+              idx(nprompt+1:), pp - nprompt, nblock, rng, byte_space=.true.)
           idx(pp + 1) = best - 1
           if (dostream) then
             call decode_bytes(idx(pp+1:pp+1), 1, sbytes, snbytes)
@@ -379,7 +379,7 @@ program repl
           call exit(1)
         end if
         best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &
-            idx(nprompt+1:), tc - nprompt, nblock, rng)
+            idx(nprompt+1:), tc - nprompt, nblock, rng, byte_space=.true.)
         idx(tc+1) = best - 1
         if (dostream) then
           call decode_bytes(idx(tc+1:tc+1), 1, sbytes, snbytes)

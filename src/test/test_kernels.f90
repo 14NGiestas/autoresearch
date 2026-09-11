@@ -61,6 +61,7 @@ program test_kernels
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
   call test_byte_space()
+  call test_valid_mask()
   call test_gpt_forward_shape()
   call test_recurrent_equiv()
   call test_recurrent_loops()
@@ -736,6 +737,55 @@ contains
     print '(A,E10.3,A,I0)', "  max err = ", max_err, "  cache_len=", clen
     call check(clen == TC, "cache holds all positions")
     call check(max_err < 1.0e-6_sp, "cached steps == full forward")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! apply_byte_mask / sample_next(byte_space=): the model can emit ~7800 ids
+  ! that no corpus ever used (only 4 of 8192 have zero byte-length). With the
+  ! mask, an id outside the byte space must be unreachable even when it is the
+  ! argmax of the raw logits.
+  subroutine test_valid_mask()
+    use sample_mod, only: sample_next, apply_byte_mask
+    integer, parameter :: V = 8192, NG = 1
+    real(sp) :: lg(V), work(V)
+    integer :: gen(NG)
+    integer(c_int64_t) :: st
+    integer :: i, tok
+
+    print '(A)', "=== test_valid_mask (id válido no espaço byte-level) ==="
+    lg = 1.0_sp
+    gen(1) = 1
+    st = 42_c_int64_t
+    ! 5000 is outside the byte space: unmasked it wins, masked it must not
+    lg(5001) = 100.0_sp
+    tok = sample_next(lg, V, 0.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, 0, &
+        0.0_sp, gen, NG, 0, st)
+    call check(tok == 5001, "sem máscara: id inválido (5000) é amostrado")
+
+    work = lg
+    call apply_byte_mask(work, V)
+    st = 42_c_int64_t
+    tok = sample_next(work, V, 0.0_sp, 1.0_sp, 0.0_sp, 0.0_sp, 1.0_sp, 0, &
+        0.0_sp, gen, NG, 0, st)
+    call check(tok /= 5001 .and. ((tok - 1) < 128 .or. &
+        ((tok - 1) >= 256 .and. (tok - 1) < 512)), &
+        "com máscara: id inválido é inalcançável")
+
+    ! and the mask must not touch the text ids themselves
+    work = lg
+    work(5001) = 1.0_sp
+    call apply_byte_mask(work, V)
+    do i = 1, 128
+      if (work(i) /= 1.0_sp) then
+        call check(.false., "máscara preserva todos os ids ASCII")
+        return
+      end if
+    end do
+    ! work(i) holds id i-1, so the byte space is indices 1..128 and 257..512
+    call check(work(1) == 1.0_sp .and. work(128) == 1.0_sp .and. &
+        work(257) == 1.0_sp .and. work(512) == 1.0_sp .and. &
+        work(129) < -1.0e30_sp .and. work(513) < -1.0e30_sp, &
+        "máscara: fronteiras exatas (0-127 e 256-511 válidos)")
   end subroutine
 
   ! ------------------------------------------------------------------------

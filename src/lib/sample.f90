@@ -131,12 +131,36 @@ contains
 
   ! Full pipeline: penalties (windowed or full) -> rep -> blocking -> temp/top-p.
   ! gen holds previously generated 0-based ids (ngen may be 0).
+  ! Structural valid-id mask for the byte-level space the model is trained in:
+  ! ids 0..127 (ASCII bytes) and 256..511 (non-ASCII UTF-8 bytes) are text.
+  ! Everything else -- including the ~7800 vocabulary ranks our corpora never
+  ! use (only 4 of 8192 ids have a zero byte-length) -- is unreachable in
+  ! training, so sampling it is pure noise. This is where the '<?>8188' and
+  ! stray non-text characters came from; decode_bytes now drops such ids, and
+  ! this stops them being generated at all.
+  subroutine apply_byte_mask(logits, V)
+    integer, intent(in) :: V
+    real(wp), intent(inout) :: logits(:)
+    integer :: i, id
+    do i = 1, V
+      id = i - 1
+      if (.not. (id < 128 .or. (id >= 256 .and. id < 512))) then
+        logits(i) = -huge(1.0_wp)
+      end if
+    end do
+  end subroutine apply_byte_mask
+
   integer function sample_next(logits, V, temp, topp, pres, freq, rep, pwin, plen, &
-      gen, ngen, nblock, state)
+      gen, ngen, nblock, state, byte_space)
     integer, intent(in) :: V, ngen, nblock, pwin
     real(wp), intent(in) :: logits(:), temp, topp, pres, freq, rep, plen
     integer, intent(in) :: gen(:)
     integer(c_int64_t), intent(inout) :: state
+    ! Optional: restrict sampling to the byte-level text ids (see above).
+    ! Training never samples (it consumes corpus targets), so this only
+    ! affects generation -- and it is opt-in so the trainer's val path and any
+    ! historical reproduction are untouched.
+    logical, intent(in), optional :: byte_space
     real(wp) :: work(V)
     work = logits
     if (pwin > 0) then
@@ -147,6 +171,9 @@ contains
     end if
     if (rep > 1.0_wp) call apply_rep_penalty(work, V, gen, ngen, rep)
     if (nblock >= 2) call block_ngram(work, V, gen, ngen, nblock)
+    if (present(byte_space)) then
+      if (byte_space) call apply_byte_mask(work, V)
+    end if
     sample_next = sample_top_p(work, V, temp, topp, state)
   end function sample_next
 
