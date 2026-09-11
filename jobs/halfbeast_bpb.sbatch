@@ -25,13 +25,26 @@ CHAT="$EV/portable/run_chat.sh"
 bpb_of() {   # bpb_of <ckpt> <rows-file> <nrows>
     local ck="$1" rows="$2" n="$3"
     [ -x "$EV/portable/bin/eval_bpb" ] || return 1
+    # stderr goes to the job log, not /dev/null: a silent failure here cost a
+    # whole 30-minute job (missing aggregator, hidden by 2>/dev/null)
     "$EV/portable/run_eval_bpb.sh" --weights "$EV/$ck" --rows "$rows" \
-        > "/tmp/bpb_${ck}_$(basename "$rows")" 2>/dev/null
+        > "/tmp/bpb_${ck}_$(basename "$rows")" || {
+        echo "  (eval_bpb failed for $ck -- see job log)"
+        return 1
+    }
     python3 scripts/bpb_from_eval.py "/tmp/bpb_${ck}_$(basename "$rows")" "$rows" "$TB" "$n"
 }
 
 echo "=== held-out-book bpb | host $(hostname) | job $SLURM_JOB_ID | $(date '+%F %H:%M')"
 echo "    rows=$ROWS (60 rows of books never trained)"
+
+# Fail fast: the aggregator lives in scripts/, which is easy to forget when
+# syncing jobs/ only -- a run that burns 20 min of eval_bpb and THEN cannot
+# aggregate is pure waste (happened in job 6000).
+[ -f scripts/bpb_from_eval.py ] || {
+    echo "FATAL: scripts/bpb_from_eval.py is not on this box -- rsync scripts/ (not just jobs/) first"
+    exit 1
+}
 for spec in "$@"; do
     ck="${spec%%:*}"
     lbl="${spec##*:}"
