@@ -341,3 +341,34 @@ Leituras:
 - Para crescer: 25M pede 1,3 GB de texto (~3.100 livros) e 2 dias; 50M pede 2,5 GB
   (~6.200 livros) e 9 dias; 100M pede 5 GB (~12.500 livros) e 35 dias. Gutenberg PT
   sozinho provavelmente não cobre isso; web.archive pode.
+
+## Avaliação de fonte de dados: Stack Exchange Data Dump (academictorrents 745b43ba…)
+
+O que é: dump de 732 sites do Stack Exchange (2024-09-30), ~97 GB comprimidos em
+.7z, CC-BY-SA, espelhado do archive.org, distribuído por torrent (sem scraping,
+sem rate limit). Conteúdo: perguntas/respostas editadas e curadas -- altíssima
+qualidade, e inclui código (stackoverflow.com sozinho = 68 GB).
+
+Veredito: **ótimo corpus, gênero e idioma errados para o nosso alvo.**
+- Volume: precisamos de 1,3 GB de texto para 25M params e 2,5 GB para 50M
+  (planner). Este dump tem 97 GB comprimidos (centenas de GB extraídos): ~30-100x
+  MAIS do que o nosso compute consegue consumir. Baixar 97 GB para treinar 1-3 GB
+  é gastar dias movendo dado que não dá para treinar (35 dias por 100M params).
+  O gargalo é COMPUTE, não disponibilidade de dado.
+- Gênero: Q&A técnico, não prosa narrativa. Empurraria o modelo para o dialeto de
+  fórum, justamente o que a fase de prosa tenta construir.
+- Idioma: inglês dominante. O slice PT existe (pt.stackoverflow.com é site próprio,
+  provavelmente ~1-2 GB; e portuguese.stackexchange.com é pequeno) -- é português
+  técnico contemporâneo, útil como tempero lexical moderno contra o português
+  oitocentista dos livros, mas não como base.
+- Licença: CC-BY-SA (share-alike), ao contrário do domínio público do Gutenberg --
+  consideração real se um dia distribuirmos o modelo.
+
+Quando ele vira a escolha certa: (a) se ganharmos compute (GPU/mais boxes) e o
+modelo alvo subir para 300M+; (b) se pivotarmos para um modelo de CÓDIGO/técnico,
+onde os 68 GB do SO são exatamente o combustível e o volume passa a ser vantagem.
+Barato de adotar depois: torrent permite baixar só arquivos selecionados.
+
+Ordem de valor para o nosso objetivo (prosa PT): Gutenberg PT (domínio público,
+nosso gênero exato) > web.archive PT (moderno, volume grande) > SE (tempero/PT
+técnico, ou pivô para código).
