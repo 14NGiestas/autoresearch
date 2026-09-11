@@ -196,7 +196,7 @@ program chat_text
     end block
   end if
 
-  call encode(pbytes, fsize, pids)
+  call encode_bytes(pbytes, fsize, pids)
   nprompt = size(pids) + 1
   allocate(idx(nprompt + n_gen))
   idx(1) = BOS
@@ -328,7 +328,7 @@ program chat_text
         if (na > 0) idx(pp+1:pp+na) = draft(1:na)
         idx(pp + na + 1) = corr
         if (dostream) then
-          call decode(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
+          call decode_bytes(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
           do i = 1, snbytes
             write (*, '(A)', advance='no') char(sbytes(i))
           end do
@@ -356,7 +356,7 @@ program chat_text
             idx(nprompt+1:), pp - nprompt, nblock, rng)
         idx(pp + 1) = best - 1
         if (dostream) then
-          call decode(idx(pp+1:pp+1), 1, sbytes, snbytes)
+          call decode_bytes(idx(pp+1:pp+1), 1, sbytes, snbytes)
           do i = 1, snbytes
             write (*, '(A)', advance='no') char(sbytes(i))
           end do
@@ -421,7 +421,7 @@ program chat_text
           idx(nprompt+1:), tc - nprompt, nblock, rng)
       idx(tc+1) = best - 1
       if (dostream) then
-        call decode(idx(tc+1:tc+1), 1, sbytes, snbytes)
+        call decode_bytes(idx(tc+1:tc+1), 1, sbytes, snbytes)
         do i = 1, snbytes
           write (*, '(A)', advance='no') char(sbytes(i))
         end do
@@ -443,7 +443,7 @@ program chat_text
   if (dostream) then
     write (*, '(A)') ""
   else
-    call decode(idx(nprompt+1:), n_gen, obytes, nbytes)
+    call decode_bytes(idx(nprompt+1:), n_gen, obytes, nbytes)
     ! stop-sequence truncation (only for non-streaming; streaming already flushed)
     if (specified('stop')) then
       stop_raw = trim(sget('stop'))

@@ -294,4 +294,72 @@ contains
     end do
   end subroutine decode
 
+  ! ------------------------------------------------------------------------
+  ! Byte-level space: the mapping the TRAINING CORPORA use (see
+  ! scripts/tokenize_corpus.py: "ASCII -> raw byte (0-127), non-ASCII -> 256+b
+  ! per UTF-8 byte, BOS 8188"), and therefore the space the model speaks.
+  !
+  ! The BPE routines above (encode/decode over ranks.txt) are the legacy
+  ! tokenizer. Using them at inference was a REAL BUG: the prompt went in as
+  ! BPE ids (e.g. "A tarde caia" -> 6 ids instead of 13 bytes) so the model
+  ! never received a coherent prompt, and generated ids >= 256 were displayed
+  ! as BPE tokens (428 -> "home") and ids >= 8188 as "<?>8188". ASCII happened
+  ! to survive because ranks 0..127 are the single bytes in order, which is
+  ! exactly why the output looked half-right.
+  !
+  ! These routines need no tables and are their own inverse; a round-trip test
+  ! asserts that (test_byte_space).
+  integer function byte_to_id(b)
+    integer, intent(in) :: b
+    if (b < 128) then
+      byte_to_id = b
+    else
+      byte_to_id = 256 + b
+    end if
+  end function byte_to_id
+
+  ! -1 = not a byte-level id (BOS and anything else are not text)
+  integer function id_to_byte(i)
+    integer, intent(in) :: i
+    if (i >= 0 .and. i < 128) then
+      id_to_byte = i
+    else if (i >= 256 .and. i < 512) then
+      id_to_byte = i - 256
+    else
+      id_to_byte = -1
+    end if
+  end function id_to_byte
+
+  subroutine encode_bytes(bytes, n, ids)
+    integer, intent(in) :: bytes(:), n
+    integer, allocatable, intent(out) :: ids(:)
+    integer :: i
+    allocate(ids(n))
+    do i = 1, n
+      ids(i) = byte_to_id(bytes(i))
+    end do
+  end subroutine encode_bytes
+
+  ! Decodes byte-level ids to bytes, SILENTLY DROPPING non-text ids (BOS 8188
+  ! and anything undefined) instead of printing "<?>N" into the user's face.
+  subroutine decode_bytes(ids, nids, bytes, nbytes)
+    integer, intent(in) :: ids(:), nids
+    integer, allocatable, intent(out) :: bytes(:)
+    integer, intent(out) :: nbytes
+    integer :: i, b
+    nbytes = 0
+    do i = 1, nids
+      if (id_to_byte(ids(i)) >= 0) nbytes = nbytes + 1
+    end do
+    allocate(bytes(nbytes))
+    nbytes = 0
+    do i = 1, nids
+      b = id_to_byte(ids(i))
+      if (b >= 0) then
+        nbytes = nbytes + 1
+        bytes(nbytes) = b
+      end if
+    end do
+  end subroutine decode_bytes
+
 end module tokenizer_encode_mod

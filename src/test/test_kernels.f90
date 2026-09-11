@@ -60,6 +60,7 @@ program test_kernels
   call test_causal_attn_doc()
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
+  call test_byte_space()
   call test_gpt_forward_shape()
   call test_recurrent_equiv()
   call test_recurrent_loops()
@@ -735,6 +736,49 @@ contains
     print '(A,E10.3,A,I0)', "  max err = ", max_err, "  cache_len=", clen
     call check(clen == TC, "cache holds all positions")
     call check(max_err < 1.0e-6_sp, "cached steps == full forward")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! byte-space mapping (encode_bytes/decode_bytes): the model's real id space
+  ! is byte-level (corpora are built that way), while the legacy BPE
+  ! encode/decode over ranks.txt was used at inference until now -- which is
+  ! why prompts arrived as nonsense and why ids >= 256 printed as BPE tokens
+  ! ('home') and >= 8188 as '<?>8188'. ASCII survived by accident (ranks 0..127
+  ! are the single bytes in order), which made the output look half-right.
+  subroutine test_byte_space()
+    use tokenizer_encode_mod, only: byte_to_id, id_to_byte, encode_bytes, &
+        decode_bytes
+    integer :: b(6), i
+    integer, allocatable :: ids(:), back(:)
+    integer :: nb
+    real(sp) :: dummy
+
+    print '(A)', "=== test_byte_space (treino byte-level vs BPE legado) ==="
+    b = [65, 32, 195, 173, 10, 97]        ! 'A', ' ', UTF-8 for 'i-acute', LF, 'a'
+    call encode_bytes(b, 6, ids)
+    call check(all(ids == [65, 32, 256+195, 256+173, 10, 97]), &
+        "encode_bytes: ASCII raw, non-ASCII = 256+b")
+    call decode_bytes(ids, 6, back, nb)
+    call check(nb == 6 .and. all(back == b), "round-trip is exact")
+
+    ! BOS (8188) and any undefined id are dropped, never printed as <?>8188
+    call decode_bytes([8188, 65, 5000, 10], 4, back, nb)
+    call check(nb == 2 .and. all(back == [65, 10]), &
+        "non-text ids (BOS 8188, undefined) are dropped, not rendered")
+
+    ! the legacy BPE routine would have produced something else for the same
+    ! text: 'A tarde caia' -> 6 ids instead of 13 bytes. Guard the regression
+    ! by asserting the space is 1:1 with bytes.
+    do i = 0, 255
+      dummy = real(id_to_byte(byte_to_id(i)), sp)
+      if (i < 128 .or. i >= 128) then
+        if (id_to_byte(byte_to_id(i)) /= i) then
+          call check(.false., "byte <-> id is invertible for 0..255")
+          return
+        end if
+      end if
+    end do
+    call check(.true., "byte <-> id invertible for all 256 byte values")
   end subroutine
 
   ! ------------------------------------------------------------------------

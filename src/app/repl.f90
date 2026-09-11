@@ -171,7 +171,7 @@ program repl
       end block
     end if
 
-    call encode(pbytes, nlen, pids)
+    call encode_bytes(pbytes, nlen, pids)
     deallocate(pbytes)
     nprompt = size(pids) + 1
     ntot = nprompt + n_gen
@@ -297,7 +297,7 @@ program repl
           if (na > 0) idx(pp+1:pp+na) = draft(1:na)
           idx(pp + na + 1) = corr
           if (dostream) then
-            call decode(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
+            call decode_bytes(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
             do j = 1, snbytes
               write (*, '(A)', advance='no') char(sbytes(j))
             end do
@@ -325,7 +325,7 @@ program repl
               idx(nprompt+1:), pp - nprompt, nblock, rng)
           idx(pp + 1) = best - 1
           if (dostream) then
-            call decode(idx(pp+1:pp+1), 1, sbytes, snbytes)
+            call decode_bytes(idx(pp+1:pp+1), 1, sbytes, snbytes)
             do j = 1, snbytes
               write (*, '(A)', advance='no') char(sbytes(j))
             end do
@@ -382,7 +382,7 @@ program repl
             idx(nprompt+1:), tc - nprompt, nblock, rng)
         idx(tc+1) = best - 1
         if (dostream) then
-          call decode(idx(tc+1:tc+1), 1, sbytes, snbytes)
+          call decode_bytes(idx(tc+1:tc+1), 1, sbytes, snbytes)
           do j = 1, snbytes
             write (*, '(A)', advance='no') char(sbytes(j))
           end do
@@ -404,7 +404,7 @@ program repl
       write (*, '(A)') ""
       deallocate(idx)
     else
-      call decode(idx(nprompt+1:), n_gen, obytes, nbytes)
+      call decode_bytes(idx(nprompt+1:), n_gen, obytes, nbytes)
       if (specified('stop')) then
         stop_raw = trim(sget('stop'))
       else
