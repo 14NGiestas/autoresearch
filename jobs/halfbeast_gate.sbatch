@@ -13,25 +13,25 @@
 # so the comparison is like-for-like: same binary (portable bundle), same
 # thread count (10 = physical cores), same prompts/seeds.
 #
-# n=64, not 24: at 24 tokens the mid-training model emits 2-5 words and the
-# prose novelty metric is meaningless.
+# Token budgets: the box is idle, so spend it where length buys signal.
+#   core/residue/chat/security/multilingual at N (default 64) -- these answer
+#     in a handful of tokens; more is just padding
+#   prose at NP (default 256) -- coherence and the novelty metric need real
+#     text; at 24 tokens the model emitted 2-5 words and the metric said
+#     nothing
 #
-# Falsifiable claims (hyp_1fbfd5 / hyp_5ca396):
-#   * prose + multilingual improve over A        -> PROSE-PT gains
-#   * core does NOT fall below A                 -> no extra forgetting
-#   * if core is still degraded, the repair is a MIXED phase, not the order
-#
-# Usage: sbatch jobs/halfbeast_gate.sbatch [A] [B] [n]
+# Usage: sbatch jobs/halfbeast_gate.sbatch [A] [B] [N] [NP]
 set -u
 A="${1:-step_1000}"
 B="${2:-best}"
 NN="${3:-64}"
+NP="${4:-256}"
 EV="$HOME/autoresearch-eval"
 export OMP_NUM_THREADS=10 OPENBLAS_NUM_THREADS=10
 cd "$EV/autoresearch" || exit 1
 
 echo "=== prose gate | host $(hostname) | job $SLURM_JOB_ID | $(date '+%F %H:%M')"
-echo "    A=$A  B=$B  n=$NN  threads=$OMP_NUM_THREADS"
+echo "    A=$A  B=$B  n=$NN (short batteries)  n=$NP (prose)  threads=$OMP_NUM_THREADS"
 
 run_ck() {
     local ck="$1" tag="$2"
@@ -41,8 +41,17 @@ run_ck() {
     fi
     echo "--- running $tag ($ck)"
     bin/eval_infer.sh --weights "$EV/$ck" --tables "$EV/tok_tables" \
-        --chat "$EV/portable/run_chat.sh" --only all --n "$NN" \
+        --chat "$EV/portable/run_chat.sh" --only core --n "$NN" \
         --label "halfbeast $ck $(date '+%F_%H:%M')" > "$EV/gate_$tag.txt" 2>&1
+    for b in residue chat security multilingual; do
+        bin/eval_infer.sh --weights "$EV/$ck" --tables "$EV/tok_tables" \
+            --chat "$EV/portable/run_chat.sh" --only "$b" --n "$NN" \
+            --label "halfbeast $ck $(date '+%F_%H:%M')" >> "$EV/gate_$tag.txt" 2>&1
+    done
+    bin/eval_infer.sh --weights "$EV/$ck" --tables "$EV/tok_tables" \
+        --chat "$EV/portable/run_chat.sh" --only prose --n "$NP" \
+        --label "halfbeast $ck $(date '+%F_%H:%M')" > "$EV/gate_${tag}_prose.txt" 2>&1
+    cat "$EV/gate_${tag}_prose.txt" >> "$EV/gate_$tag.txt"
     echo "    $(grep -c '^=== ' "$EV/gate_$tag.txt") cases -> $EV/gate_$tag.txt"
 }
 
