@@ -32,7 +32,7 @@ program test_kernels
   use fortran_rmsnorm_mod, only: rmsnorm, rmsnorm0
   use fortran_rope_mod, only: rope_4d
   use fortran_attn_mod, only: causal_attn, relu2, relu2_bwd, attn_bwd, &
-      attn_chunk, attn_step, causal_attn_doc
+      attn_chunk, attn_step, causal_attn_doc, attn_sgemm
   use fortran_backward_mod, only: linear3d_bwd, rmsnorm0_bwd, rope_4d_bwd, &
       xent_fwd, xent_bwd, wte_bwd
   use fortran_adamw_mod, only: adamw_step
@@ -58,6 +58,7 @@ program test_kernels
   call test_causal_attn()
   call test_causal_attn_gqa()
   call test_causal_attn_doc()
+  call test_attn_sgemm()
   call test_gpt_forward_shape()
   call test_recurrent_equiv()
   call test_recurrent_loops()
@@ -733,6 +734,49 @@ contains
     print '(A,E10.3,A,I0)', "  max err = ", max_err, "  cache_len=", clen
     call check(clen == TC, "cache holds all positions")
     call check(max_err < 1.0e-6_sp, "cached steps == full forward")
+  end subroutine
+
+  ! ------------------------------------------------------------------------
+  ! attn_sgemm: BLAS attention must reproduce causal_attn. Different summation
+  ! order, so a tolerance rather than bit equality -- but it also has to hold
+  ! for the GQA case (H != K_H), which is where a layout mistake would hide.
+  subroutine test_attn_sgemm()
+    integer, parameter :: B = 1, T = 6, H = 4, KH = 2, D = 4
+    real(sp) :: q(B*T*H*D), k(B*T*KH*D), v(B*T*KH*D)
+    real(sp) :: yref(B*T*H*D), yblas(B*T*H*D)
+    real(sp) :: S(T*T)
+    real(sp) :: max_err, e
+    integer :: i, rep
+
+    print '(A)', "=== test_attn_sgemm (BLAS attention vs causal_attn) ==="
+    call fill(q, B*T*H*D)
+    call fill(k, B*T*KH*D)
+    call fill(v, B*T*KH*D)
+    call causal_attn(q, k, v, yref, B, T, H, KH, D)
+    S = 0.0_sp
+    call attn_sgemm(q, k, v, yblas, B, T, H, KH, D, S)
+    max_err = 0.0_sp
+    do i = 1, B*T*H*D
+      e = abs(yref(i) - yblas(i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3,A,I0)', "  max err (GQA H=4 K_H=2) = ", max_err, &
+        "  T=", T
+    call check(max_err < 1.0e-5_sp, "sgemm attention == causal_attn (GQA)")
+
+    ! MHA case (rep = 1) as well: no head sharing, so the kv stride is the
+    ! tight one and an lda mistake shows up here.
+    rep = 2
+    call fill(q, B*T*(KH*rep)*D)
+    call causal_attn(q, k, v, yref, B, T, KH*rep, KH, D)
+    call attn_sgemm(q, k, v, yblas, B, T, KH*rep, KH, D, S)
+    max_err = 0.0_sp
+    do i = 1, B*T*(KH*rep)*D
+      e = abs(yref(i) - yblas(i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err (no GQA sharing) = ", max_err
+    call check(max_err < 1.0e-5_sp, "sgemm attention == causal_attn (1:1)")
   end subroutine
 
   ! ------------------------------------------------------------------------

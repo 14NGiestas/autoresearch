@@ -17,6 +17,7 @@
 module fortran_attn_mod
   use iso_c_binding
   use fortran_kinds_mod, only: wp
+  use fortran_blas_mod, only: sgemm
   implicit none
 contains
 
@@ -122,6 +123,75 @@ contains
     end do
     !$omp end parallel do
   end subroutine causal_attn_doc
+
+  ! BLAS-backed causal attention (forward). Same math as causal_attn, but both
+  ! matmuls go through sgemm instead of hand-written loops. Motivation,
+  ! measured on this codebase: the naive kernels run at ~6 GFLOP/s where sgemm
+  ! reaches ~50+, and attention is ~30% of a training step's flops (155 GFLOP
+  ! forward + 309 backward at B=1,T=2048,L=12) while being the dominant cost of
+  ! eval_bpb (a 60-row bpb pass takes ~20 min per checkpoint). The linears were
+  ! already BLAS; this is the same fix the chunked prefill applied (11.8x).
+  !
+  ! Layout note (same trick as linear3d_sgemm): our buffers are row-major, so a
+  ! row-major (T,D) buffer IS the column-major matrix (D,T). Therefore
+  !   S = Q K^T  is computed as  S^T = K Q^T  ->  sgemm('T','N', T,T,D, K, Q)
+  ! and the resulting row-major S(i,j) is exactly score(query i, key j).
+  !   Y = P V    is computed as  Y^T = V^T P^T  ->  sgemm('N','N', D,T,T, V, P)
+  ! Per (batch, head): S is a (T,T) scratch the caller owns and we reuse.
+  ! Summation order differs from causal_attn, so expect ~1e-6 drift, not bit
+  ! equality (asserted in test_attn_sgemm).
+  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S)
+    integer(c_int), intent(in) :: B, T, H, K_H, D
+    real(wp), intent(in)  :: q(:), k(:), v(:)
+    real(wp), intent(out) :: y(:)
+    real(wp), intent(inout) :: S(:)          ! (T,T) scratch
+    integer :: aa, bb, kb, rep, ii, jj
+    integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
+    real(wp) :: scale, mx, sm, inv
+
+    scale = 1.0_wp / sqrt(real(D, wp))
+    rep = H / K_H
+
+    do aa = 1, B
+      do bb = 1, H
+        kb = (bb - 1) / rep + 1
+        ! ---- S = Q K^T (scaled), one sgemm per (batch, head) ----
+        m = int(T, c_int64_t); n = int(T, c_int64_t); kk = int(D, c_int64_t)
+        lda = int(K_H*D, c_int64_t); ldb = int(H*D, c_int64_t)
+        ldc = int(T, c_int64_t)
+        call sgemm('T', 'N', m, n, kk, scale, &
+             k((aa-1)*T*K_H*D + (kb-1)*D + 1:), lda, &
+             q((aa-1)*T*H*D + (bb-1)*D + 1:), ldb, &
+             0.0_wp, S, ldc)
+        ! ---- causal mask + softmax, row by row ----
+        do ii = 1, T
+          mx = -huge(1.0_wp)
+          do jj = 1, ii
+            if (S((ii-1)*T + jj) > mx) mx = S((ii-1)*T + jj)
+          end do
+          sm = 0.0_wp
+          do jj = 1, ii
+            S((ii-1)*T + jj) = exp(S((ii-1)*T + jj) - mx)
+            sm = sm + S((ii-1)*T + jj)
+          end do
+          inv = 1.0_wp / sm
+          do jj = 1, ii
+            S((ii-1)*T + jj) = S((ii-1)*T + jj) * inv
+          end do
+          do jj = ii + 1, T
+            S((ii-1)*T + jj) = 0.0_wp
+          end do
+        end do
+        ! ---- Y = P V ----
+        m = int(D, c_int64_t); n = int(T, c_int64_t); kk = int(T, c_int64_t)
+        lda = int(K_H*D, c_int64_t); ldb = int(T, c_int64_t)
+        ldc = int(H*D, c_int64_t)
+        call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+             v((aa-1)*T*K_H*D + (kb-1)*D + 1:), lda, S, ldb, &
+             0.0_wp, y((aa-1)*T*H*D + (bb-1)*D + 1:), ldc)
+      end do
+    end do
+  end subroutine attn_sgemm
 
   ! Single-query attention over a KV cache (decoding step).
   ! q: (B, H, D) current query (already RoPE'd)  K, V: (B, Tc, K_H, D)
