@@ -372,3 +372,36 @@ Barato de adotar depois: torrent permite baixar só arquivos selecionados.
 Ordem de valor para o nosso objetivo (prosa PT): Gutenberg PT (domínio público,
 nosso gênero exato) > web.archive PT (moderno, volume grande) > SE (tempero/PT
 técnico, ou pivô para código).
+
+## Correção de enquadramento: MISTURA, não pureza de gênero
+
+Eu havia argumentado contra o dump do Stack Exchange por "gênero errado". Estava
+otimizando pureza de gênero quando o nosso próprio diagnóstico aponta para o
+oposto: as fases sequenciais criam especialistas que apagam uns aos outros (math
+danificou a prosa: bpb 8,18 -> 8,74; a fase 4 responde em Fortran a um prompt em
+português; hyp_5ca396 MIXED-FINAL). Se o remédio é misturar, então diversidade de
+gênero é REQUISITO, não contaminação.
+
+### A regra de contabilidade que decide (não "quanto tem", mas "quanto digerimos")
+
+Com 475 GFLOP/s somados: a 10M params (91 MFLOP/token) digerimos ~5.200 tok/s =
+**~450M tokens/dia**; a 25M (204 MFLOP/token), ~200M tokens/dia. Chinchilla para
+10M pede 200M tokens (~0,5 dia) e para 25M pede 500M (~2,5 dias). Ou seja:
+precisamos de **1-2 GB de texto BOM e bem misturado**, não de centenas de GB.
+Baixar 97 GB (SE) ou 1,7 TB (Wikipedia completo) para consumir 1-2 GB é o erro --
+independente de gênero.
+
+### Lista curta de fontes (do collections.php do Academic Torrents) com papel no mix
+
+| fonte | tamanho | papel no mix | nota |
+|---|---|---|---|
+| Gutenberg PT/BR (já temos 614 livros) | ~0,6-1 GB | **base (60-70%)**: prosa literária, alvo da avaliação | domínio público, nosso gênero exato |
+| **ptwiki** (Wikipedia em português) | ~1-1,5 GB texto | **15-20%**: moderno, factual, nomes próprios, variedade | melhor download direto de dumps.wikimedia.org que torrent de 1,7 TB |
+| corpora de instrução/Fortran que já temos | pequeno | **10%**: impede o esquecimento de código/math (medido!) | já no espaço BPE |
+| Stack Exchange (pt.stackoverflow + stackoverflow) | 1-2 GB / 68 GB | **5-10%**: PT técnico contemporâneo, dialeto de código | CC-BY-SA; pegar só os arquivos selecionados |
+| OpenWebText (coleção Text) | 16 GB | opcional: texto web em inglês (receita do GPT-2) | luxo no nosso compute |
+| OAPEN, PMC, Reddit All | 100s GB | fora de escopo por agora | anotado |
+
+A mistura não é fé: temos o instrumento para medi-la (bateria core/residue/prose/
+multilingual + bpb em prosa PT held-out). Adicionar Wikipedia/SE é um A/B: se
+ajudar a prosa held-out e não derrubar o core, fica.
