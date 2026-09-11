@@ -138,3 +138,42 @@ Commits `673842b`, `f63604c`.
   (`--dependency=afterok:6010`) = +2500 passos no bloco v4 (linhas 5000+).
 - fermi: v3 (linhas 3000+, 2000 passos) rodando.
 - Ambos `--attn blas`, fiz threads, val nos mesmos livros held-out.
+
+## Orçamento de tokens vs Chinchilla (medido, 11/set 21h)
+
+Chinchilla: ~20 tokens de treino por parâmetro (GPT-3 175B viu 300B = 1,7/param,
+por isso era subtreinado; Chinchilla 70B viu 1,4T = 20/param).
+
+- nós: 97,5M params -> alvo ~2,0B tokens. Vimos 2,05M (fase 5) = **0,021 tok/param**,
+  ou seja **952x abaixo** do alvo. Isso explica "morfologia sem sintaxe": com esse
+  orçamento só cabem as estatísticas mais frequentes da língua.
+- corpus de prosa inteiro: 59.385 linhas x 2.049 = **122M tokens** (1,25 tok/param).
+  Mesmo consumindo tudo uma vez ficamos 16x abaixo do Chinchilla -> repetir o mesmo
+  corpus vale pouco (foi o que v2/v3 provaram: 1000 linhas = saturação, não dado).
+- Curie (17B, 11M tokens) = 0,00065 tok/param = **31.000x abaixo**. Ambos são demos
+  de arquitetura, não modelos úteis; a diferença é o que cada demo prova.
+
+Throughput hoje: fermi 355 tok/s (1 passo = 1 linha = 2049 tokens, 5,77 s),
+halfbeast 231 tok/s (8,86 s). 2B tokens = 64 dias no fermi ou 32 com os dois boxes.
+**Conclusão: o gargalo não é mais kernel, é tokens/segundo.**
+
+### Plano (ordem de prioridade)
+
+- **P0 lote > 1**: passo processa B sequências em vez de 1 -> intensidade aritmética
+  para o sgemm (o mesmo kernel que já mediu 103 GFLOP/s está recebendo matrizes
+  pequenas). Exige teste de equivalência (B=1 idêntico ao atual) e medição de tok/s
+  antes de adotar, como no A/B do kernel. Barato, multiplica todo o resto.
+- **P1 passada longa**: corpus completo = 122M tokens com warmup+cosine e um
+  checkpoint por época (~2 dias sem lote, 14-20 h com). Primeiro modelo que merece
+  ser chamado de modelo de linguagem PT.
+- **P2 MoE em Fortran**: 8 experts de ~12M, top-1 -> ~12M ativos/token contra 97,5M
+  de hoje = ~8x mais barato por token com a mesma capacidade. É a tese do Curie
+  (motor e modelo co-desenhados para onde rodam) aplicada ao TREINO. Risco:
+  colapso de roteamento/balanceamento; precisa de portão antes de virar padrão.
+- **P3 pendente e barato**: merge(A,B) vs sequencial; fase mista (hyp_5ca396) para
+  recuperar o core sem apagar prosa; attn_bwd_doc para o --docmask.
+
+Estado dos ramos às 21h: fermi v3 val @800 2,26959; halfbeast v2 val @600 2,29625
+-- **ambos já abaixo do 2,40226 da fase 5 final, em linhas inéditas, ainda caindo**,
+com attn blas idêntico ao naive. Confirma: o platô da fase 5 era saturação daquelas
+1000 linhas, não dos dados.
