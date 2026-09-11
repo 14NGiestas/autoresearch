@@ -197,6 +197,7 @@ run_phase() {
         --save_every "$SAVE_EVERY"
         --keep_last "$KEEP_LAST"
         --bytes "$CACHE/tok_tables/token_bytes.txt"
+        --attn "${CURRICULUM_ATTN:-blas}"
     )
 
     echo "  cmd: ${cmd[*]}"

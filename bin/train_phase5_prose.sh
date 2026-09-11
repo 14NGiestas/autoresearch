@@ -74,5 +74,6 @@ exec flock -n "$POUT/train.lock" "$TRAIN_BIN" \
     --nsteps 1000 --lr 0.00003 \
     --ntrain 59385 --nval 60 --val_every 100 \
     --save_every 100 --keep_last 3 --trn_probe 40 \
+    --attn "${PHASE5_ATTN:-blas}" \
     --bytes /home/pauli/.cache/autoresearch/tok_tables/token_bytes.txt \
     >>"$LOG" 2>&1
