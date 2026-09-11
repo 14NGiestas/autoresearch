@@ -241,3 +241,43 @@ compute.
   aparece assim que o compute deixa de ser o gargalo.
 - **Descartado:** lote>1 (medido, 1,16x). **Adiado:** MoE (agora é capacidade, ~2x,
   não velocidade).
+
+## P1 FEITO: paridade BPE provada e compressão medida (scripts/bpe_parity_prose.py)
+
+**Paridade: 100% MATCH.** 150 parágrafos de prosa PT (73.301 tokens), encoder BPE
+em Fortran x tiktoken, id a id. O portão passou: o espaço BPE -- que é o MAIS
+testado do projeto, com teste diferencial contra tiktoken -- serve para português.
+(Com BPE os acentos são tokens normais e a família de bugs #1/#3, espaços de ids
+divergentes, deixa de existir: um espaço só, verificado contra o tiktoken.)
+
+**Compressão: 2,498 bytes/token (2,445 caracteres/token).** Medido, não estimado --
+minha estimativa de "3 a 9x" era otimista:
+
+| espaço | tokens por byte de texto | texto/s no mesmo hardware |
+|---|---|---|
+| byte-level (hoje) | 1,000 | 1,00x |
+| BPE (nosso) | 0,400 | **2,50x** |
+
+E como a atenção é O(T^2), ela custa **6,2x menos por caractere** (r^2 = 6,24).
+
+**Corpus contabilizado:** 64.335 linhas x 2.049 = 131,8M bytes (1 id = 1 byte no
+espaço byte-level) -> **~52,8M tokens BPE**.
+
+Épocas necessárias para Chinchilla (20 tok/param) com esse corpus:
+| params | tokens | épocas |
+|---|---|---|
+| 6M | 120M | 2,3 |
+| 10M | 200M | 3,8 |
+| 25M | 500M | 9,5 |
+| 50M | 1000M | 19,0 |
+
+**Conclusão:** com 52,8M tokens de prosa PT o nosso corpus sustenta ~2,6M params
+em 1 época. Qualquer modelo maior é limitado por DADO, não por compute. O ponto
+defensável (~4 épocas, não 19) é **~10M params**: 200M tokens, 286 MFLOP/token
+(6*10M + atenção a T=1024) = ~1.000 tok/s no fermi + ~650 no halfbeast -> **~1,4
+dias nos dois boxes**. Com T=512 (~1.250 caracteres) cai para ~0,8 dia.
+
+Próximo passo do P2: re-tokenizar a prosa para o espaço BPE gerando rows no mesmo
+formato das fases 1-4 (BOS + ids), preservando o split held-out, com portão de
+round-trip (ids -> texto -> ids idêntico). Depois treinar do zero ~10M params,
+T=1024 BPE, ~4 épocas.
