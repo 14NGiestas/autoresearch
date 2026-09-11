@@ -48,6 +48,7 @@ program train_run
   integer :: nsteps, t0, log_every, save_every, start_row
   integer :: ntrain, val_every, nval, keep_last, nprobe, nprobe_opt
   integer :: k, i, j, tstep, u, ios, r, nbad
+  logical :: attn_blas
   real(sp) :: theta, ang
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
@@ -58,12 +59,18 @@ program train_run
   call set_args('--weights WEIGHTS --rows ROWS --out OUT --nsteps 20' // &
       ' --lr 0.0003 --t0 1 --log_every 1 --save_every 10' // &
       ' --start_row 0 --ntrain 40 --val_every 5 --nval 8 --keep_last 2' // &
-      ' --trn_probe 0 --bytes BYTES', &
+      ' --trn_probe 0 --attn naive --bytes BYTES', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  train_run - multi-batch trainer (slice 3)', &
       'SYNOPSIS', &
-      '  train_run --weights DIR --rows FILE --out DIR --nsteps N'], &
+      '  train_run --weights DIR --rows FILE --out DIR --nsteps N', &
+      'OPTIONS', &
+      '  --attn naive  attention kernel: naive (default, the arithmetic every', &
+      '                recorded run used) or blas (attn_sgemm/attn_bwd_sgemm:', &
+      '                ~13x faster at T=2048, agrees to ~1e-6, different', &
+      '                summation order). Applies to training AND to the val', &
+      '                probes so both sides use the same kernel.'], &
       version_text=[character(len=80) :: 'train_run 1.0'])
   wdir = trim(sget('weights'))
   rowsfile = trim(sget('rows'))
@@ -76,6 +83,7 @@ program train_run
   start_row = iget('start_row')
   ntrain = iget('ntrain')
   nprobe_opt = iget('trn_probe')
+  attn_blas = trim(sget('attn')) == 'blas'
   val_every = iget('val_every')
   nval = iget('nval')
   keep_last = iget('keep_last')
@@ -164,7 +172,7 @@ program train_run
       call exit(1)
     end if
     call train_step(idx, targets, ct, st, M, S, G, GR, C, tmp, nll, tstep, &
-        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp)
+        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas)
     if (mod(k, log_every) == 0 .or. k == nsteps) then
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &
         " lr ", lr_eff
@@ -276,7 +284,12 @@ contains
       call linear3d_sgemm(xn, M%v(ll*ksz+1:), vo, B, TT, DD, N_KV*HD)
       call rope_4d(qo, ct, st, qrot, B, TT, N_HEAD, HD)
       call rope_4d(ko, ct, st, krot, B, TT, N_KV, HD)
-      call causal_attn(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD)
+      if (attn_blas) then
+        call attn_sgemm(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD, &
+            tmp%satt)
+      else
+        call causal_attn(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD)
+      end if
       call linear3d_sgemm(ao, M%p(ll*psz+1:), sub, B, TT, DD, DD)
       emd = emd + sub
       call rmsnorm0(emd, xn, BT, DD, 1.0e-5_sp)

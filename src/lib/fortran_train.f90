@@ -76,6 +76,9 @@ module fortran_train_mod
     real(wp), allocatable :: dao(:), dr(:), df(:)
     real(wp), allocatable :: dx1(:), dx2(:), dx3(:), dxa(:)
     real(wp), allocatable :: mx(:), demd(:)   ! mx: BT; demd = d(block_out), BT*dff
+    ! BLAS-attention scratch (only touched when attn_blas is on): satt serves
+    ! both the forward scores+softmax and the backward dP/dS staging.
+    real(wp), allocatable :: satt(:), dPbuf(:), dSbuf(:), dkv(:)
   end type temp_t
 
 contains
@@ -107,6 +110,11 @@ contains
     allocate(tmp%dao(BT*DD), tmp%dr(BT*dff), tmp%df(BT*dff))
     allocate(tmp%dx1(BT*DD), tmp%dx2(BT*DD), tmp%dx3(BT*DD), tmp%dxa(BT*DD))
     allocate(tmp%mx(BT), tmp%demd(BT*dff))
+    ! T*T scratch for the BLAS attention path (3 x T^2 + 2*T*kvd reals; at
+    ! T=2048 that is ~50 MB, allocated once and reused every step)
+    allocate(tmp%satt(G%T*G%T), tmp%dPbuf(G%T*G%T), tmp%dSbuf(G%T*G%T))
+    allocate(tmp%dkv(2*G%T*kvd))
+    tmp%satt = 0.0_wp; tmp%dPbuf = 0.0_wp; tmp%dSbuf = 0.0_wp; tmp%dkv = 0.0_wp
     tmp%emd  = 0.0_wp; tmp%xn  = 0.0_wp; tmp%sub = 0.0_wp
     tmp%qo   = 0.0_wp; tmp%ko  = 0.0_wp; tmp%vo  = 0.0_wp
     tmp%qrot = 0.0_wp; tmp%krot= 0.0_wp; tmp%ao  = 0.0_wp
@@ -148,7 +156,9 @@ contains
     if (allocated(tmp%demd))   deallocate(tmp%demd)
   end subroutine free_temp
 
-  subroutine forward_save(idx, targets, cos, sin, M, G, C, tmp, nll)
+  subroutine forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, attn_blas)
+    logical, intent(in), optional :: attn_blas
+    logical :: useblas
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
     type(params_t), intent(in) :: M
@@ -197,7 +207,18 @@ contains
       call rope_4d(tmp%ko, cos, sin, tmp%krot, G%B, G%T, G%nkv, G%hd)
       C%qr(ll*BT*hdd+1:(ll+1)*BT*hdd) = tmp%qrot
       C%kr(ll*BT*G%nkv*G%hd+1:(ll+1)*BT*G%nkv*G%hd) = tmp%krot
-      call causal_attn(tmp%qrot, tmp%krot, tmp%vo, tmp%ao, G%B, G%T, G%nh, G%nkv, G%hd)
+      if (present(attn_blas)) then
+        useblas = attn_blas
+      else
+        useblas = .false.
+      end if
+      if (useblas) then
+        call attn_sgemm(tmp%qrot, tmp%krot, tmp%vo, tmp%ao, G%B, G%T, &
+            G%nh, G%nkv, G%hd, tmp%satt)
+      else
+        call causal_attn(tmp%qrot, tmp%krot, tmp%vo, tmp%ao, G%B, G%T, &
+            G%nh, G%nkv, G%hd)
+      end if
       C%ao(ll*BT*DD+1:(ll+1)*BT*DD) = tmp%ao
       call linear3d_sgemm(tmp%ao, M%p(ll*psz+1:), tmp%sub, G%B, G%T, DD, DD)
       !$omp parallel do simd
@@ -241,7 +262,10 @@ contains
   ! Norm inputs are recomputed from saved pre-norm values (exact, cheap);
   ! r = relu(f) is recomputed from saved f. dk/dv zeroed per layer
   ! (attn_bwd accumulates inout). GR arrays zeroed up front.
-  subroutine compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll)
+  subroutine compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, &
+      attn_blas)
+    logical, intent(in), optional :: attn_blas
+    logical :: useblas
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
     type(params_t), intent(in) :: M
@@ -308,9 +332,21 @@ contains
       call linear3d_bwd_sgemm(tmp%demd, C%ao(ll*BT*DD+1:), M%p(ll*psz+1:), tmp%dao, &
           GR%p(ll*psz+1:), G%B, G%T, DD, DD)
       tmp%dk = 0.0_wp; tmp%dv = 0.0_wp
-      call attn_bwd(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
-          C%v(ll*BT*kvd+1:), tmp%dq, tmp%dk, tmp%dv, &
-          G%B, G%T, G%nh, G%nkv, G%hd)
+      if (present(attn_blas)) then
+        useblas = attn_blas
+      else
+        useblas = .false.
+      end if
+      if (useblas) then
+        call attn_bwd_sgemm(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
+            C%v(ll*BT*kvd+1:), tmp%dq, tmp%dk, tmp%dv, &
+            G%B, G%T, G%nh, G%nkv, G%hd, tmp%satt, tmp%dPbuf, tmp%dSbuf, &
+            tmp%dkv)
+      else
+        call attn_bwd(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
+            C%v(ll*BT*kvd+1:), tmp%dq, tmp%dk, tmp%dv, &
+            G%B, G%T, G%nh, G%nkv, G%hd)
+      end if
       call rope_4d_bwd(tmp%dq, cos, sin, tmp%dqr, G%B, G%T, G%nh, G%hd)
       call rope_4d_bwd(tmp%dk, cos, sin, tmp%dkr, G%B, G%T, G%nkv, G%hd)
       call linear3d_bwd_sgemm(tmp%dqr, C%xa(ll*BT*DD+1:), M%q(ll*qsz+1:), tmp%dx1, &
@@ -360,7 +396,9 @@ contains
 
   ! One full training step: forward + backward + AdamW update.
   subroutine train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, &
-      nll, tstep, lr, b1, b2, beps, wd)
+      nll, tstep, lr, b1, b2, beps, wd, attn_blas)
+    logical, intent(in), optional :: attn_blas
+    logical :: useblas
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
     type(params_t), intent(inout) :: M
@@ -372,8 +410,10 @@ contains
     real(wp), intent(out) :: nll
     integer, intent(in) :: tstep
     real(wp), intent(in) :: lr, b1, b2, beps, wd
-    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll)
-    call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll)
+    useblas = .false.
+    if (present(attn_blas)) useblas = attn_blas
+    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas)
+    call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas)
     call apply_group(M%wte, GR%wte, S%wte, S%vwte, lr, b1, b2, beps, wd, tstep)
     call apply_group(M%lm, GR%lm, S%lm, S%vlm, lr, b1, b2, beps, wd, tstep)
     call apply_group(M%q, GR%q, S%q, S%vq, lr, b1, b2, beps, wd, tstep)
