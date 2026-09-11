@@ -30,6 +30,27 @@
 
       in
       {
+        devShells.inference = pkgs.mkShell {
+          # Eval/inference-only shell: no ROCm (multi-GB, useless on an Intel
+          # box). Same nixpkgs rev as .default via flake.lock, so gfortran and
+          # OpenBLAS are the SAME derivations as the training box -- that is
+          # what makes cross-machine bpb and tok/s comparable at all.
+          buildInputs = with pkgs; [
+            gfortran
+            fortran-fpm
+            openblas
+            python312
+            uv
+          ];
+
+          shellHook = ''
+            export OMP_NUM_THREADS="''${OMP_NUM_THREADS:-4}"
+            export OPENBLAS_NUM_THREADS="''${OPENBLAS_NUM_THREADS:-4}"
+            export EVAL_OMP="$OMP_NUM_THREADS"
+            echo "inference/eval shell ready (no ROCm; OMP=$OMP_NUM_THREADS)."
+          '';
+        };
+
         devShells.default =
           pkgs.mkShell {
             buildInputs = with pkgs; [

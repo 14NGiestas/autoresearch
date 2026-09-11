@@ -20,10 +20,11 @@
 # Gate rule: a new phase must not regress core, must shrink residue (except
 # wanted retention), must move >=1 chat case at SFT time.
 set -u
-W=""; N=20; ONLY="all"; CHAT_OVERRIDE=""; LABEL=""
+W=""; N=20; ONLY="all"; CHAT_OVERRIDE=""; LABEL=""; TABS_OVERRIDE=""
 while [ $# -gt 0 ]; do case "$1" in
   --weights) W="$2"; shift 2;; --n) N="$2"; shift 2;; --only) ONLY="$2"; shift 2;;
-  --chat) CHAT_OVERRIDE="$2"; shift 2;; --label) LABEL="$2"; shift 2;; *) shift;; esac; done
+  --chat) CHAT_OVERRIDE="$2"; shift 2;; --label) LABEL="$2"; shift 2;;
+  --tables) TABS_OVERRIDE="$2"; shift 2;; *) shift;; esac; done
 [ -z "$W" ] && { echo "need --weights DIR"; exit 1; }
 if [ -n "$CHAT_OVERRIDE" ]; then
   CHAT="$CHAT_OVERRIDE"
@@ -32,7 +33,7 @@ else
 fi
 [ -x "$CHAT" ] || { echo "no chat_text binary (build it or pass --chat)"; exit 1; }
 [ -z "$LABEL" ] && LABEL="$(hostname -s) $(date '+%Y-%m-%d %H:%M')"
-TABS=~/.cache/autoresearch/tok_tables
+TABS="${TABS_OVERRIDE:-$HOME/.cache/autoresearch/tok_tables}"
 export OMP_NUM_THREADS="${EVAL_OMP:-4}"
 export OPENBLAS_NUM_THREADS="${EVAL_OMP:-4}"
 run() {
