@@ -61,6 +61,7 @@ program test_kernels
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
   call test_corpus_golden()
+  call test_arch()
   call test_valid_mask()
   call test_gpt_forward_shape()
   call test_recurrent_equiv()
@@ -744,6 +745,45 @@ contains
   ! that no corpus ever used (only 4 of 8192 have zero byte-length). With the
   ! mask, an id outside the byte space must be unreachable even when it is the
   ! argmax of the raw logits.
+  ! ------------------------------------------------------------------------
+  ! fortran_arch_mod: a arquitetura em runtime tem de RECUSAR combinações
+  ! inconsistentes em vez de seguir com lixo (foi assim que um binário de outra
+  ! pasta de build devolveu zero linhas sem erro). E os defaults têm de ser os
+  ! valores históricos, senão todo bpb já medido deixa de valer.
+  subroutine test_arch()
+    use fortran_arch_mod, only: set_arch, check_shape, D_MODEL, N_LAYER, VV, &
+        N_HEAD, HD, TT
+    logical :: ok
+
+    print '(A)', "=== test_arch (dims de runtime + validação) ==="
+    call check(D_MODEL == 768 .and. N_LAYER == 12 .and. VV == 8192 .and. &
+        N_HEAD == 6 .and. HD == 128 .and. TT == 2048, &
+        "defaults = valores históricos (768/12/8192/6/128/2048)")
+
+    ! d não divisível por heads: tem de recusar
+    call set_arch(97, 6, 0, 0, 0, 0, 0, ok)
+    call check(.not. ok, "recusa d=97 com 6 heads (não divisível)")
+    ! kv_heads > heads: recusar
+    call set_arch(96, 6, 8, 0, 0, 0, 0, ok)
+    call check(.not. ok, "recusa kv_heads(8) > heads(6)")
+    ! bos >= vocab: recusar
+    call set_arch(96, 6, 2, 0, 256, 0, 300, ok)
+    call check(.not. ok, "recusa bos >= vocab")
+    ! combinação válida de 3M: d=96, 6 heads, kv=2, 12 camadas, vocab 8192
+    call set_arch(96, 6, 2, 12, 8192, 1024, 8188, ok)
+    call check(ok .and. HD == 16 .and. D_MODEL == 96 .and. TT == 1024, &
+        "aceita 3M (d=96, heads=6, kv=2, T=1024) e recalcula HD=16")
+    ! volta ao default para não contaminar os testes seguintes
+    call set_arch(768, 6, 6, 12, 8192, 2048, 8188, ok)
+    call check(ok .and. D_MODEL == 768 .and. HD == 128, "restaura o default")
+
+    ! check_shape é o que transforma lixo silencioso em erro alto
+    call check_shape("wte", 8192 * 768, 8192 * 768, ok)
+    call check(.true., "check_shape aceita forma correta")
+    call check_shape("wte", 96 * 8192, 768 * 8192, ok)
+    call check(.not. ok, "check_shape FALHA quando a forma não bate")
+  end subroutine
+
   subroutine test_valid_mask()
     use sample_mod, only: sample_next, apply_byte_mask
     integer, parameter :: V = 8192, NG = 1
