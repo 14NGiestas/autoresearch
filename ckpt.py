@@ -171,6 +171,61 @@ class Registry:
             cid = ps[0] if ps else None
             depth += 1
 
+    def tree(self):
+        allc = self._all()
+        if not allc:
+            print("(registro vazio)")
+            return
+        children = {}
+        for cid, p in allc.items():
+            for par in p.get("parents") or []:
+                children.setdefault(par, []).append(cid)
+        for v in children.values():
+            v.sort()
+        roots = [cid for cid, p in allc.items()
+                 if not p.get("parents") or
+                 not any(q in allc for q in p["parents"])]
+        try:
+            best = min((c for c in allc.values()
+                          if (c.get("eval") or {}).get("bpb") is not None),
+                         key=lambda p: float(p["eval"]["bpb"]))["ckpt"]
+        except ValueError:
+            best = None
+
+        def label(cid):
+            p = allc[cid]
+            e = p.get("eval") or {}
+            try:
+                bs = f"{float(e['bpb']):.5f}"
+            except (TypeError, ValueError, KeyError):
+                bs = "?"
+            star = " ★" if cid == best else ""
+            return (f"{p.get('label')}{star}  [bpb={bs}]  "
+                    f"({p.get('machine')})  {cid}")
+
+        visited = set()
+
+        def walk(cid, prefix):
+            kids = [k for k in children.get(cid, []) if k in allc]
+            ext = [k for k in children.get(cid, []) if k not in allc]
+            for n, k in enumerate(kids + ext):
+                last = (n == len(kids + ext) - 1)
+                elbow = "└── " if last else "├── "
+                if k not in allc:
+                    print(prefix + elbow + f"{k}  (fora do registro)")
+                    continue
+                if k in visited:
+                    print(prefix + elbow + f"↩ {k} (ver acima)")
+                    continue
+                visited.add(k)
+                print(prefix + elbow + label(k))
+                walk(k, prefix + ("    " if last else "│   "))
+
+        for r in sorted(roots):
+            visited.add(r)
+            print(label(r))
+            walk(r, "")
+
     def verify(self, cid):
         allc = self._all()
         p = allc.get(cid)
@@ -215,6 +270,7 @@ def main():
     sub.add_parser("show").add_argument("id", nargs="?")
     l = sub.add_parser("lineage")
     l.add_argument("id")
+    sub.add_parser("tree")
     v = sub.add_parser("verify")
     v.add_argument("id")
     a = ap.parse_args()
@@ -236,6 +292,8 @@ def main():
         reg.show(a.id)
     elif a.cmd == "lineage":
         reg.lineage(a.id)
+    elif a.cmd == "tree":
+        reg.tree()
     elif a.cmd == "verify":
         sys.exit(0 if reg.verify(a.id) else 1)
 
