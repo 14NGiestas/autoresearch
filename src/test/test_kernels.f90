@@ -751,37 +751,25 @@ contains
   ! pasta de build devolveu zero linhas sem erro). E os defaults têm de ser os
   ! valores históricos, senão todo bpb já medido deixa de valer.
   subroutine test_arch()
-    use fortran_arch_mod, only: set_arch, check_shape, D_MODEL, N_LAYER, VV, &
-        N_HEAD, HD, TT
+    use fortran_arch_mod, only: check_shape, arch_report, D_MODEL, N_LAYER, VV, &
+        N_HEAD, N_KV, HD, TT, BOS
     logical :: ok
 
-    print '(A)', "=== test_arch (dims de runtime + validação) ==="
+    print '(A)', "=== test_arch (fonte de verdade única + validação de forma) ==="
     call check(D_MODEL == 768 .and. N_LAYER == 12 .and. VV == 8192 .and. &
-        N_HEAD == 6 .and. HD == 128 .and. TT == 2048, &
-        "defaults = valores históricos (768/12/8192/6/128/2048)")
+        N_HEAD == 6 .and. N_KV == 6 .and. HD == 128 .and. TT == 2048 .and. &
+        BOS == 8188, &
+        "defaults = valores históricos (todo bpb já medido continua válido)")
+    call check(HD == D_MODEL / N_HEAD, "HD é derivado de D_MODEL/N_HEAD, não digitado")
 
-    ! d não divisível por heads: tem de recusar
-    call set_arch(97, 6, 0, 0, 0, 0, 0, ok)
-    call check(.not. ok, "recusa d=97 com 6 heads (não divisível)")
-    ! kv_heads > heads: recusar
-    call set_arch(96, 6, 8, 0, 0, 0, 0, ok)
-    call check(.not. ok, "recusa kv_heads(8) > heads(6)")
-    ! bos >= vocab: recusar
-    call set_arch(96, 6, 2, 0, 256, 0, 300, ok)
-    call check(.not. ok, "recusa bos >= vocab")
-    ! combinação válida de 3M: d=96, 6 heads, kv=2, 12 camadas, vocab 8192
-    call set_arch(96, 6, 2, 12, 8192, 1024, 8188, ok)
-    call check(ok .and. HD == 16 .and. D_MODEL == 96 .and. TT == 1024, &
-        "aceita 3M (d=96, heads=6, kv=2, T=1024) e recalcula HD=16")
-    ! volta ao default para não contaminar os testes seguintes
-    call set_arch(768, 6, 6, 12, 8192, 2048, 8188, ok)
-    call check(ok .and. D_MODEL == 768 .and. HD == 128, "restaura o default")
-
-    ! check_shape é o que transforma lixo silencioso em erro alto
-    call check_shape("wte", 8192 * 768, 8192 * 768, ok)
-    call check(.true., "check_shape aceita forma correta")
-    call check_shape("wte", 96 * 8192, 768 * 8192, ok)
-    call check(.not. ok, "check_shape FALHA quando a forma não bate")
+    ! o que transforma lixo silencioso em erro: a expectativa conferida
+    call check_shape("wte", VV * D_MODEL, VV * D_MODEL, ok)
+    call check(ok, "check_shape aceita a forma correta")
+    call check_shape("wte", VV * D_MODEL, 10000 * 768, ok)
+    call check(.not. ok, "check_shape FALHA se o checkpoint tem outro vocab (10000)")
+    call check_shape("lm_head", VV * D_MODEL, 8192 * 96, ok)
+    call check(.not. ok, "check_shape FALHA para checkpoint de modelo menor (3M)")
+    call arch_report(6)
   end subroutine
 
   subroutine test_valid_mask()
