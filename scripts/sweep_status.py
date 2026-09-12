@@ -91,15 +91,16 @@ def main():
             log = cands[-1] if cands else f"{ROOT}/logs/sweep3m_{i}.log"
             steps, vals, last_val = parse_log(log)
             state, used = slurm_state(f"{args.jobs}_{i}")
+            # Ritmo medido pelo NASCIMENTO do log (getctime), nao pelo tempo do
+            # squeue: ler %M deu 28 s/passo num job que andava a 0,42 s/passo, e o
+            # ETA absurdo (22h) quase me fez acreditar nele. O log nasce quando o
+            # job comeca, entao (agora - ctime)/passos e' o ritmo de verdade.
             rate = eta = None
-            if steps and used not in ("-", None) and state == "RUNNING":
-                m = re.match(r"(\d+):(\d+)(?::(\d+))?", used)
-                if m:
-                    g = [int(x) if x else 0 for x in m.groups()]
-                    sec = g[0] * 3600 + g[1] * 60 + g[2] if len(g) == 3 else g[0] * 60 + g[1]
-                    if sec > 0:
-                        rate = sec / steps
-                        eta = rate * (total_steps - steps)
+            if steps and os.path.exists(log) and state == "RUNNING":
+                sec = time.time() - os.path.getctime(log)
+                if sec > 5:
+                    rate = sec / steps
+                    eta = rate * (total_steps - steps)
             print(f"  {args.jobs}_{i:<3d} {f:>4d}% {state:>9s} "
                   f"{steps:>6d}/{total_steps:<6d} "
                   f"{(f'{rate:.2f}s' if rate else '-'):>8s} "
