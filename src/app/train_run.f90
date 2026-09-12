@@ -17,7 +17,9 @@ program train_run
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights, verify_ckpt_dir
   use fortran_chat_mod, only: write_template_txt
-  use fortran_arch_mod, only: write_arch_txt, read_arch_txt, arch_report
+  use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
+      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
+      write_arch_txt, read_arch_txt, arch_report
   use fortran_adam_state_mod, only: load_adam_state, save_adam_state
   use fortran_data_mod, only: load_batch
   use M_CLI2, only: set_args, sget, rget, iget, specified
@@ -30,9 +32,10 @@ program train_run
   implicit none
 
   integer, parameter :: sp = c_float
-  integer, parameter :: B = 1, TT = 2048, D = 768
-  integer, parameter :: N_HEAD = 6, N_KV = 6, HD = 128
-  integer, parameter :: N_LAYER = 12, VV = 8192
+  integer, parameter :: B = 1
+  integer, parameter :: TT = A_CTX, D = A_D
+  integer, parameter :: N_HEAD = A_HEAD, N_KV = A_KV, HD = A_HD
+  integer, parameter :: N_LAYER = A_LAYER, VV = A_VOCAB
 
   type(dims_t) :: G
   type(params_t) :: M, GR

@@ -23,11 +23,15 @@ program chat_text
   use M_CLI2, only: set_args, set_mode, sget, rget, iget, specified
   use fortran_chat_mod
   use fortran_spec_mod, only: lookup_draft
+  use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
+      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
+      write_arch_txt, read_arch_txt, arch_report
   implicit none
 
   integer, parameter :: sp = c_float
-  integer, parameter :: B = 1, D = 768, N_HEAD = 6, N_KV = 6, HD = 128
-  integer, parameter :: N_LAYER = 12, VV = 8192, BOS = 8188
+  integer, parameter :: B = 1
+  integer, parameter :: D = A_D, N_HEAD = A_HEAD, N_KV = A_KV, HD = A_HD
+  integer, parameter :: N_LAYER = A_LAYER, VV = A_VOCAB, BOS = A_BOS
 
   character(len=512) :: tdir, wdir, arg
   character(len=1) :: cb

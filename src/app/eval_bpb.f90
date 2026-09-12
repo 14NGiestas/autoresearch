@@ -18,11 +18,15 @@ program eval_bpb
   use fortran_gpt_mod
   use load_weights_mod, only: load_gpt_weights
   use M_CLI2, only: set_args, sget, specified
+  use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
+      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
+      write_arch_txt, read_arch_txt, arch_report
   implicit none
 
   integer, parameter :: sp = c_float
-  integer, parameter :: B = 1, D = 768, N_HEAD = 6, N_KV = 6, HD = 128
-  integer, parameter :: N_LAYER = 12, VV = 8192, TT = 2048
+  integer, parameter :: B = 1
+  integer, parameter :: D = A_D, N_HEAD = A_HEAD, N_KV = A_KV, HD = A_HD
+  integer, parameter :: N_LAYER = A_LAYER, VV = A_VOCAB, TT = A_CTX
 
   character(len=512) :: wdir, rowsfile, line
   integer :: ios, unit, tc, i, j, tgt, rownum
