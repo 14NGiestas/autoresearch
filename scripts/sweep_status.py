@@ -23,7 +23,22 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATE = "/tmp/sweep_status_state.json"
 FRACS = [0, 25, 50, 75, 100]
+
+
+def load_state():
+    try:
+        return json.load(open(STATE))
+    except Exception:
+        return {}
+
+
+def save_state(d):
+    try:
+        json.dump(d, open(STATE, "w"))
+    except Exception:
+        pass
 
 
 def sh(cmd):
@@ -83,6 +98,8 @@ def main():
         print(f"  {'braço':>5s} {'wik%':>5s} {'estado':>9s} {'passos':>13s} "
               f"{'ritmo':>8s} {'ETA':>7s} {'val bpb':>9s} {'probes':>6s}")
         curve = []
+        prev = load_state()
+        cur = {}
         for i, f in enumerate(FRACS):
             # o log mais recente daquele braço (nome pode ter JOBID após este fix)
             cands = sorted(glob.glob(f"{ROOT}/logs/sweep3m_*_{i}.log") +
@@ -91,16 +108,19 @@ def main():
             log = cands[-1] if cands else f"{ROOT}/logs/sweep3m_{i}.log"
             steps, vals, last_val = parse_log(log)
             state, used = slurm_state(f"{args.jobs}_{i}")
-            # Ritmo medido pelo NASCIMENTO do log (getctime), nao pelo tempo do
-            # squeue: ler %M deu 28 s/passo num job que andava a 0,42 s/passo, e o
-            # ETA absurdo (22h) quase me fez acreditar nele. O log nasce quando o
-            # job comeca, entao (agora - ctime)/passos e' o ritmo de verdade.
+            # Ritmo por DUAS AMOSTRAS: guardo (passos, instante) entre chamadas e
+            # divido o delta. E' o unico metodo que nao depende de formatacao de
+            # campo do Slurm (ler %M deu 28 s/passo onde o real era 0,42 s) nem de
+            # getctime (que em Linux e' mtime de metadados, nao criacao).
             rate = eta = None
-            if steps and os.path.exists(log) and state == "RUNNING":
-                sec = time.time() - os.path.getctime(log)
-                if sec > 5:
-                    rate = sec / steps
+            key = f"{args.jobs}_{i}"
+            if steps and key in prev and steps > prev[key][0]:
+                dt = time.time() - prev[key][1]
+                dsteps = steps - prev[key][0]
+                if dt > 5 and dsteps > 0:
+                    rate = dt / dsteps
                     eta = rate * (total_steps - steps)
+            cur[key] = [steps, time.time()]
             print(f"  {args.jobs}_{i:<3d} {f:>4d}% {state:>9s} "
                   f"{steps:>6d}/{total_steps:<6d} "
                   f"{(f'{rate:.2f}s' if rate else '-'):>8s} "
@@ -123,6 +143,7 @@ def main():
                   f" (esperado {total_steps})")
         if not os.path.exists("/tmp/mix/init3m/arch.txt"):
             print("  ATENÇÃO: init sem arch.txt (require_arch vai abortar)")
+        save_state(cur)
         if args.watch <= 0:
             break
         time.sleep(args.watch)
