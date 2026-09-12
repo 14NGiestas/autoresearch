@@ -127,3 +127,22 @@ trouble with pi harness? export PATH="/home/pauli/.local/share/pi-node/node-v22.
 ## License
 
 MIT
+
+## Development Environment
+
+Dois shells nix, com o MESMO rev do nixpkgs (mesmo `gfortran`/OpenBLAS -> resultados
+comparáveis entre máquinas):
+
+| shell | conteúdo | onde usar |
+|---|---|---|
+| `nix develop` (default) | tudo + **ROCm/hipBLAS** (~15 GB) | fermi (tem GPU) |
+| `nix develop .#inference` | gfortran, fpm, openblas, python312, uv — **sem ROCm** | qualquer caixa **sem GPU** (ex.: halfbeast) |
+
+```bash
+# compilar e testar (o fpm.toml mora em src/)
+cd src && nix develop --command fortran-fpm build
+cd src && nix develop .#inference --command fortran-fpm test
+```
+
+Máquina remota de CPU (halfbeast): ver `docs/halfbeast.md` (despacho por ssh+Slurm,
+`bin/hb.sh`, e as armadilhas de nix/`LD_LIBRARY_PATH` já resolvidas).
