@@ -48,10 +48,21 @@ def hms(sec):
 
 
 def parse_log(path):
+    """Conta SÓ a última execução do arquivo.
+
+    Um arquivo de log pode conter várias submissões (mesmo nome por %a). Foi assim
+    que um ETA de 53h apareceu: passos de uma corrida cancelada somados ao tempo de
+    outra. Cada execução imprime um cabeçalho 'arm wiki=', então cortamos nele.
+    """
     steps = vals = 0
     last_val = None
     if os.path.exists(path):
-        for line in open(path, errors="ignore"):
+        lines = open(path, errors="ignore").read().splitlines()
+        cut = 0
+        for idx, ln in enumerate(lines):
+            if ln.startswith("arm wiki="):
+                cut = idx
+        for line in lines[cut:]:
             if line.startswith("step "):
                 steps += 1
             elif line.startswith("val @"):
@@ -73,7 +84,11 @@ def main():
               f"{'ritmo':>8s} {'ETA':>7s} {'val bpb':>9s} {'probes':>6s}")
         curve = []
         for i, f in enumerate(FRACS):
-            log = f"{ROOT}/logs/sweep3m_{i}.log"
+            # o log mais recente daquele braço (nome pode ter JOBID após este fix)
+            cands = sorted(glob.glob(f"{ROOT}/logs/sweep3m_*_{i}.log") +
+                           glob.glob(f"{ROOT}/logs/sweep3m_{i}.log"),
+                           key=os.path.getmtime)
+            log = cands[-1] if cands else f"{ROOT}/logs/sweep3m_{i}.log"
             steps, vals, last_val = parse_log(log)
             state, used = slurm_state(f"{args.jobs}_{i}")
             rate = eta = None
