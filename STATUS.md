@@ -83,6 +83,7 @@ ganhar dos dois pais, o paralelismo vira multiplicador de throughput legítimo.
   (`_gate`, `_bpb`, `_attn_step`, `_attn_ab`, `_prose_continue`), logs em
   `bin/halfbeast_logs.sh`.
 - Agregador de bpb: `scripts/bpb_from_eval.py` (reproduz o `val @N` do treinador).
+- Mapa de modelos: `ckpt.py` + `ckpt/registry.jsonl` (genealogia com hash-chain como o HEP; `show`/`lineage`/`verify`).
 - HEP: 34 hipóteses. Relevantes: `hyp_1854b7` TRAIN_THROUGHPUT 0,97;
   `hyp_191851` TOKEN_SPACE 0,95; `hyp_1fbfd5` PROSE-PT 0,66;
   `hyp_5ca396` MIXED-FINAL 0,60 (fase mista — o teste de esquecimento mostrou
