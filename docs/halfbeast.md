@@ -106,3 +106,30 @@ primeiro `nix develop` porque o nosso flake arrasta a toolchain **ROCm/hipBLAS**
 ### Wrapper para shells que ainda têm a poluição
 `~/bin/nixc` = `exec env -u LD_LIBRARY_PATH /nix/var/nix/profiles/default/bin/nix "$@"`.
 Útil em shells antigos/heredados; desnecessário em ambiente limpo.
+
+### Compilar NATIVO agora funciona (o motivo de instalar o nix)
+
+```bash
+# na halfbeast, depois do nix novo:
+cd ~/autoresearch-eval/autoresearch/src          # o fpm.toml mora em src/
+~/bin/nixc develop .. --command fortran-fpm build      # 1o run baixa a closure
+~/bin/nixc develop .. --command fortran-fpm test       # ~30 s, OMP_NUM_THREADS=2
+```
+Verificado (11/set 23h): build nativo OK e **suíte com 0 failures** em Skylake-X --
+verificação cross-ISA dos nossos kernels (atenção BLAS fwd/bwd, tokenizer byte-level,
+validação de arquitetura, save/load, amostragem) numa microarquitetura diferente da
+fermi, onde foram escritos. Binário em `src/build/gfortran_<hash>/app/`.
+
+Consequência para o fluxo: `bin/sync_eval.sh` (enviar binário) continua sendo o
+caminho para *medir comparável* entre caixas (mesmo binário, mesma OpenBLAS, só a
+CPU difere). Compilar nativo serve para (a) verificação cross-ISA, (b) velocidade
+quando TODOS os braços de um experimento rodam nesta caixa -- misturar binário
+nativo com binário enviado pode dar bpb diferente na última casa (-march diferente
+muda ordem de soma), e isso quebraria a comparabilidade que a gente preserva.
+
+### Verificação de boa vizinhança feita (11/set 23h)
+- `fbonani`: em shell de login tem `LD_LIBRARY_PATH` **vazio**, nix funciona (2.35.2) ✓
+- mtimes provam que não tocamos em nada alheio: `/etc/skel/.bashrc` e
+  `/home/fbonani/.bashrc` seguem de **2022-05-06** ✓
+- `/etc/profile.d/nix.sh` + `/etc/nix/nix.conf` existem -> nix disponível para todos ✓
+- jobs rodando normalmente (`6010` do vizinho, `6016_0/1` nossos) ✓
