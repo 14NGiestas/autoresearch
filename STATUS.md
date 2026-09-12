@@ -510,3 +510,34 @@ Y") -- alta repetição e registro atrofiado, ou seja, ruins também em qualidad
 2. Varredura de dose-resposta em 3M, 5 braços, ~1 h cada (2-4 h com os dois boxes).
 3. Escolher f* da curva, verificar com um braço de 10M, e só então o 25M.
 Custo do estudo: ~4 h. Risco que ele remove: 2 dias de treino na dose errada.
+
+## Parametrização da arquitetura: RUNTIME, não compilação (correção do usuário)
+
+O usuário perguntou "a parametrização deveria ser runtime não?" e está certo. Eu
+tinha começado pelo caminho de defines de compilação (-cpp), que funciona, mas:
+
+- **o argumento decisivo é o bug que já nos mordeu hoje**: existem várias pastas de
+  build (hashes de flags diferentes) e um binário velho devolveu zero linhas no
+  tokdiff, sem erro. Com dimensões em tempo de compilação, um par binário/checkpoint
+  incompatível produz LIXO SILENCIOSO em vez de erro. Com dimensões em runtime
+  **validadas contra as formas dos .npy**, essa classe de bug morre.
+- o checkpoint já se autodescreve (escrevemos template.txt); com runtime o loader
+  pode LER d/camadas/vocab do checkpoint e nem precisar de flags.
+- a varredura de dose-resposta e os tamanhos futuros (10M, 25M, variantes MoE)
+  viram um loop de flags em vez de N rebuilds.
+
+Contrapartida honesta (por que eu tinha ido para compilação): os laços elementwise
+(RMSNorm, relu2, softmax) podem vetorizar melhor com limites constantes. Isso é
+MENSURÁVEL: comparar NLL e tempo/passo com dims de runtime contra os 5,77 s/passo
+históricos; se custar >5%, os treinos longos usam constantes geradas da mesma
+fonte (o módulo torna isso uma linha).
+
+Plano: `fortran_arch_mod` passa a ter VARIÁVEIS com os defaults históricos
+(768/6/6/12/8192/2048/8188), ligadas a flags (--d, --layers, --vocab, --ctx,
+--nhead, --nkv) e sobreponíveis pelo checkpoint; validação de forma ao carregar
+pesos tem de falhar alto em vez de seguir.
+
+Estado agora: `lib/fortran_arch.f90` escrito (defaults = valores históricos, ou
+seja inerte) mas AINDA NÃO LIGADO a nenhum app; nenhum app editado (o script de
+patch morreu no fpm.toml errado, sem efeito colateral). `scripts/filter_wiki.py`
+está rodando (fila: espera o extrator terminar).
