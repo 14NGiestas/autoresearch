@@ -23,4 +23,10 @@ for pair in "D_MODEL = $D" "N_HEAD = $H" "N_KV = $KV" "N_LAYER = $L" "VV = $V" "
 done
 echo "  arquitetura: d=$D heads=$H kv=$KV layers=$L vocab=$V ctx=$C (HD=$((D/H)))"
 grep -E 'parameter :: (D_MODEL|N_HEAD|N_KV|N_LAYER|VV|TT)' "$F" | sed 's/^/    /'
-cd /home/pauli/autoresearch/src && nix develop .. --command /home/pauli/fortran-fpm build 2>&1 | tail -2 | sed 's/^/  /'
+# UMA pasta de build por arquitetura: glob pegando a pasta errada foi um erro real
+# (o require_arch pegou, mas nao deveria ser possivel errar). O binario passa a ter
+# endereco deterministico: build/arch_d<D>_h<heads>_kv<kv>_l<layers>_v<vocab>_c<ctx>
+BD="build/arch_d${D}_h${H}_kv${KV}_l${L}_v${V}_c${C}"
+cd /home/pauli/autoresearch/src && nix develop .. --command /home/pauli/fortran-fpm build \
+    --profile release --flag "-march=native -ffast-math" --build-dir "$BD" 2>&1 | tail -1 | sed 's/^/  /'
+echo "  binario: src/$BD/*/app/train_run"

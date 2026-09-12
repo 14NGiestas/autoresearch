@@ -22,8 +22,8 @@
 #
 # Usage: sbatch jobs/halfbeast_gate.sbatch [A] [B] [N] [NP]
 set -u
-A="${1:-step_1000}"
-B="${2:-best}"
+A="${1:-step_1000}"; A="${A%%:*}"      # tolerate the CK:label form
+B="${2:-best}";      B="${B%%:*}"
 NN="${3:-64}"
 NP="${4:-256}"
 EV="$HOME/autoresearch-eval"

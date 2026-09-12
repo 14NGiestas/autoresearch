@@ -22,6 +22,7 @@ Uso:
   build_mix.py --sample --wiki-tokens 3e6          # valida rápido na amostra
 """
 import argparse
+import math
 import glob
 import hashlib
 import json
@@ -82,6 +83,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prose", default="/tmp/prose/prose_bpe_all.txt")
     ap.add_argument("--prose-ntrain", type=int, default=59385)
+    ap.add_argument("--prose-tokens", type=float, default=0.0,
+                    help="orçamento de prosa em TOKENS (0 = usa --prose-epochs)")
     ap.add_argument("--prose-epochs", type=float, default=1.0)
     ap.add_argument("--wiki-dir", default="/tmp/ptwiki/wx_full")
     ap.add_argument("--wiki-tokens", type=float, default=300e6)
@@ -96,15 +99,21 @@ def main():
 
     enc = load_enc()
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    n_prose_target = 0
+    n_prose_tot = 0
     with open(args.prose) as f:
         for i, line in enumerate(f):
             if i >= args.prose_ntrain:
                 break
-            n_prose_target += len(line.split()) - 1
-    n_prose_target = int(n_prose_target * args.prose_epochs)
+            n_prose_tot += len(line.split()) - 1
+    if args.prose_tokens > 0:
+        n_prose_target = int(args.prose_tokens)   # explícito: int() truncava a fração para 0
+    else:
+        n_prose_target = int(n_prose_tot * args.prose_epochs)
 
-    pstream = prose_stream(args.prose, args.prose_ntrain, int(args.prose_epochs))
+    # passadas >= 1 SEMPRE que há orçamento: com 0 o gerador não emitia nada e o
+    # script escrevia um corpus só-wiki em silêncio (com manifesto mentindo)
+    npass = max(1, int(math.ceil(n_prose_target / max(n_prose_tot, 1))))
+    pstream = prose_stream(args.prose, args.prose_ntrain, npass)
     wstream = wiki_stream(enc, args.wiki_dir, args.wiki_tokens, args.sample)
 
     # intercalação por blocos: mantém a mistura suave sem carregar tudo na RAM
@@ -127,15 +136,17 @@ def main():
             # um bloco de prosa, depois 'ratio' blocos de wiki (mistura ~1:ratio)
             if n_done < n_prose_target:
                 take = min(args.block, n_prose_target - n_done)
+                emitted = 0
                 for _ in range(take):
                     try:
                         buf.append(next(pstream))
                     except StopIteration:
                         break
+                    emitted += 1
                     buf_len += 1
                     if buf_len - 1 >= args.T:
                         flush_row()
-                n_done += take
+                n_done += emitted   # REAL, não pretendido
             if wp < args.wiki_tokens:
                 for _ in range(ratio):
                     if wp >= args.wiki_tokens:
@@ -183,6 +194,11 @@ def main():
     with open(args.manifest, "w") as f:
         json.dump(man, f, indent=2, ensure_ascii=False)
     print(json.dumps(man, indent=2, ensure_ascii=False))
+    want = n_prose_target + int(args.wiki_tokens)
+    if man["tokens_total"] < 0.95 * want:
+        print(f"  FALHA: emitidos {man['tokens_total']/1e6:.1f}M, orçamento {want/1e6:.1f}M "
+              f"(prosa real {n_done/1e6:.1f}M, wiki real {wp/1e6:.1f}M)")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
