@@ -55,3 +55,54 @@ bin/hb.sh logs [N]                    # últimos logs dos jobs
   você mata seu shell (aconteceu 3x). Use `pgrep -f '[p]adrao'` e mate por PID.
 - **`du`/mtime de saída do wikiextractor**: ele bufferiza; "arquivo parado" não
   significa processo morto. Confira com `ps`, não pelo mtime.
+
+## Nix na halfbeast (instalado 11/set, 22h)
+
+Instalado o **nix oficial multi-user** (daemon), substituindo o `nix-bin 2.6.0` do apt
+que não abria o nosso flake (precisa ≥2.18). Versão: **2.35.2**.
+
+```bash
+# o que foi feito (via tmux 0:4, sudo digitado pelo dono):
+sudo apt-get remove --purge -y nix-bin nix-setup-systemd   # pacote da distro
+sudo userdel <cada nixbld*>; sudo groupdel nixbld          # restos do apt (UID 998)
+sh <(curl -L https://nixos.org/nix/install) --daemon       # instalador oficial
+```
+O instalador criou os usuários de build `nixbld1..32` (uid 30000+), `/etc/profile.d/nix.sh`
+(nix no PATH para **todos** os usuários) e `/etc/nix/nix.conf` com `build-users-group`.
+
+### ARMADILHA: `LD_LIBRARY_PATH` global quebra o nix
+O `setvars.sh` do oneAPI, chamado no `~/.bashrc`, exporta um `LD_LIBRARY_PATH` enorme
+(inclusive `/usr/lib/x86_64-linux-gnu`). Isso **atropela o RPATH** do nix, que então
+carrega a glibc/openssl do Ubuntu e falha:
+`nix: /usr/lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_2.38' not found`.
+Note que o token `LD_LIBRARY_PATH` **não aparece** no bashrc -- quem seta é o
+`setvars.sh` internamente (grep pelo nome da variável não acha; grep por `intel`/`oneapi` acha).
+
+Conserto aplicado **só na nossa conta** (`~/.bashrc`, backup em `~/.bashrc.bak-preoneapi`):
+o export global foi desativado e o oneAPI virou **opt-in**:
+```bash
+use_oneapi() { ( . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1; "$@" ); }
+# uso:  use_oneapi python treino.py     (o shell externo segue limpo)
+```
+Verificado: com ambiente limpo, `nix --version` funciona e `echo ${LD_LIBRARY_PATH:-X}`
+dá vazio (antes da correção vinha a lista inteira do oneAPI).
+
+### Exposição que NÃO é nossa (reportar, não mexer)
+- `/etc/skel/.bashrc:120` tem o mesmo `source .../setvars.sh` -> **toda conta nova herda**
+  a quebra do nix. Correção exige root e é decisão de política do dono da máquina.
+- `/home/fbonani/.bashrc:120` idem (outro usuário). Não é nosso para editar.
+- Nada em `/etc/profile`, `/etc/bash.bashrc`, `/etc/environment`, `/etc/profile.d/` (verificado).
+
+### Por que os jobs em Slurm não sofrem disso
+Shell não-interativo **não lê** `~/.bashrc`. Por isso o bundle portable e o `srun`
+funcionaram o tempo todo; só o uso interativo do nix precisava do conserto.
+
+### Boa vizinhança com o store
+`/nix/store` é **compartilhado** e cresce. Depois de builds pesados:
+`nix store gc` (ou `nix-collect-garbage -d`). O store chegou a ~19 GB durante o
+primeiro `nix develop` porque o nosso flake arrasta a toolchain **ROCm/hipBLAS**
+(a fermi tem GPU; a halfbeast não) -- daí a ideia de um `devShells.cpu` enxuto.
+
+### Wrapper para shells que ainda têm a poluição
+`~/bin/nixc` = `exec env -u LD_LIBRARY_PATH /nix/var/nix/profiles/default/bin/nix "$@"`.
+Útil em shells antigos/heredados; desnecessário em ambiente limpo.
