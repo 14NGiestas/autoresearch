@@ -431,3 +431,28 @@ ajudar a prosa held-out e não derrubar o core, fica.
    treinando (fermi até 21:32 e depois o v5 encadeado; halfbeast até 05:23).
 4. Limpeza/dedupe -> tokenizar em BPE (mesma receita do P1) -> contabilizar o mix
    (base prosa PT 60-70% / ptwiki 15-20% / instrução+Fortran 10% / SE 5-10%).
+
+## ptwiki MEDIDO: 1,03 GB de texto = 387M tokens BPE (resolve o dado do 25M)
+
+Dump completo (2,72 GB de XML, 01/set/2026), verificado com `bunzip2 -t`.
+Amostra de 300 MB extraída com wikiextractor (--json --no-templates) e medida:
+
+- 300 MB de XML -> **113,8 MB de texto** (37,9% do XML vira texto -- o resto é
+  marcação, templates, refs).
+- 14.352 artigos na amostra; erros de template: 5-8 por ~7.000 artigos (desprezível).
+- Compressão BPE: **2,67 bytes/token** (0,375 tokens/byte) -- um pouco pior que a
+  prosa literária (2,50), como esperado: nomes próprios, números, termos técnicos.
+- **PROJEÇÃO para o dump inteiro: 1,03 GB de texto = 387M tokens BPE.**
+
+O que isso muda na contabilidade:
+- 387M tokens de ptwiki + 53,7M da prosa = **~440M tokens**. Chinchilla (20/param)
+  cobre ~22M params em 1 época -- ou seja, o **25M (500M tokens) fica a 1,1 épocas**
+  e o dado deixa de ser o gargalo. O gargalo volta a ser tempo (~2 dias no 25M).
+- E o mix fica com massa de verdade nos dois componentes principais: prosa PT
+  (literária, alvo da avaliação) + ptwiki (moderno/factual), em vez de só prosa
+  oitocentista.
+- Extração completa rodando com `nice -n 19 --processes 3` (só usa ciclos ociosos:
+  nice garante que o treinador preempta), saída em /tmp/ptwiki/wx_full, log em
+  /tmp/ptwiki/extract.log. Estimativa: ~15-20 min.
+- Alvo do JSONL: ~1,1 GB. Próximo: limpeza/dedupe, split por hash do título do
+  artigo, tokenização BPE (receita do P1, com portão) e contabilização do mix.
