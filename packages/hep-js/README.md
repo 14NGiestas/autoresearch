@@ -14,6 +14,22 @@ npm i hep-protocol                     # as library
 
 `@igpauli/hep` is the same package under your scope: `npx --yes @igpauli/hep status`.
 
+
+## Tree (v0.1.2+)
+
+ASCII DAG of any hash-chained registry — hypotheses *or* model checkpoints:
+
+```bash
+hep tree                                            # ./hep/registry.jsonl
+hep tree --registry ckpt/registry.jsonl             # auto-detected flavor
+hep tree --registry x.jsonl --type hep|ckpt         # force flavor
+hep tree --no-color                                 # plain (also automatic when piped or NO_COLOR)
+```
+
+Node ids are colored deterministically (same id, same color, every run);
+ckpt mode crowns the lowest-bpb node with ★. Shared children (e.g. a soup
+with two parents) render once, with `↩ id (see above)` at the other parent.
+
 ## CLI
 
 ```bash

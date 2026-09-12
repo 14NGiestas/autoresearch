@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { HEP } from "./index.js";
+import { bestCkpt, colorsEnabled, loadNodes } from "./tree.js";
+import { renderTree } from "./tree.js";
 
 function help() {
   console.log(`hep — Hypothesis Evolution Protocol (arXiv:2607.09195v1)
@@ -14,6 +16,9 @@ Usage:
   hep get --hyp hyp_XXXX
   hep verify
   hep status
+  hep tree [--registry PATH] [--type auto|hep|ckpt] [--no-color]
+      ASCII DAG of the registry (works for hep/ AND ckpt/ registries).
+      Ids are colored deterministically; colors off when piped or NO_COLOR.
 `);
 }
 
@@ -77,6 +82,14 @@ try {
     const r = h.getHypothesis(hyp);
     if (!r) { console.error(`not found: ${hyp}`); process.exit(1); }
     console.log(JSON.stringify(r, null, 2));
+  } else if (cmd === "tree") {
+    const regPath = arg("registry") ?? `${process.cwd()}/hep/registry.jsonl`;
+    const type = (arg("type") ?? "auto") as "auto" | "hep" | "ckpt";
+    if (type !== "auto" && type !== "hep" && type !== "ckpt") throw new Error("--type must be auto|hep|ckpt");
+    const { nodes, flavor } = loadNodes(regPath, type);
+    const color = colorsEnabled(flag("no-color") ? false : undefined);
+    const out = renderTree(nodes, { color, starId: flavor === "ckpt" ? bestCkpt(nodes) : null });
+    console.log(out);
   } else if (cmd === "verify") {
     const r = h.verify();
     console.log(r.ok ? "registry ok — hash chain valid" : `registry BAD at seq ${r.badSeq}`);
