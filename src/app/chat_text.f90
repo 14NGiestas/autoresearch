@@ -25,7 +25,7 @@ program chat_text
   use fortran_spec_mod, only: lookup_draft
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
-      write_arch_txt, read_arch_txt, arch_report
+      write_arch_txt, read_arch_txt, arch_report, require_arch
   implicit none
 
   integer, parameter :: sp = c_float
@@ -36,6 +36,8 @@ program chat_text
   character(len=512) :: tdir, wdir, arg
   character(len=1) :: cb
   character(len=4096) :: tmpl_raw, sys_raw, stop_raw
+  character(len=8) :: space
+  logical :: use_bmask
   character(len=:), allocatable :: dia
   logical :: diafound
   integer :: n_gen, u, ios, fsize, i, j, best, tc, step, nprompt
@@ -71,7 +73,7 @@ program chat_text
   call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 20 --temp 0.0' // &
       ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --pwin 0 --plen 0.0 --nblock 0' // &
       ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream T --loops 1 --pchunk 64' // &
-      ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5', &
+      ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5 --space SPACE', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  chat_text - pure-Fortran text-in/text-out GPT inference', &
@@ -104,7 +106,8 @@ program chat_text
       '  --system S    system prompt (prepended as ### SYSTEM)', &
       '  --stop S      comma-separated stop sequences', &
       '  --stream T    stream tokens as generated (default: on, use --stream F to disable)', &
-      '  --stats T     print prefill/decode ms + tok/s to stderr'], &
+      '  --stats T     print prefill/decode ms + tok/s to stderr', &
+      '  --space S     byte|bpe ids, like training (default: byte)'], &
       version_text=[character(len=80) :: 'chat_text 1.1'])
   tdir = trim(sget('tables'))
   wdir = trim(sget('weights'))
@@ -148,6 +151,7 @@ program chat_text
   call load_tables(trim(tdir))
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
+  call require_arch(trim(wdir))
 
   ! prompt bytes from stdin. Pipes have no inquire-able size (gfortran
   ! returns 0), so read byte-by-byte to EOF instead. Buffer holds 1 MiB.
@@ -200,7 +204,18 @@ program chat_text
     end block
   end if
 
-  call encode_bytes(pbytes, fsize, pids)
+  space = 'byte'
+  if (specified('space')) space = trim(sget('space'))
+  if (trim(space) /= 'byte' .and. trim(space) /= 'bpe') then
+    print '(2A)', 'unknown --space (byte|bpe): ', trim(space)
+    call exit(1)
+  end if
+  use_bmask = (trim(space) == 'byte')
+  if (use_bmask) then
+    call encode_bytes(pbytes, fsize, pids)
+  else
+    call encode(pbytes, fsize, pids)
+  end if
   nprompt = size(pids) + 1
   allocate(idx(nprompt + n_gen))
   idx(1) = BOS
@@ -317,7 +332,7 @@ program chat_text
           nhist = pp + jj - 1 - nprompt
           targ(jj) = sample_next(outspec((jj-1)*VV+1:jj*VV), VV, temp, &
               topp, pres, freq, rep, pwin, plen, idx(nprompt+1:), nhist, &
-              nblock, rng, byte_space=.true.) - 1
+              nblock, rng, byte_space=use_bmask) - 1
           if (jj <= keff) then
             if (draft(jj) /= targ(jj)) exit
             na = na + 1
@@ -332,7 +347,11 @@ program chat_text
         if (na > 0) idx(pp+1:pp+na) = draft(1:na)
         idx(pp + na + 1) = corr
         if (dostream) then
-          call decode_bytes(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
+          if (use_bmask) then
+            call decode_bytes(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
+          else
+            call decode(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
+          end if
           do i = 1, snbytes
             write (*, '(A)', advance='no') char(sbytes(i))
           end do
@@ -357,10 +376,14 @@ program chat_text
           print '(A)', "NaN logit — abort"; call exit(1)
         end if
         best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &
-            idx(nprompt+1:), pp - nprompt, nblock, rng, byte_space=.true.)
+            idx(nprompt+1:), pp - nprompt, nblock, rng, byte_space=use_bmask)
         idx(pp + 1) = best - 1
         if (dostream) then
-          call decode_bytes(idx(pp+1:pp+1), 1, sbytes, snbytes)
+          if (use_bmask) then
+            call decode_bytes(idx(pp+1:pp+1), 1, sbytes, snbytes)
+          else
+            call decode(idx(pp+1:pp+1), 1, sbytes, snbytes)
+          end if
           do i = 1, snbytes
             write (*, '(A)', advance='no') char(sbytes(i))
           end do
@@ -422,10 +445,14 @@ program chat_text
         print '(A)', "NaN logit — abort"; call exit(1)
       end if
       best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &
-          idx(nprompt+1:), tc - nprompt, nblock, rng, byte_space=.true.)
+          idx(nprompt+1:), tc - nprompt, nblock, rng, byte_space=use_bmask)
       idx(tc+1) = best - 1
       if (dostream) then
-        call decode_bytes(idx(tc+1:tc+1), 1, sbytes, snbytes)
+        if (use_bmask) then
+          call decode_bytes(idx(tc+1:tc+1), 1, sbytes, snbytes)
+        else
+          call decode(idx(tc+1:tc+1), 1, sbytes, snbytes)
+        end if
         do i = 1, snbytes
           write (*, '(A)', advance='no') char(sbytes(i))
         end do
@@ -447,7 +474,11 @@ program chat_text
   if (dostream) then
     write (*, '(A)') ""
   else
-    call decode_bytes(idx(nprompt+1:), n_gen, obytes, nbytes)
+    if (use_bmask) then
+      call decode_bytes(idx(nprompt+1:), n_gen, obytes, nbytes)
+    else
+      call decode(idx(nprompt+1:), n_gen, obytes, nbytes)
+    end if
     ! stop-sequence truncation (only for non-streaming; streaming already flushed)
     if (specified('stop')) then
       stop_raw = trim(sget('stop'))

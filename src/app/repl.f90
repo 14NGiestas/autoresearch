@@ -23,7 +23,7 @@ program repl
   use fortran_spec_mod, only: lookup_draft
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
-      write_arch_txt, read_arch_txt, arch_report
+      write_arch_txt, read_arch_txt, arch_report, require_arch
   implicit none
 
   integer, parameter :: sp = c_float
@@ -35,6 +35,8 @@ program repl
   character(len=512) :: tdir, wdir, arg
   character(len=8192) :: linebuf
   character(len=4096) :: tmpl_raw, sys_raw, stop_raw
+  character(len=8) :: space
+  logical :: use_bmask
   character(len=:), allocatable :: dia
   logical :: diafound
   integer :: n_gen, u, ios, i, j, best, tc, step, nprompt, nbytes, nlen
@@ -69,7 +71,7 @@ program repl
   call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 40 --temp 0.0' // &
       ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --pwin 0 --plen 0.0 --nblock 0' // &
       ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream F --pchunk 64' // &
-      ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5', &
+      ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5 --space SPACE', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  repl - interactive pure-Fortran chat REPL', &
@@ -93,7 +95,8 @@ program repl
       '  --spec-probe N --spec-min-acc X  adaptive guard: score each window of', &
       '                N spec rounds, pause spec for one window if mean', &
       '                acceptance < X (default 8 / 0.5; X=0 = never pause)', &
-      '  --stats T     print per-turn prefill/decode ms + tok/s'], &
+      '  --stats T     print per-turn prefill/decode ms + tok/s', &
+      '  --space S     byte|bpe ids, like training (default: byte)'], &
       version_text=[character(len=80) :: 'repl 1.1'])
   tdir = trim(sget('tables'))
   wdir = trim(sget('weights'))
@@ -133,6 +136,7 @@ program repl
   call load_tables(trim(tdir))
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
+  call require_arch(trim(wdir))
   d2 = HD / 2
   write (0, '(A)') "ready. Empty line quits."
 
@@ -175,7 +179,18 @@ program repl
       end block
     end if
 
-    call encode_bytes(pbytes, nlen, pids)
+    space = 'byte'
+    if (specified('space')) space = trim(sget('space'))
+    if (trim(space) /= 'byte' .and. trim(space) /= 'bpe') then
+      print '(2A)', 'unknown --space (byte|bpe): ', trim(space)
+      call exit(1)
+    end if
+    use_bmask = (trim(space) == 'byte')
+    if (use_bmask) then
+      call encode_bytes(pbytes, nlen, pids)
+    else
+      call encode(pbytes, nlen, pids)
+    end if
     deallocate(pbytes)
     nprompt = size(pids) + 1
     ntot = nprompt + n_gen
@@ -286,7 +301,7 @@ program repl
             nhist = pp + jj - 1 - nprompt
             targ(jj) = sample_next(outspec((jj-1)*VV+1:jj*VV), VV, temp, &
                 topp, pres, freq, rep, pwin, plen, idx(nprompt+1:), nhist, &
-                nblock, rng, byte_space=.true.) - 1
+                nblock, rng, byte_space=use_bmask) - 1
             if (jj <= keff) then
               if (draft(jj) /= targ(jj)) exit
               na = na + 1
@@ -301,7 +316,11 @@ program repl
           if (na > 0) idx(pp+1:pp+na) = draft(1:na)
           idx(pp + na + 1) = corr
           if (dostream) then
-            call decode_bytes(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
+            if (use_bmask) then
+              call decode_bytes(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
+            else
+              call decode(idx(pp+1:pp+na+1), na + 1, sbytes, snbytes)
+            end if
             do j = 1, snbytes
               write (*, '(A)', advance='no') char(sbytes(j))
             end do
@@ -326,10 +345,14 @@ program repl
             call exit(1)
           end if
           best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &
-              idx(nprompt+1:), pp - nprompt, nblock, rng, byte_space=.true.)
+              idx(nprompt+1:), pp - nprompt, nblock, rng, byte_space=use_bmask)
           idx(pp + 1) = best - 1
           if (dostream) then
-            call decode_bytes(idx(pp+1:pp+1), 1, sbytes, snbytes)
+            if (use_bmask) then
+              call decode_bytes(idx(pp+1:pp+1), 1, sbytes, snbytes)
+            else
+              call decode(idx(pp+1:pp+1), 1, sbytes, snbytes)
+            end if
             do j = 1, snbytes
               write (*, '(A)', advance='no') char(sbytes(j))
             end do
@@ -383,10 +406,14 @@ program repl
           call exit(1)
         end if
         best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &
-            idx(nprompt+1:), tc - nprompt, nblock, rng, byte_space=.true.)
+            idx(nprompt+1:), tc - nprompt, nblock, rng, byte_space=use_bmask)
         idx(tc+1) = best - 1
         if (dostream) then
-          call decode_bytes(idx(tc+1:tc+1), 1, sbytes, snbytes)
+          if (use_bmask) then
+              call decode_bytes(idx(tc+1:tc+1), 1, sbytes, snbytes)
+            else
+              call decode(idx(tc+1:tc+1), 1, sbytes, snbytes)
+            end if
           do j = 1, snbytes
             write (*, '(A)', advance='no') char(sbytes(j))
           end do
@@ -408,7 +435,11 @@ program repl
       write (*, '(A)') ""
       deallocate(idx)
     else
-      call decode_bytes(idx(nprompt+1:), n_gen, obytes, nbytes)
+      if (use_bmask) then
+        call decode_bytes(idx(nprompt+1:), n_gen, obytes, nbytes)
+      else
+        call decode(idx(nprompt+1:), n_gen, obytes, nbytes)
+      end if
       if (specified('stop')) then
         stop_raw = trim(sget('stop'))
       else

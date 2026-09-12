@@ -82,7 +82,8 @@ ganhar dos dois pais, o paralelismo vira multiplicador de throughput legítimo.
 - Eval no box quieto: `bin/sync_eval.sh`, `jobs/halfbeast_*.sbatch`
   (`_gate`, `_bpb`, `_attn_step`, `_attn_ab`, `_prose_continue`), logs em
   `bin/halfbeast_logs.sh`.
-- Agregador de bpb: `scripts/bpb_from_eval.py` (reproduz o `val @N` do treinador).
+- Agregador de bpb: `scripts/bpb_from_eval.py` (reproduz o `val @N` do treinador; desde 2026-09-12 aceita qualquer T, antes era hardcoded 2048).
+- Inferência tem `--space byte|bpe` (`chat_text`, `repl`; default byte, sem mudança de comportamento): o espaço tem de casar com o treino, senão o modelo recebe lixo coerente. E todo app que carrega pesos chama `require_arch` — binário d768 + checkpoint d96 aborta alto em vez de gerar lixo + segfault ocasional no sgemm (incidente real na bateria da varredura, pego pelo backtrace: `sgemm_incopy_ZEN` via `gpt_step_multi`).
 - Mapa de modelos: `ckpt.py` + `ckpt/registry.jsonl` (genealogia com hash-chain como o HEP; `show`/`lineage`/`verify`).
 - `ai_chat_hoarder/` saiu da árvore (commits 7dfa54b, branch `ai-chat-hoarder`); vive standalone em `/home/pauli/ai-chat-hoarder` (mesma história, +README).
 - HEP: 34 hipóteses. Relevantes: `hyp_1854b7` TRAIN_THROUGHPUT 0,97;
