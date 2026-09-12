@@ -456,3 +456,57 @@ O que isso muda na contabilidade:
   /tmp/ptwiki/extract.log. Estimativa: ~15-20 min.
 - Alvo do JSONL: ~1,1 GB. Próximo: limpeza/dedupe, split por hash do título do
   artigo, tokenização BPE (receita do P1, com portão) e contabilização do mix.
+
+## Dosagem do mix: como sair da "cozinha" (e a wiki por inteiro?)
+
+Crítica do usuário, correta: proporção escolhida por intuição é cozinha. O que
+torna dosagem arbitrária é o OBJETIVO implícito. Explicitando:
+
+- **primário**: bpb em prosa LITERÁRIA held-out (a régua histórica: 2,40 na fase 5,
+  2,27/2,29 nos ramos v2/v3 byte-level) -- é o alvo do projeto;
+- **guarda-corpo**: os probes de core/instrução não podem regredir (o esquecimento
+  que medimos: math piorou a prosa de 8,18 para 8,74 bpb);
+- **secundário**: bpb em wiki held-out (competência geral em PT).
+
+Com objetivo explícito, a dosagem deixa de ser entrada e passa a ser SAÍDA de um
+experimento de dose-resposta, barato porque o custo cai com N^2:
+
+- modelo de **3M params** (d=98, L=12): 32 MFLOP/token -> ~15.000 tok/s com os dois
+  boxes -> **~1 h por braço de 50M tokens**.
+- braços: fração de wiki f = 0/25/50/75/100% com o MESMO total de tokens (50M),
+  prosa preenchendo o resto (anotando épocas, para precificar repetição).
+- mede-se o primário (prosa held-out), o secundário (wiki held-out) e o guarda-corpo.
+- sai uma CURVA de bpb vs f: o ótimo é o mínimo dela, e a FORMA diz a sensibilidade
+  (se for plana entre 25-75%, a dose não importa muito e escolhe-se por robustez).
+- braço extra que precifica REPETIÇÃO: prosa x2 vs prosa x1 + wiki no mesmo
+  orçamento. Já temos um dado relacionado (v2/v3: dado novo bateu repetição, 2,27
+  contra 2,40) -- a varredura generaliza.
+- transferência de escala: proporções de mistura são aproximadamente invariantes em
+  escala (é a premissa dos proxies tipo DoReMi); verificamos com UM braço
+  intermediário de 10M na razão escolhida.
+
+Se quiséssemos pular a varredura, o default defensável é amostragem por temperatura
+(peso ∝ tokens^0,7, GPT-3/MassiveText), que sobe a fonte pequena e de valor (nossa
+prosa) e derruba o dump grande (wiki) sem tuning -- mas ainda é PRIOR, não medição.
+
+### Wiki: precisa de tudo? NÃO (medido em 40.060 artigos, 272 MB)
+
+| corte | % dos artigos | % dos tokens |
+|---|---|---|
+| < 0,5 KB | 29,8% | 0,9% |
+| < 1 KB | 39,0% | 1,9% |
+| **< 2 KB** | **50,6%** | **4,4%** |
+| < 4 KB | 64,7% | 10,4% |
+| < 8 KB | 78,2% | 21,8% |
+
+mediana 1,9 KB; p90 18,1 KB; p99 67,8 KB; máx 565 KB. Os 10% maiores concentram
+**57,2%** dos tokens. Conclusão: filtrar em >= 2 KB mantém 95,6% do texto com
+metade dos artigos, e os descartados são stubs (uma linha, "X é um município de
+Y") -- alta repetição e registro atrofiado, ou seja, ruins também em qualidade.
+
+### Plano revisado (antes de gastar 2 dias no 25M)
+
+1. Filtrar a wiki (>= 2 KB, dedupe) -- barato, melhora token/qualidade.
+2. Varredura de dose-resposta em 3M, 5 braços, ~1 h cada (2-4 h com os dois boxes).
+3. Escolher f* da curva, verificar com um braço de 10M, e só então o 25M.
+Custo do estudo: ~4 h. Risco que ele remove: 2 dias de treino na dose errada.
