@@ -17,6 +17,7 @@ program train_run
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights, verify_ckpt_dir
   use fortran_chat_mod, only: write_template_txt
+  use fortran_arch_mod, only: write_arch_txt, read_arch_txt, arch_report
   use fortran_adam_state_mod, only: load_adam_state, save_adam_state
   use fortran_data_mod, only: load_batch
   use M_CLI2, only: set_args, sget, rget, iget, specified
@@ -188,6 +189,7 @@ program train_run
           M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
       call save_adam_state(trim(ckdir), S)
       call write_template_txt(trim(ckdir))
+      call write_arch_txt(trim(ckdir))
       call verify_ckpt_dir(trim(ckdir), N_LAYER, nbad, badpath)
       if (nbad /= 0) then
         print '(2A)', "checkpoint verify failed (disk full?): ", trim(badpath)
@@ -221,6 +223,7 @@ program train_run
             M%fc, M%p2)
         call save_adam_state(trim(outdir) // "/best", S)
         call write_template_txt(trim(outdir) // "/best")
+      call write_arch_txt(trim(outdir) // "/best")
         call verify_ckpt_dir(trim(outdir) // "/best", N_LAYER, nbad, badpath)
         if (nbad /= 0) then
           print '(2A)', "best verify failed (disk full?): ", trim(badpath)
