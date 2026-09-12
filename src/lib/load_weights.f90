@@ -19,6 +19,16 @@ contains
     real(wp), allocatable, intent(out) :: a(:)
     integer :: ios
     character(len=:), allocatable :: msg
+    logical :: ex
+    integer :: sz
+    ! stdlib load_npy segfaults (instead of iostat) on a missing file in some
+    ! versions, and chokes on 0-byte files -- check first so every app fails
+    ! loud, never silent/SIGSEGV.
+    inquire (file=path, exist=ex, size=sz)
+    if (.not. ex .or. sz <= 0) then
+      print '(2A)', "load failed (missing or empty file): ", trim(path)
+      call exit(1)
+    end if
     call load_npy(path, a, iostat=ios, iomsg=msg)
     if (ios /= 0) then
       print '(3A)', "load failed: ", trim(path), " " // trim(msg)
