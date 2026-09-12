@@ -133,3 +133,26 @@ muda ordem de soma), e isso quebraria a comparabilidade que a gente preserva.
   `/home/fbonani/.bashrc` seguem de **2022-05-06** ✓
 - `/etc/profile.d/nix.sh` + `/etc/nix/nix.conf` existem -> nix disponível para todos ✓
 - jobs rodando normalmente (`6010` do vizinho, `6016_0/1` nossos) ✓
+
+### Peso: USE `.#inference`, não `.#default` (medido)
+
+O flake **já tinha** um shell sem ROCm -- `devShells.inference` (gfortran, fpm, openblas,
+python312, uv; hook imprime "inference/eval shell ready (no ROCm...)"). Eu compilei com
+`.#default` primeiro e arrastei a toolchain ROCm inteira para uma máquina sem GPU:
+
+| no store da halfbeast | tamanho |
+|---|---|
+| `-source` (monorepo do ROCm) | **13 GB** |
+| `hipblaslt-7.2.3` | 1,8 GB |
+| `rocblas-7.2.3` | 798 MB |
+| nixpkgs + fontes | ~2 GB |
+| **total** | **20 GB** (≈15,5 GB de ROCm inútil aqui) |
+
+```bash
+# certo, de dentro de src/ (o dir e o atributo vao JUNTOS: ..#inference)
+cd ~/autoresearch-eval/autoresearch/src
+~/bin/nixc develop ..#inference --command fortran-fpm build
+~/bin/nixc develop ..#inference --command fortran-fpm test    # 0 failures, cross-ISA
+```
+Se não for usar ROCm na máquina: `sudo nix store gc` libera os ~15,5 GB (roda como root;
+profiles de outros usuários são GC roots e ficam preservados).
