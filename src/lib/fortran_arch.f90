@@ -119,5 +119,17 @@ contains
     close (u)
   end subroutine read_arch_txt
 
+  ! Reusável: todo app que carrega pesos chama ISTO, em vez de repetir a checagem.
+  ! Um checkpoint de outra arquitetura tem de parar a execução, não gerar lixo.
+  subroutine require_arch(dir)
+    character(len=*), intent(in) :: dir
+    logical :: ok
+    call read_arch_txt(dir, ok)
+    if (.not. ok) then
+      write (*, '(A)') 'abortando: o checkpoint não bate com a arquitetura deste binário'
+      call exit(1)
+    end if
+  end subroutine require_arch
+
 end module fortran_arch_mod
 

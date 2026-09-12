@@ -20,7 +20,7 @@ program eval_bpb
   use M_CLI2, only: set_args, sget, specified
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
-      write_arch_txt, read_arch_txt, arch_report
+      write_arch_txt, read_arch_txt, arch_report, require_arch
   implicit none
 
   integer, parameter :: sp = c_float
@@ -62,6 +62,7 @@ program eval_bpb
 
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
+  call require_arch(trim(wdir))
 
   allocate(full(TT + 1))
   open (newunit=unit, file=trim(rowsfile), status='old', action='read')

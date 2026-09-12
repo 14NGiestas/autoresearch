@@ -19,7 +19,7 @@ program train_run
   use fortran_chat_mod, only: write_template_txt
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
-      write_arch_txt, read_arch_txt, arch_report
+      write_arch_txt, read_arch_txt, arch_report, require_arch
   use fortran_adam_state_mod, only: load_adam_state, save_adam_state
   use fortran_data_mod, only: load_batch
   use M_CLI2, only: set_args, sget, rget, iget, specified
@@ -126,6 +126,8 @@ program train_run
 
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
+  call require_arch(trim(wdir))
+
   call init_state(M, S)
   ! Optimizer carry across phases (Cognivolve): old checkpoints without
   ! adam_*.npy keep zeros = previous behavior.
