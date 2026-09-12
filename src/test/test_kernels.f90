@@ -32,7 +32,8 @@ program test_kernels
   use fortran_rmsnorm_mod, only: rmsnorm, rmsnorm0
   use fortran_rope_mod, only: rope_4d
   use fortran_attn_mod, only: causal_attn, relu2, relu2_bwd, attn_bwd, &
-      attn_chunk, attn_step, causal_attn_doc, attn_sgemm, attn_bwd_sgemm
+      attn_chunk, attn_step, causal_attn_doc, attn_sgemm, attn_bwd_sgemm, &
+      attn_bwd_doc
   use fortran_backward_mod, only: linear3d_bwd, rmsnorm0_bwd, rope_4d_bwd, &
       xent_fwd, xent_bwd, wte_bwd
   use fortran_adamw_mod, only: adamw_step
@@ -58,6 +59,7 @@ program test_kernels
   call test_causal_attn()
   call test_causal_attn_gqa()
   call test_causal_attn_doc()
+  call test_attn_bwd_doc()
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
   call test_corpus_golden()
@@ -997,7 +999,12 @@ contains
       if (e > max_err) max_err = e
     end do
     print '(A,E10.3)', "  max err (docstart all 1 vs causal) = ", max_err
-    call check(max_err == 0.0_sp, "no-boundary mask is bit-exact vs causal")
+    ! Bit-exact WITHOUT -ffast-math (verified: 0.000E+00 in the default
+    ! profile); with fast-math the two loop nests codegen differently
+    ! (constant lower bound 1 vs variable s0) and agree to ~1e-7. Same ~1e-6
+    ! bar as every other kernel pair in this file -- still catches any real
+    ! mask bug (those give O(1) errors).
+    call check(max_err < 1.0e-6_sp, "no-boundary mask matches causal")
 
     do i = 1, 4
       ds(i) = 1_c_int
@@ -1016,7 +1023,92 @@ contains
       if (e > max_err) max_err = e
     end do
     print '(A,E10.3)', "  max err (doc 2 rows vs its own causal) = ", max_err
-    call check(max_err == 0.0_sp, "rows after a boundary ignore the earlier doc")
+    ! Same fast-math codegen caveat as above (exact without it).
+    call check(max_err < 1.0e-6_sp, "rows after a boundary ignore the earlier doc")
+  end subroutine
+
+  subroutine test_attn_bwd_doc()
+    integer, parameter :: B = 1, T = 6, H = 2, KH = 2, D = 4
+    real(sp) :: q(B*T*H*D), k(B*T*KH*D), v(B*T*KH*D), dy(B*T*H*D)
+    real(sp) :: y(B*T*H*D), qp(B*T*H*D), kp(B*T*KH*D), vp(B*T*KH*D)
+    real(sp) :: dq(B*T*H*D), dk(B*T*KH*D), dv(B*T*KH*D)
+    real(sp) :: dq2(B*T*H*D), dk2(B*T*KH*D), dv2(B*T*KH*D)
+    integer(c_int) :: ds(B*T)
+    real(sp), parameter :: HH = 1.0e-3_sp
+    real(sp) :: lp, lm, err, worst, max_err, e
+    integer :: i
+
+    print '(A)', "=== test_attn_bwd_doc (FD with boundary + equivalence) ==="
+    call fill(q, B*T*H*D, 0.5_sp)
+    call fill(k, B*T*KH*D, 0.5_sp)
+    call fill(v, B*T*KH*D, 0.5_sp)
+    call fill(dy, B*T*H*D, 0.5_sp)
+    ds = 1_c_int
+    ds(4) = 4_c_int; ds(5) = 4_c_int; ds(6) = 4_c_int
+
+    dq = 0.0_sp; dk = 0.0_sp; dv = 0.0_sp
+    call attn_bwd_doc(dy, q, k, v, dq, dk, dv, B, T, H, KH, D, ds)
+
+    worst = 0.0_sp
+    do i = 1, B*T*H*D
+      qp = q; qp(i) = qp(i) + HH
+      call causal_attn_doc(qp, k, v, y, B, T, H, KH, D, ds)
+      lp = sum(dy*y)
+      qp = q; qp(i) = qp(i) - HH
+      call causal_attn_doc(qp, k, v, y, B, T, H, KH, D, ds)
+      lm = sum(dy*y)
+      err = abs((lp - lm)/(2.0_sp*HH) - dq(i))
+      if (err > worst) worst = err
+    end do
+    print '(A,E10.3)', "  worst |dL/dq - dq| = ", worst
+    call check(worst < 2.0e-3_sp, "doc dQ matches finite differences")
+
+    worst = 0.0_sp
+    do i = 1, B*T*KH*D
+      kp = k; kp(i) = kp(i) + HH
+      call causal_attn_doc(q, kp, v, y, B, T, H, KH, D, ds)
+      lp = sum(dy*y)
+      kp = k; kp(i) = kp(i) - HH
+      call causal_attn_doc(q, kp, v, y, B, T, H, KH, D, ds)
+      lm = sum(dy*y)
+      err = abs((lp - lm)/(2.0_sp*HH) - dk(i))
+      if (err > worst) worst = err
+    end do
+    print '(A,E10.3)', "  worst |dL/dk - dk| = ", worst
+    call check(worst < 2.0e-3_sp, "doc dK matches finite differences (GQA sum)")
+
+    worst = 0.0_sp
+    do i = 1, B*T*KH*D
+      vp = v; vp(i) = vp(i) + HH
+      call causal_attn_doc(q, k, vp, y, B, T, H, KH, D, ds)
+      lp = sum(dy*y)
+      vp = v; vp(i) = vp(i) - HH
+      call causal_attn_doc(q, k, vp, y, B, T, H, KH, D, ds)
+      lm = sum(dy*y)
+      err = abs((lp - lm)/(2.0_sp*HH) - dv(i))
+      if (err > worst) worst = err
+    end do
+    print '(A,E10.3)', "  worst |dL/dv - dv| = ", worst
+    call check(worst < 2.0e-3_sp, "doc dV matches finite differences (GQA sum)")
+
+    ds = 1_c_int
+    dq2 = 0.0_sp; dk2 = 0.0_sp; dv2 = 0.0_sp
+    call attn_bwd_doc(dy, q, k, v, dq2, dk2, dv2, B, T, H, KH, D, ds)
+    dq = 0.0_sp; dk = 0.0_sp; dv = 0.0_sp
+    call attn_bwd(dy, q, k, v, dq, dk, dv, B, T, H, KH, D)
+    max_err = 0.0_sp
+    do i = 1, B*T*H*D
+      e = abs(dq(i) - dq2(i))
+      if (e > max_err) max_err = e
+    end do
+    do i = 1, B*T*KH*D
+      e = abs(dk(i) - dk2(i))
+      if (e > max_err) max_err = e
+      e = abs(dv(i) - dv2(i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err (doc-no-boundary vs attn_bwd) = ", max_err
+    call check(max_err < 1.0e-6_sp, "doc backward matches plain backward")
   end subroutine
 
   ! ------------------------------------------------------------------------

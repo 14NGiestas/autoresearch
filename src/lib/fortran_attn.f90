@@ -414,6 +414,89 @@ contains
     end do
     !$omp end parallel do
   end subroutine attn_bwd
+
+  ! attn_bwd_doc: naive attention backward with a document mask. Mirrors
+  ! attn_bwd exactly, except query row ic replays/accumulates keys ss from
+  ! s0 = docstart(row) instead of 1 -- the same restriction causal_attn_doc
+  ! applies forward. With docstart == 1 everywhere this agrees with attn_bwd
+  ! to ~1e-6 under -ffast-math (same codegen caveat as the forward pair:
+  ! bit-exact without fast-math). FD-verified by test_attn_bwd_doc.
+  subroutine attn_bwd_doc(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, docstart)
+    integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
+    real(wp), intent(in)  :: dy(:)
+    real(wp), intent(in)  :: q(:)
+    real(wp), intent(in)  :: k(:), v(:)
+    real(wp), intent(out) :: dq(:)
+    real(wp), intent(inout) :: dk(:), dv(:)
+    integer(c_int), intent(in) :: docstart(:)
+    integer :: ia, ib, ic, ss, id, kb, rep, s0
+    real(wp) :: scale, sm, ssum, acc, ds
+    real(wp) :: sc(TT), dpv(TT), m
+
+    scale = 1.0_wp / sqrt(real(DD, wp))
+    rep = HH / K_HH
+
+    !$omp parallel do collapse(2) private(ia, ib, ic, ss, id, kb, s0, sc, dpv, &
+    !$omp& m, sm, ssum, acc, ds)
+    do ia = 1, BB
+      do ib = 1, HH
+        kb = (ib - 1) / rep + 1
+        do ic = 1, TT
+          s0 = docstart((ia-1)*TT + ic)
+          ! forward replay: scores + softmax for query row ic
+          m = -huge(1.0_wp)
+          do ss = s0, ic
+            acc = 0.0_wp
+            do id = 1, DD
+              acc = acc + q(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) &
+                         * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+            end do
+            sc(ss) = acc * scale
+            if (sc(ss) > m) m = sc(ss)
+          end do
+          sm = 0.0_wp
+          do ss = s0, ic
+            sc(ss) = exp(sc(ss) - m)
+            sm = sm + sc(ss)
+          end do
+          do ss = s0, ic
+            sc(ss) = sc(ss) / sm
+          end do
+          ! dp_i = dy . v_i  (reused as dpv), S = sum dp*p
+          ssum = 0.0_wp
+          do ss = s0, ic
+            acc = 0.0_wp
+            do id = 1, DD
+              acc = acc + dy(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) &
+                         * v(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+            end do
+            dpv(ss) = acc
+            ssum = ssum + acc * sc(ss)
+          end do
+          ! dq (unique: plain write) + dk/dv (shared: atomics)
+          do id = 1, DD
+            acc = 0.0_wp
+            do ss = s0, ic
+              ds = sc(ss) * (dpv(ss) - ssum)
+              acc = acc + ds * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+              !$omp atomic
+              dk(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) = &
+                  dk(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) + &
+                  ds * q(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) * scale
+              !$omp end atomic
+              !$omp atomic
+              dv(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) = &
+                  dv(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) + &
+                  sc(ss) * dy(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id)
+              !$omp end atomic
+            end do
+            dq(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) = acc * scale
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine attn_bwd_doc
   ! ReLU^2 backward: y = max(0,x)^2  ->  dx = 2*max(0,x) * dy.
   subroutine relu2_bwd(dy, x, dx, N)
     integer(c_int), intent(in) :: N
