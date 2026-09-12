@@ -84,6 +84,7 @@ ganhar dos dois pais, o paralelismo vira multiplicador de throughput legítimo.
   `bin/halfbeast_logs.sh`.
 - Agregador de bpb: `scripts/bpb_from_eval.py` (reproduz o `val @N` do treinador).
 - Mapa de modelos: `ckpt.py` + `ckpt/registry.jsonl` (genealogia com hash-chain como o HEP; `show`/`lineage`/`verify`).
+- `ai_chat_hoarder/` saiu da árvore (commits 7dfa54b, branch `ai-chat-hoarder`); vive standalone em `/home/pauli/ai-chat-hoarder` (mesma história, +README).
 - HEP: 34 hipóteses. Relevantes: `hyp_1854b7` TRAIN_THROUGHPUT 0,97;
   `hyp_191851` TOKEN_SPACE 0,95; `hyp_1fbfd5` PROSE-PT 0,66;
   `hyp_5ca396` MIXED-FINAL 0,60 (fase mista — o teste de esquecimento mostrou
