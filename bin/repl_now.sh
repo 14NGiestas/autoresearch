@@ -36,7 +36,8 @@ BIN=""
 if [ -f "$CKPT/arch.txt" ]; then
     # Formato esperado: D_MODEL=216 N_HEAD=6 N_KV=2 N_LAYER=12 VV=8192 TT=1024
     # Queremos transformar em: arch_d216_h6_kv2_l12_v8192_c1024
-    eval "$(grep -E '^[A-Z_]+=[0-9]+' "$CKPT/arch.txt" | tr '[:upper:]' '[:lower:]' | sed 's/d_model/d/; s/n_head/h/; s/n_kv/kv/; s/n_layer/l/; s/vv/v/; s/tt/c/')"
+    # arch.txt real: "d_model = 216" (minusculo, com espacos). Normaliza tudo.
+    eval "$(sed -E 's/ *//g' "$CKPT/arch.txt" | grep -E '^[a-z_]+=[0-9]+' | sed 's/d_model/d/; s/n_head/h/; s/n_kv/kv/; s/n_layer/l/; s/vocab/v/; s/ctx/c/')"
     ARCH_DIR="arch_d${d}_h${h}_kv${kv}_l${l}_v${v}_c${c}"
     BIN=$(ls -t "src/build/$ARCH_DIR"/*/app/repl 2>/dev/null | head -1)
     
