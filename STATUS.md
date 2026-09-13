@@ -573,3 +573,12 @@ Veredito: mesmo-init é NECESSÁRIO mas NÃO SUFICIENTE; ganho exige PROXIMIDADE
 Infra no caminho: `eval_bpb --batch N` (commit 077181c, 1.58x medido no hb,
 bpb =5dec); `bin/repl_now.sh` auto-detecta arch+space; `load1` aborta alto em
 npy ausente/vazio (6603604); OMP_DYNAMIC=FALSE obrigatório (10x).
+
+## Reserva de prosa: Wikisource PT (12/set/2026, ainda nao baixada)
+
+`ptwikisource-latest-pages-articles.xml.bz2` = **86 MB** (dump mensal, fresco:
+01-set-2026). Estimativa pos-limpeza: ~100-150M tokens BPE (2-3x o estoque
+Gutenberg). Mesmo pipeline da wiki (extract -> filter -> tokenize -> pack);
+multistream disponivel p/ extracao paralela. Gatilho: regime >2.7 tok/param
+no 25M (prosa atual cobre ate ~51M). Dominiopublico.gov.br avaliado e
+descartado por enquanto (JSP sem bulk, metade PDF, duplica MEC/Gutenberg).
