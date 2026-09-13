@@ -17,6 +17,8 @@ program eval_bpb
   use iso_c_binding
   use fortran_gpt_mod
   use load_weights_mod, only: load_gpt_weights
+  use stdlib_io_npy, only: load_npy
+  use iso_fortran_env, only: int32
   use M_CLI2, only: set_args, sget, specified
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
@@ -41,6 +43,13 @@ program eval_bpb
   character(len=65536) :: buf
   logical :: attn_blas = .false.
   integer :: base
+  ! npy rows: single (N,TT+1) Fortran-order int32 file, zero text parsing.
+  ! (numpy saves logical (N,TT+1) with fortran_order=True; stdlib reads it
+  ! straight into Fortran dims (N,TT+1): row i = arr(i,:).)
+  ! Detected by extension; .txt path stays until corpora are converted.
+  logical :: use_npy = .false., ex
+  integer(int32), allocatable :: rows_npy(:, :)
+  integer :: nrows_npy = 0, pos_npy = 1, fsize
 
   call set_args('--weights WEIGHTS --rows ROWS --attn naive --batch 1', &
       help_text=[character(len=80) :: &
@@ -76,6 +85,26 @@ program eval_bpb
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
   call require_arch(trim(wdir))
 
+  use_npy = len_trim(rowsfile) > 4 .and. &
+      rowsfile(len_trim(rowsfile)-3:len_trim(rowsfile)) == '.npy'
+  if (use_npy) then
+    inquire (file=trim(rowsfile), exist=ex, size=fsize)
+    if (.not. ex .or. fsize <= 0) then
+      print '(2A)', "rows npy missing or empty: ", trim(rowsfile)
+      call exit(1)
+    end if
+    call load_npy(trim(rowsfile), rows_npy, iostat=ios)
+    if (ios /= 0 .or. .not. allocated(rows_npy)) then
+      print '(2A)', "rows npy unreadable: ", trim(rowsfile)
+      call exit(1)
+    end if
+    if (size(rows_npy, 2) /= TT + 1) then
+      print '(A,2I0)', "rows npy bad width (need TT+1): ", size(rows_npy, 2)
+      call exit(1)
+    end if
+    nrows_npy = size(rows_npy, 1)
+  end if
+
   ! RoPE tables for TT: identical for every row, build once
   allocate(cos_b(TT*(HD/2)), sin_b(TT*(HD/2)))
   do i = 1, TT
@@ -88,18 +117,25 @@ program eval_bpb
   end do
   allocate(outp(nbatch*TT*VV), nllbuf(nbatch, TT))
 
-  open (newunit=unit, file=trim(rowsfile), status='old', action='read')
+  if (.not. use_npy) &
+    open (newunit=unit, file=trim(rowsfile), status='old', action='read')
   rownum = 0
   do
     ! fill one batch (last chunk may be partial)
     nb = 0
     do r = 1, nbatch
-      read (unit, '(A)', iostat=ios) buf
-      if (ios /= 0) exit
-      read (buf, *, iostat=ios) fullb(r, :)
-      if (ios /= 0) then
-        print '(A)', "bad row (need TT+1 ids)"
-        call exit(1)
+      if (use_npy) then
+        if (pos_npy > nrows_npy) exit
+        fullb(r, :) = rows_npy(pos_npy, :)
+        pos_npy = pos_npy + 1
+      else
+        read (unit, '(A)', iostat=ios) buf
+        if (ios /= 0) exit
+        read (buf, *, iostat=ios) fullb(r, :)
+        if (ios /= 0) then
+          print '(A)', "bad row (need TT+1 ids)"
+          call exit(1)
+        end if
       end if
       nb = r
     end do
@@ -144,6 +180,6 @@ program eval_bpb
       write (0, '(A,I0)') "row done: ", rownum
     end do
   end do
-  close (unit)
+  if (.not. use_npy) close (unit)
 
 end program eval_bpb
