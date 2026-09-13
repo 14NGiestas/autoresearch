@@ -84,6 +84,7 @@ ganhar dos dois pais, o paralelismo vira multiplicador de throughput legítimo.
   `bin/halfbeast_logs.sh`.
 - Agregador de bpb: `scripts/bpb_from_eval.py` (reproduz o `val @N` do treinador; desde 2026-09-12 aceita qualquer T, antes era hardcoded 2048); gêmeo Fortran `bpb_agg` (mesma CLI, saída idêntica verificada; filtra markers antes de parear, então captura mesclada stdout+stderr dá o mesmo número).
 - Sopa entre estágios (2026-09-12): retomar treino da `soup_f` funciona sem adaptação (50 passos sãos, LR 3e-5); sopa mesmo-bacino (v2+v3) é fiel ao pai em core e melhor em prosa (2.09 vs 2.40); sopa entre-estágios (drift 0.0010–0.0014, ~3× o mesmo-bacino) não explode mas vira compromisso — cross-f prosa 3.02 com traços Fortran, cross-m prosa 3.42 e geração vazia. União de verdade pede treino misto, não média.
+- `OMP_DYNAMIC=FALSE` sempre (2026-09-12, medido: 10× — 5 s/passo cai para 0.5 s/passo no d216; as runtimes OpenMP do Fortran e do OpenBLAS brigam com ajuste dinâmico ligado). Todos os scripts de treino já usavam; sonda manual que esqueceu pagou o preço.
 - Mapa de modelos: `ckpt.py` + `ckpt/registry.jsonl` (genealogia com hash-chain como o HEP; `show`/`lineage`/`verify`).
 - `ai_chat_hoarder/` saiu da árvore (commits 7dfa54b, branch `ai-chat-hoarder`); vive standalone em `/home/pauli/ai-chat-hoarder` (mesma história, +README).
 - HEP: 34 hipóteses. Relevantes: `hyp_1854b7` TRAIN_THROUGHPUT 0,97;
@@ -544,3 +545,31 @@ Estado agora: `lib/fortran_arch.f90` escrito (defaults = valores históricos, ou
 seja inerte) mas AINDA NÃO LIGADO a nenhum app; nenhum app editado (o script de
 patch morreu no fpm.toml errado, sem efeito colateral). `scripts/filter_wiki.py`
 está rodando (fila: espera o extrator terminar).
+
+## P2 10M RESULTADO (12/set/2026): tamanho ganha, sopa tem limiar
+
+Três branches d216/h6/kv2/l12/v8192/c1024 (~10.3M), f=25, 7812 passos (~8M tokens):
+
+| branch | init | full-val bpb (3985 rows) |
+|---|---|---|
+| A (fermi) | seed 7 | **2.02696** |
+| B-old (hb, init diferente) | seed 8 | 2.02829 |
+| B2 (hb, mesmo init da A) | seed 7 | **2.02188** |
+
+10M-f25 ~= 2.02-2.03 robusto em 3 runs (efeito de ordem: -0.005, real mas mínimo).
+Contra 3M-f25 (2.10684): **-0.085 para 3.4x params**. Tamanho ganha, consistente.
+
+Sopas (full-val):
+| sopa | drift | bpb | delta vs melhor pai |
+|---|---|---|---|
+| v2/v3 3M (mesma bacia) | 0.000373 | 2.08738 | **-0.03 (ganha)** |
+| P2 A+B2 (mesmo init) | 0.518 | 2.25470 | +0.23 (perde) |
+| P2 A+B-old (inits dif.) | 1.42 ~= sqrt2 | 2.82498 | +0.80 (perde, mas não explode: RMSNorm reescala) |
+
+Veredito: mesmo-init é NECESSÁRIO mas NÃO SUFICIENTE; ganho exige PROXIMIDADE
+(drift << 1, limiar entre 1e-4 e 0.5). HEP hyp_167043 recebeu evidência `refutes`
+(0.85->0.5); filha hyp_d2c4dc (SOUP-PROXIMITY) proposta.
+
+Infra no caminho: `eval_bpb --batch N` (commit 077181c, 1.58x medido no hb,
+bpb =5dec); `bin/repl_now.sh` auto-detecta arch+space; `load1` aborta alto em
+npy ausente/vazio (6603604); OMP_DYNAMIC=FALSE obrigatório (10x).
