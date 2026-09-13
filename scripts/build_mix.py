@@ -78,10 +78,13 @@ def _count_lines(path, n_train):
 
 def prose_stream(path, n_train, epochs, skip_bos=True):
     """Linhas BPE como stream de ids. Lazy (rele por epoca, ~zero RAM).
-    Entrega EXATAMENTE epochs*estoque tokens (arredondamento de linha):
-    passes cheios + resto (stride se <1 epoca = cobertura uniforme, sem o
-    vies de prefixo que o take-cap do loop impunha aos orcamentos parciais)."""
+    Entrega epochs*estoque tokens (+-1 linha): passes cheios + resto por
+    quantum em espaco de tokens (uniforme E exato -- o stride arredondado
+    entregava ate 10% a menos e quebrava o portao de 95%)."""
     if epochs <= 0:
+        return
+    stock = _count_toks(path, n_train)
+    if stock <= 0:
         return
     full = int(epochs)
     for _ in range(full):
@@ -89,20 +92,16 @@ def prose_stream(path, n_train, epochs, skip_bos=True):
             yield from ids
     rem = epochs - full
     if rem > 1e-12:
-        if full == 0:
-            n = _count_lines(path, n_train)
-            for ids in _lines(path, n_train, skip_bos,
-                               stride=max(1, round(1.0 / rem))):
+        # quantum em UNIDADES DE LINHA: K linhas uniformemente espacadas ~= 
+        # alvo em tokens (+- poucas linhas). (Quantum em tokens emitia Nr.
+        # errado de linhas -- unidade importa.)
+        n = _count_lines(path, n_train)
+        klines = max(1, round(n * rem))
+        cum = 0
+        for ids in _lines(path, n_train, skip_bos, stride=1):
+            if (cum + 1) * klines // max(n, 1) > cum * klines // max(n, 1):
                 yield from ids
-        else:
-            target = rem * _count_toks(path, n_train)
-            got = 0
-            for ids in _lines(path, n_train, skip_bos, stride=1):
-                for t in ids:
-                    yield t
-                    got += 1
-                    if got >= target:
-                        return
+            cum += 1
 
 
 def wiki_stream(enc, wiki_dir, budget_tokens, sample=False):
@@ -217,6 +216,7 @@ def main():
                     continue
                 quota = args.block * s[1] / wtot + carry[i] if wtot else 0
                 take, carry[i] = int(quota), quota - int(quota)
+                take = min(take, s[1] - s[2])  # sem estouro de bloco: real~=alvo
                 for _ in range(take):
                     try:
                         buf.append(next(s[0]))
