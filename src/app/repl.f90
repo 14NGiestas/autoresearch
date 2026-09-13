@@ -50,6 +50,8 @@ program repl
   real(sp) :: temp = 0.0_sp, topp = 1.0_sp, pres = 0.0_sp, freq = 0.0_sp, rep = 1.0_sp, plen = 0.0_sp
   integer :: nblock = 0, pwin = 0
   integer, allocatable :: pbytes(:), pids(:), idx(:), obytes(:), sbytes(:)
+  integer, allocatable :: hist(:)   ! conversation ids (no BOS), capped at keep_hist
+  integer :: keep_hist = 0, nh
   integer :: snbytes
   integer :: pchunk = 64, npre, srow, tb
   integer :: kspec = 0, nmatch = 2, keff, na, corr, jj, pp
@@ -71,7 +73,7 @@ program repl
   call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 40 --temp 0.0' // &
       ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --pwin 0 --plen 0.0 --nblock 0' // &
       ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream F --pchunk 64' // &
-      ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5 --space SPACE', &
+      ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5 --space SPACE --keep 0', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  repl - interactive pure-Fortran chat REPL', &
@@ -101,6 +103,8 @@ program repl
   tdir = trim(sget('tables'))
   wdir = trim(sget('weights'))
   n_gen = iget('n')
+  keep_hist = iget('keep')
+  if (keep_hist < 0) keep_hist = 0
   temp = rget('temp')
   rng = int(iget('seed'), c_int64_t)
   topp = rget('topp')
@@ -192,6 +196,19 @@ program repl
       call encode(pbytes, nlen, pids)
     end if
     deallocate(pbytes)
+    ! history prepend (oldest first, room left for prompt + gen)
+    if (keep_hist > 0 .and. allocated(hist)) then
+      nh = min(size(hist), keep_hist, MAXT - n_gen - size(pids) - 1)
+      if (nh > 0) then
+        block
+          integer, allocatable :: fullp(:)
+          allocate (fullp(nh + size(pids)))
+          fullp(1:nh) = hist(size(hist) - nh + 1:)
+          fullp(nh + 1:) = pids
+          call move_alloc(fullp, pids)
+        end block
+      end if
+    end if
     nprompt = size(pids) + 1
     ntot = nprompt + n_gen
     if (ntot > MAXT) then
@@ -431,6 +448,15 @@ program repl
         1000.0 * real(cms_pre) / real(crate), " decode_ms=", &
         1000.0 * real(cms_dec) / real(crate), " tok_s=", &
         real(n_gen) / max(1.0e-9, real(cms_pre + cms_dec) / real(crate))
+    ! turn ids feed next prompt (trimmed); must precede the stream/non-stream split
+    if (keep_hist > 0) then
+      if (allocated(hist)) then
+        hist = [hist, idx(2:ntot)]
+      else
+        hist = idx(2:ntot)
+      end if
+      if (size(hist) > keep_hist) hist = hist(size(hist) - keep_hist + 1:)
+    end if
     if (dostream) then
       write (*, '(A)') ""
       deallocate(idx)
