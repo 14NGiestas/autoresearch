@@ -20,7 +20,7 @@ module fortran_arch_mod
   use fortran_kinds_mod, only: wp
   implicit none
 
-  integer, parameter :: D_MODEL = 216
+  integer, parameter :: D_MODEL = 360
   integer, parameter :: N_HEAD = 6
   integer, parameter :: N_KV = 2
   integer, parameter :: N_LAYER = 12
