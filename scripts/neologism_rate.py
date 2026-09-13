@@ -34,11 +34,14 @@ def toks(text):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dict", required=True)
+    ap.add_argument("--dict", action="append", required=True,
+                    help="wordlist (repita p/ suplementos: moderno + epoca)")
     ap.add_argument("--in", dest="inp", default="-")
     args = ap.parse_args()
-    d = load_dict(args.dict)
-    print(f"dicionario: {len(d)} formas", file=sys.stderr)
+    d = set()
+    for p in args.dict:
+        d |= load_dict(p)
+    print(f"dicionario: {len(d)} formas ({len(args.dict)} fontes)", file=sys.stderr)
     fin = sys.stdin if args.inp == "-" else open(args.inp, encoding="utf-8")
     tot = oov = 0
     per_line = []
