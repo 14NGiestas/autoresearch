@@ -4,17 +4,60 @@
 ! (input = first T, targets = last T). Produced by scripts/eval_driver.py
 ! packing or any equivalent pre-tokenizer. No parquet in Fortran yet
 ! (see scripts/ for the torch-free Python packing side).
+!
+! ...or a single npy: int32 (N,W) Fortran-order file (see
+! scripts/rows_to_npy.py), detected by extension. The whole corpus loads
+! ONCE into a module cache; every batch is then a memcpy. This kills both
+! the per-step text re-parse AND the O(N^2) re-scan from the top
+! (load_batch used to reopen + skip start_row lines every call).
 
 module fortran_data_mod
+  use iso_fortran_env, only: int32
+  use stdlib_io_npy, only: load_npy
   implicit none
   integer, parameter :: ROW_BUF = 65536
+  ! npy corpus cache: whole (N,W) file, keyed by path.
+  character(len=512), save :: cache_path = ''
+  integer(int32), allocatable, save :: cache_rows(:, :)
 contains
+
+  logical function is_npy(path)
+    character(*), intent(in) :: path
+    integer :: L
+    L = len_trim(path)
+    is_npy = L > 4 .and. path(L-3:L) == '.npy'
+  end function is_npy
+
+  ! Load path into cache unless already there. Fails loud, never partial.
+  subroutine ensure_cache(path)
+    character(*), intent(in) :: path
+    integer :: ios, fsize
+    logical :: ex
+    if (allocated(cache_rows) .and. cache_path == path) return
+    if (allocated(cache_rows)) deallocate (cache_rows)
+    inquire (file=trim(path), exist=ex, size=fsize)
+    if (.not. ex .or. fsize <= 0) then
+      print '(2A)', "rows npy missing or empty: ", trim(path)
+      call exit(1)
+    end if
+    call load_npy(trim(path), cache_rows, iostat=ios)
+    if (ios /= 0 .or. .not. allocated(cache_rows)) then
+      print '(2A)', "rows npy unreadable: ", trim(path)
+      call exit(1)
+    end if
+    cache_path = path
+  end subroutine ensure_cache
 
   ! number of non-empty lines in path (0 if missing/unreadable -> -1)
   integer function count_rows(path)
     character(*), intent(in) :: path
     integer :: u, ios
     character(len=ROW_BUF) :: line
+    if (is_npy(path)) then
+      call ensure_cache(path)
+      count_rows = size(cache_rows, 1)
+      return
+    end if
     count_rows = 0
     open (newunit=u, file=trim(path), status='old', action='read', &
         iostat=ios)
@@ -41,6 +84,22 @@ contains
     integer :: u, ios, r, k
     integer :: full(T + 1)
     character(len=ROW_BUF) :: line
+    if (is_npy(path)) then
+      call ensure_cache(path)
+      if (size(cache_rows, 2) < T + 1) then
+        print '(A,2I0)', "rows npy too narrow (need T+1): ", size(cache_rows, 2)
+        call exit(1)
+      end if
+      ngot = 0
+      do k = 1, B
+        r = start_row + k   ! 0-based start -> 1-based row
+        if (r > size(cache_rows, 1)) exit
+        idx((k-1)*T+1:k*T) = cache_rows(r, 1:T)
+        targets((k-1)*T+1:k*T) = cache_rows(r, 2:T+1)
+        ngot = k
+      end do
+      return
+    end if
     ngot = 0
     open (newunit=u, file=trim(path), status='old', action='read', &
         iostat=ios)
