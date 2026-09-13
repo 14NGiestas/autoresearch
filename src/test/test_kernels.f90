@@ -38,6 +38,7 @@ program test_kernels
       xent_fwd, xent_bwd, wte_bwd
   use fortran_adamw_mod, only: adamw_step
   use fortran_blas_mod, only: linear3d_sgemm
+  use fortran_muon_mod, only: ns_orthogonalize, muon_update_mat
   use fortran_gpt_mod, only: gpt_forward
   use fortran_kv_mod, only: gpt_step, gpt_step_multi
   use fortran_spec_mod, only: accept_prefix, lookup_draft
@@ -82,6 +83,7 @@ program test_kernels
   call test_attn_bwd()
   call test_relu2_bwd()
   call test_adamw()
+  call test_muon_ns()
   call test_full_step()
   call test_mkdir_p()
   call test_decode()
@@ -1630,6 +1632,74 @@ contains
   end subroutine
 
   ! ------------------------------------------------------------------------
+  subroutine test_muon_ns()
+    ! Muon math vs numpy goldens (muon.py, float32, seed 7).
+    real(sp) :: X(6,4), W(4,6), mbuf(6,4), upd(6,4)
+    real(sp) :: e, max_err
+    integer :: i
+    print '(A)', "=== test_muon_ns ==="
+    real(sp) :: gin(24) = reshape([ &
+      0.0012302_sp, -0.4546708_sp, -0.4922065_sp, 0.1054142_sp, &
+      -1.3442146_sp, -1.8417350_sp, 0.2987455_sp, -0.9916465_sp, &
+      -0.6204749_sp, -0.9304680_sp, -0.4576158_sp, -0.2350911_sp, &
+      -0.2741379_sp, 0.0601436_sp, 0.4898421_sp, -0.0292518_sp, &
+      -1.9012227_sp, -1.2674465_sp, -0.8905919_sp, 1.3402152_sp, &
+      0.3568870_sp, 0.6953032_sp, -1.2895378_sp, 0.2712643_sp], [24])
+    real(sp) :: gout(24) = reshape([ &
+      -0.0585927_sp, -0.0531239_sp, -0.4292208_sp, 0.2355755_sp, &
+      -0.3538033_sp, -0.6636884_sp, 0.0016363_sp, -0.2867198_sp, &
+      -0.3557494_sp, -0.4203347_sp, -0.3176036_sp, 0.1562934_sp, &
+      0.0057662_sp, -0.0573083_sp, 0.5769724_sp, -0.1571476_sp, &
+      -0.6191876_sp, -0.4081724_sp, -0.3327783_sp, 0.3936918_sp, &
+      -0.1985888_sp, 0.1763393_sp, -0.4735671_sp, 0.1659825_sp], [24])
+    real(sp) :: win(24) = reshape([ &
+      0.1567511_sp, -1.5301358_sp, -0.0325217_sp, -1.2250558_sp, &
+      -0.1869309_sp, -0.4777533_sp, 0.8843899_sp, 0.0761402_sp, &
+      -2.5167596_sp, -0.9785191_sp, -0.5836005_sp, 1.3588234_sp, &
+      -0.5386929_sp, -0.8088372_sp, -0.1117020_sp, -1.5471447_sp, &
+      -0.0485009_sp, 1.0608987_sp, 0.1104641_sp, 0.8593827_sp, &
+      0.1133090_sp, -0.8075347_sp, 0.0637818_sp, 0.1193540_sp], [24])
+    real(sp) :: wout(24) = reshape([ &
+      0.1603986_sp, -0.6441886_sp, -0.1193584_sp, -0.3624983_sp, &
+      -0.2333802_sp, -0.1081505_sp, 0.8313358_sp, -0.0348995_sp, &
+      -0.9097236_sp, -0.3576120_sp, -0.2466666_sp, 0.4970099_sp, &
+      -0.3973448_sp, -0.1114223_sp, 0.1164993_sp, -0.7382447_sp, &
+      -0.0968854_sp, 0.4466548_sp, 0.1518453_sp, 0.2549604_sp, &
+      0.2081666_sp, -0.4489847_sp, -0.0909702_sp, 0.1919063_sp], [24])
+    real(sp) :: muin(24) = reshape([ &
+      -0.6414704_sp, 0.0745162_sp, -0.0665173_sp, 0.2031386_sp, &
+      -0.5793016_sp, -1.3235278_sp, 2.0004165_sp, 0.5766896_sp, &
+      0.6672475_sp, -0.4633076_sp, -0.1961960_sp, -0.7946424_sp, &
+      0.7622597_sp, -0.1887821_sp, 1.4385226_sp, 0.1272684_sp, &
+      0.8987639_sp, 0.6469034_sp, -1.1992888_sp, 0.6829103_sp, &
+      -0.6756623_sp, -1.1871946_sp, 1.1452219_sp, -1.9924198_sp], [24])
+    real(sp) :: muout(24) = reshape([ &
+      -0.2971254_sp, -0.0414593_sp, 0.1522473_sp, 0.3120084_sp, &
+      -0.5082075_sp, -0.7355170_sp, 0.7890978_sp, 0.2224305_sp, &
+      0.1122342_sp, -0.1377101_sp, -0.2744495_sp, -0.2939023_sp, &
+      0.0950414_sp, -0.1515584_sp, 0.8439327_sp, 0.0772135_sp, &
+      0.6910244_sp, 0.2867223_sp, -0.5297929_sp, 0.2525174_sp, &
+      -0.2258164_sp, -0.5268755_sp, 0.6735077_sp, -0.6510638_sp], [24])
+    X = reshape(gin, [6, 4])
+    call ns_orthogonalize(X)
+    W = reshape(win, [4, 6])
+    call ns_orthogonalize(W)
+    mbuf = 0.0_sp
+    X = reshape(muin, [6, 4])
+    call muon_update_mat(X, mbuf, 0.95_sp, upd)
+    max_err = 0.0_sp
+    do i = 1, 24
+      e = abs(reshape(X, [24])(i) - gout(i))
+      if (e > max_err) max_err = e
+      e = abs(reshape(W, [24])(i) - wout(i))
+      if (e > max_err) max_err = e
+      e = abs(reshape(upd, [24])(i) - muout(i))
+      if (e > max_err) max_err = e
+    end do
+    print '(A,E10.3)', "  max err = ", max_err
+    call check(max_err < 2.0e-5_sp, "muon_ns")
+  end subroutine test_muon_ns
+
   subroutine test_adamw()
     real(sp) :: p(4), g(4), m(4), v(4), p0(4)
     real(sp) :: lr, b1, b2, eps, wd
