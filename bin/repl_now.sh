@@ -29,6 +29,13 @@ while read -r d; do
     fi
 done < <(ls -1d "$OUT"/step_* "$OUT"/best 2>/dev/null | sort -t_ -k2 -V)
 
+# accept a bare checkpoint dir too ($OUT itself holds complete .npy files)
+if [ -z "$CKPT" ]; then
+    tot=$(ls "$OUT"/*.npy 2>/dev/null | wc -l)
+    nz=$(find "$OUT" -maxdepth 1 -name '*.npy' -size +0c 2>/dev/null | wc -l)
+    if [ "$tot" -gt 0 ] && [ "$nz" -eq "$tot" ]; then CKPT="$OUT"; fi
+fi
+
 [ -n "$CKPT" ] || { echo "no complete checkpoint under $OUT" >&2; exit 1; }
 
 BIN=""
