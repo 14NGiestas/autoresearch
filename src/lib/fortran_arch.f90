@@ -20,12 +20,12 @@ module fortran_arch_mod
   use fortran_kinds_mod, only: wp
   implicit none
 
-  integer, parameter :: D_MODEL = 768
+  integer, parameter :: D_MODEL = 216
   integer, parameter :: N_HEAD = 6
-  integer, parameter :: N_KV = 6
+  integer, parameter :: N_KV = 2
   integer, parameter :: N_LAYER = 12
   integer, parameter :: VV = 8192
-  integer, parameter :: TT = 2048
+  integer, parameter :: TT = 1024
   integer, parameter :: BOS = 8188
   integer, parameter :: HD = D_MODEL / N_HEAD   ! derivado, nunca digitado
 contains

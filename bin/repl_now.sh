@@ -20,9 +20,6 @@ set -u
 OUT="${1:-/tmp/w_fortran}"
 shift || true
 
-BIN=$(ls -t src/build/live/*/app/repl 2>/dev/null | head -1)
-[ -x "$BIN" ] || { echo "no repl binary under src/build/live (build first)" >&2; exit 1; }
-
 CKPT=""
 while read -r d; do
     tot=$(ls "$d"/*.npy 2>/dev/null | wc -l)
@@ -34,13 +31,36 @@ done < <(ls -1d "$OUT"/step_* "$OUT"/best 2>/dev/null | sort -t_ -k2 -V)
 
 [ -n "$CKPT" ] || { echo "no complete checkpoint under $OUT" >&2; exit 1; }
 
+BIN=""
+# 1. Tenta descobrir a arquitetura pelo arch.txt do checkpoint
+if [ -f "$CKPT/arch.txt" ]; then
+    # Formato esperado: D_MODEL=216 N_HEAD=6 N_KV=2 N_LAYER=12 VV=8192 TT=1024
+    # Queremos transformar em: arch_d216_h6_kv2_l12_v8192_c1024
+    eval "$(grep -E '^[A-Z_]+=[0-9]+' "$CKPT/arch.txt" | tr '[:upper:]' '[:lower:]' | sed 's/d_model/d/; s/n_head/h/; s/n_kv/kv/; s/n_layer/l/; s/vv/v/; s/tt/c/')"
+    ARCH_DIR="arch_d${d}_h${h}_kv${kv}_l${l}_v${v}_c${c}"
+    BIN=$(ls -t "src/build/$ARCH_DIR"/*/app/repl 2>/dev/null | head -1)
+    
+    # Heurística para o --space: se V=8192, é o nosso BPE v1.
+    [ "${v:-0}" -eq 8192 ] && SPACE_FLAG="--space bpe" || SPACE_FLAG="--space byte"
+fi
+
+# 2. Fallback para build/live se não achou específico ou não tem arch.txt
+if [ -z "$BIN" ]; then
+    BIN=$(ls -t src/build/live/*/app/repl 2>/dev/null | head -1)
+    SPACE_FLAG="--space bpe" # default seguro
+fi
+
+[ -x "$BIN" ] || { echo "no repl binary found for $CKPT (checked specific arch and live)" >&2; exit 1; }
+
 export OMP_NUM_THREADS="${REPL_OMP:-4}"
 export OPENBLAS_NUM_THREADS="${REPL_OMP:-4}"
-echo "repl_now: $CKPT (threads $OMP_NUM_THREADS)" >&2
+export OMP_DYNAMIC=FALSE
+echo "repl_now: $CKPT ($SPACE_FLAG, threads $OMP_NUM_THREADS)" >&2
 
 exec "$BIN" \
     --tables "$HOME/.cache/autoresearch/tok_tables" \
     --weights "$CKPT" \
-    --n "${REPL_N:-32}" --temp 0.7 \
-    --pres 1.0 --freq 1.0 --rep 1.2 --pwin 64 --plen 0.5 --nblock 3 \
+    $SPACE_FLAG \
+    --n "${REPL_N:-128}" --temp 0.7 \
+    --pres 1.1 --freq 1.1 --rep 1.2 --pwin 64 --plen 0.5 --nblock 3 \
     --stream T --pchunk 64 --stats T "$@"

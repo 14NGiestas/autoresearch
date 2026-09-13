@@ -426,7 +426,7 @@ program repl
     ! ckv/cvv/out1 are deallocated together at top of next turn
     ! (line 119: if (allocated(ckv)) deallocate(ckv, cvv, out1))
 
-    if (dostats) write (0, '(A,F10.1,A,F10.1,A,F8.2)') &
+    if (dostats) write (0, '( /,A,F10.1,A,F10.1,A,F8.2)') &
         "stats: prefill_ms=", &
         1000.0 * real(cms_pre) / real(crate), " decode_ms=", &
         1000.0 * real(cms_dec) / real(crate), " tok_s=", &
