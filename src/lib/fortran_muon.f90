@@ -76,22 +76,23 @@ contains
   !   mbuf = beta*mbuf + (1-beta)*g            (momentum, in-place)
   !   upd  = (1-beta)*g + beta*mbuf            (Nesterov-via-lerp, exact source order)
   !   upd  = zeropower(upd)                    (NS orthogonalize)
-  !   upd *= sqrt(max(1, rows/cols))           (spectral rescale, ORIGINAL dims)
-  ! Caller does p = p - lr*upd (+ decoupled decay outside, AdamW-style).
-  subroutine muon_update_mat(g, mbuf, beta, upd)
+  !   upd *= sqrt(max(1, srows/scols))         (spectral rescale)
+  ! srows/scols are the LOGICAL (fanout,fanin) dims: callers passing a
+  ! transposed native view (our flat buffers are row-major) give them
+  ! explicitly, so the scale keys on the model geometry, not the view.
+  ! Caller does p = p*(1-lr*wd) - lr*upd (decoupled decay, AdamW-style).
+  subroutine muon_update_mat(g, mbuf, beta, upd, srows, scols)
     real(wp), contiguous, intent(in) :: g(:, :)
     real(wp), contiguous, intent(inout) :: mbuf(:, :)
     real(wp), intent(in) :: beta
     real(wp), contiguous, intent(out) :: upd(:, :)
+    integer, intent(in) :: srows, scols
     real(wp) :: scale
-    integer :: r, c
 
-    r = size(g, 1)
-    c = size(g, 2)
     mbuf = beta*mbuf + (1.0_wp - beta)*g
     upd = (1.0_wp - beta)*g + beta*mbuf
     call ns_orthogonalize(upd)
-    scale = sqrt(max(1.0_wp, real(r, wp) / real(c, wp)))
+    scale = sqrt(max(1.0_wp, real(srows, wp) / real(scols, wp)))
     upd = upd*scale
   end subroutine muon_update_mat
 

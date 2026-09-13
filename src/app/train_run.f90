@@ -20,7 +20,8 @@ program train_run
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
       write_arch_txt, read_arch_txt, arch_report, require_arch
-  use fortran_adam_state_mod, only: load_adam_state, save_adam_state
+  use fortran_adam_state_mod, only: load_adam_state, save_adam_state, &
+      load_muon_state, save_muon_state
   use fortran_data_mod, only: load_batch
   use M_CLI2, only: set_args, sget, rget, iget, specified
   use fortran_sys_mod, only: mkdir_p
@@ -49,6 +50,8 @@ program train_run
   real(sp) :: ct(TT*(HD/2)), st(TT*(HD/2))
   real(sp) :: nll, vnll, tnll, lr, lr_eff, best
   logical :: adam_found
+  logical :: use_muon, muon_found
+  real(sp) :: muon_lr
   integer :: nsteps, t0, log_every, save_every, start_row
   integer :: ntrain, val_every, nval, keep_last, nprobe, nprobe_opt
   integer :: k, i, j, tstep, u, ios, r, nbad
@@ -63,7 +66,8 @@ program train_run
   call set_args('--weights WEIGHTS --rows ROWS --out OUT --nsteps 20' // &
       ' --lr 0.0003 --t0 1 --log_every 1 --save_every 10' // &
       ' --start_row 0 --ntrain 40 --val_every 5 --nval 8 --keep_last 2' // &
-      ' --trn_probe 0 --attn naive --bytes BYTES', &
+      ' --trn_probe 0 --attn naive --bytes BYTES' // &
+      ' --opt adam --muon-lr 0.02', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  train_run - multi-batch trainer (slice 3)', &
@@ -92,6 +96,9 @@ program train_run
   nval = iget('nval')
   keep_last = iget('keep_last')
   bytesfile = trim(sget('bytes'))
+  use_muon = trim(sget('opt')) == 'muon'
+  muon_lr = rget('muon-lr')
+  if (use_muon) print '(A,F8.5)', "opt=muon (hybrid: Muon 2D + Adam resto), muon_lr=", muon_lr
   if (.not. specified('weights') .or. .not. specified('rows') &
       .or. .not. specified('out') .or. nsteps < 1) then
     print '(A)', 'require --weights --rows --out --nsteps>=1 (--help)'
@@ -137,6 +144,14 @@ program train_run
   else
     print '(A)', "fresh Adam moments (no adam_*.npy in weights dir)"
   end if
+  if (use_muon) then
+    call load_muon_state(trim(wdir), S, muon_found)
+    if (muon_found) then
+      print '(A)', "resumed Muon momentum buffers"
+    else
+      print '(A)', "fresh Muon momentum (no muon_moment_*.npy in weights dir)"
+    end if
+  end if
   call init_temp(G, tmp)
   allocate(GR%wte(size(M%wte)), GR%lm(size(M%lm)))
   allocate(GR%q(size(M%q)), GR%k(size(M%k)), GR%v(size(M%v)))
@@ -178,7 +193,8 @@ program train_run
       call exit(1)
     end if
     call train_step(idx, targets, ct, st, M, S, G, GR, C, tmp, nll, tstep, &
-        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas)
+        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas, &
+        use_muon=use_muon, lr_muon=muon_lr)
     if (mod(k, log_every) == 0 .or. k == nsteps) then
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &
         " lr ", lr_eff
@@ -193,6 +209,7 @@ program train_run
       call save_gpt_weights(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
           M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
       call save_adam_state(trim(ckdir), S)
+      if (use_muon) call save_muon_state(trim(ckdir), S)
       call write_template_txt(trim(ckdir))
       call write_arch_txt(trim(ckdir))
       call verify_ckpt_dir(trim(ckdir), N_LAYER, nbad, badpath)
@@ -227,6 +244,7 @@ program train_run
             N_HEAD, N_KV, HD, VV, M%wte, M%lm, M%q, M%k, M%v, M%p, &
             M%fc, M%p2)
         call save_adam_state(trim(outdir) // "/best", S)
+        if (use_muon) call save_muon_state(trim(outdir) // "/best", S)
         call write_template_txt(trim(outdir) // "/best")
       call write_arch_txt(trim(outdir) // "/best")
         call verify_ckpt_dir(trim(outdir) // "/best", N_LAYER, nbad, badpath)

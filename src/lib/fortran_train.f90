@@ -18,8 +18,13 @@ module fortran_train_mod
   use fortran_rmsnorm_mod
   use fortran_rope_mod
   use fortran_attn_mod
+  use fortran_muon_mod, only: muon_update_mat
   implicit none
   private
+
+  ! Muon momentum for hybrid runs (Muon on 2D matrices, AdamW elsewhere).
+  ! Fixed per the canonical recipe; the LR (different geometry!) is runtime.
+  real(wp), parameter :: MUON_BETA = 0.95_wp
   public :: dims_t, params_t, state_t, cache_t, temp_t
   public :: forward_save, compute_grads, train_step, init_state, init_temp, free_temp
   public :: wp
@@ -36,11 +41,13 @@ module fortran_train_mod
   end type params_t
 
   ! AdamW first/second moments, same shapes as params (fp32 master).
+  ! mq..mp2: Muon momentum buffers (one per 2D matrix group, no variance).
   type :: state_t
     real(wp), allocatable :: wte(:), lm(:)
     real(wp), allocatable :: q(:), k(:), v(:), p(:), fc(:), p2(:)
     real(wp), allocatable :: vwte(:), vlm(:)
     real(wp), allocatable :: vq(:), vk(:), vv(:), vp(:), vfc(:), vp2(:)
+    real(wp), allocatable :: mq(:), mk(:), mv(:), mp(:), mfc(:), mp2(:)
   end type state_t
 
   ! Saved activations, per-layer stacked (layer l at [l*S+1:], S per size).
@@ -384,6 +391,9 @@ contains
     call alloc_like(S%vq, M%q); call alloc_like(S%vk, M%k)
     call alloc_like(S%vv, M%v); call alloc_like(S%vp, M%p)
     call alloc_like(S%vfc, M%fc); call alloc_like(S%vp2, M%p2)
+    call alloc_like(S%mq, M%q); call alloc_like(S%mk, M%k)
+    call alloc_like(S%mv, M%v); call alloc_like(S%mp, M%p)
+    call alloc_like(S%mfc, M%fc); call alloc_like(S%mp2, M%p2)
   end subroutine init_state
 
   subroutine apply_group(p, g, m, v, lr, b1, b2, beps, wd, t)
@@ -394,11 +404,58 @@ contains
     call adamw_step(p, g, m, v, size(p), lr, b1, b2, beps, wd, t)
   end subroutine apply_group
 
-  ! One full training step: forward + backward + AdamW update.
+  ! Muon update for one CONCATENATED multi-layer group (all layers share
+  ! the same (OF,IF) geometry): per-layer 2D views + muon_update_mat.
+  ! Flat buffers are row-major logical (OF,IF), so the native Fortran view
+  ! is the transpose -- scale dims stay logical (OF,IF), never the view.
+  subroutine apply_muon_group(p, g, mbuf, lr, beta, rows_l, cols_l, per, nl, wd)
+    real(wp), contiguous, target, intent(inout) :: p(:), mbuf(:)
+    real(wp), contiguous, target, intent(in) :: g(:)
+    real(wp), intent(in) :: lr, beta, wd
+    integer, intent(in) :: rows_l, cols_l, per, nl
+    real(wp), pointer :: G2(:, :), M2(:, :), U2(:, :)
+    real(wp), allocatable, target :: upd(:)
+    integer :: ll, s
+    allocate (upd(per))
+    do ll = 1, nl
+      s = (ll - 1)*per
+      G2(1:cols_l, 1:rows_l) => g(s + 1:s + per)
+      M2(1:cols_l, 1:rows_l) => mbuf(s + 1:s + per)
+      U2(1:cols_l, 1:rows_l) => upd
+      call muon_update_mat(G2, M2, beta, U2, rows_l, cols_l)
+      p(s + 1:s + per) = p(s + 1:s + per)*(1.0_wp - lr*wd) - lr*upd
+    end do
+    deallocate (upd)
+  end subroutine apply_muon_group
+
+  ! Dispatcher: AdamW group (default, historical) or Muon matrix group.
+  subroutine apply_opt(p, g, m, v, mbuf, lr, lr_mu, b1, b2, beps, wd, t, &
+      rows_l, cols_l, m_opt)
+    real(wp), contiguous, intent(inout) :: p(:), m(:), v(:), mbuf(:)
+    real(wp), contiguous, intent(in) :: g(:)
+    real(wp), intent(in) :: lr, lr_mu, b1, b2, beps, wd
+    integer, intent(in) :: t, rows_l, cols_l
+    logical, intent(in) :: m_opt
+    if (m_opt) then
+      call apply_muon_group(p, g, mbuf, lr_mu, MUON_BETA, rows_l, cols_l, rows_l*cols_l, &
+          size(p) / (rows_l*cols_l), wd)
+    else
+      call apply_group(p, g, m, v, lr, b1, b2, beps, wd, t)
+    end if
+  end subroutine apply_opt
+
+  ! One full training step: forward + backward + optimizer update.
+  ! Default AdamW (all groups): previous behavior, bit-identical.
+  ! use_muon=.true.: Muon on 2D matrices (q,k,v,p,fc,p2), AdamW stays on
+  ! wte/lm/vectors (canonical hybrid recipe). lr_muon lives in Muon
+  ! geometry -- never reuse the Adam LR (different units). Optionals so
+  ! train_1step/train_loop/tests keep compiling unchanged (Adam default).
   subroutine train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, &
-      nll, tstep, lr, b1, b2, beps, wd, attn_blas)
-    logical, intent(in), optional :: attn_blas
-    logical :: useblas
+      nll, tstep, lr, b1, b2, beps, wd, attn_blas, use_muon, lr_muon)
+    logical, intent(in), optional :: attn_blas, use_muon
+    real(wp), intent(in), optional :: lr_muon
+    logical :: useblas, m_opt
+    real(wp) :: lr_mu
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
     type(params_t), intent(inout) :: M
@@ -412,16 +469,26 @@ contains
     real(wp), intent(in) :: lr, b1, b2, beps, wd
     useblas = .false.
     if (present(attn_blas)) useblas = attn_blas
+    m_opt = .false.
+    if (present(use_muon)) m_opt = use_muon
+    lr_mu = 0.0_wp
+    if (present(lr_muon)) lr_mu = lr_muon
     call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas)
     call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas)
     call apply_group(M%wte, GR%wte, S%wte, S%vwte, lr, b1, b2, beps, wd, tstep)
     call apply_group(M%lm, GR%lm, S%lm, S%vlm, lr, b1, b2, beps, wd, tstep)
-    call apply_group(M%q, GR%q, S%q, S%vq, lr, b1, b2, beps, wd, tstep)
-    call apply_group(M%k, GR%k, S%k, S%vk, lr, b1, b2, beps, wd, tstep)
-    call apply_group(M%v, GR%v, S%v, S%vv, lr, b1, b2, beps, wd, tstep)
-    call apply_group(M%p, GR%p, S%p, S%vp, lr, b1, b2, beps, wd, tstep)
-    call apply_group(M%fc, GR%fc, S%fc, S%vfc, lr, b1, b2, beps, wd, tstep)
-    call apply_group(M%p2, GR%p2, S%p2, S%vp2, lr, b1, b2, beps, wd, tstep)
+    call apply_opt(M%q, GR%q, S%q, S%vq, S%mq, lr, lr_mu, b1, b2, beps, wd, &
+        tstep, G%nh*G%hd, G%D, m_opt)
+    call apply_opt(M%k, GR%k, S%k, S%vk, S%mk, lr, lr_mu, b1, b2, beps, wd, &
+        tstep, G%nkv*G%hd, G%D, m_opt)
+    call apply_opt(M%v, GR%v, S%v, S%vv, S%mv, lr, lr_mu, b1, b2, beps, wd, &
+        tstep, G%nkv*G%hd, G%D, m_opt)
+    call apply_opt(M%p, GR%p, S%p, S%vp, S%mp, lr, lr_mu, b1, b2, beps, wd, &
+        tstep, G%D, G%nh*G%hd, m_opt)
+    call apply_opt(M%fc, GR%fc, S%fc, S%vfc, S%mfc, lr, lr_mu, b1, b2, beps, wd, &
+        tstep, 4*G%D, G%D, m_opt)
+    call apply_opt(M%p2, GR%p2, S%p2, S%vp2, S%mp2, lr, lr_mu, b1, b2, beps, wd, &
+        tstep, G%D, 4*G%D, m_opt)
   end subroutine train_step
 
 end module fortran_train_mod

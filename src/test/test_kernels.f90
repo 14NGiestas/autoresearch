@@ -84,6 +84,8 @@ program test_kernels
   call test_relu2_bwd()
   call test_adamw()
   call test_muon_ns()
+  call test_muon_opt()
+  call test_muon_state_io()
   call test_full_step()
   call test_mkdir_p()
   call test_decode()
@@ -1686,7 +1688,7 @@ contains
     call ns_orthogonalize(W)
     mbuf = 0.0_sp
     X = reshape(muin, [6, 4])
-    call muon_update_mat(X, mbuf, 0.95_sp, upd)
+    call muon_update_mat(X, mbuf, 0.95_sp, upd, 6, 4)
     max_err = 0.0_sp
     do i = 1, 24
       e = abs(reshape(X, [24])(i) - gout(i))
@@ -1948,6 +1950,107 @@ contains
 
   ! ------------------------------------------------------------------------
   ! save_gpt_weights -> load_gpt_weights roundtrip (tiny shapes).
+  subroutine test_muon_opt()
+    ! Hybrid routing: Muon on 2D matrices, Adam elsewhere. Catches wiring
+    ! regressions (flag ignored, no-op updates, dead momentum) AND pins
+    ! progression (descent). Calibrate thresholds on first green run.
+    type(dims_t) :: G
+    type(params_t) :: M, GR, M0, MA
+    type(state_t) :: S
+    type(cache_t) :: C
+    type(temp_t) :: tmp
+    integer :: idx(2), targets(2)
+    real(sp) :: cos(4), sin(4)
+    real(sp) :: nll, n0a, n5a, n0m, n5m, d_adam, d_muon, d_cross
+    integer :: k
+    print '(A)', "=== test_muon_opt (hybrid routing) ==="
+    G%B = 1; G%T = 2; G%V = 8; G%D = 4
+    G%nh = 1; G%nkv = 1; G%hd = 4; G%nl = 1
+    G%eps = 1.0e-5_sp
+    idx = [3, 5]; targets = [5, 1]
+    call fill(cos, 4)
+    call fill(sin, 4)
+    allocate(M%wte(32), M%lm(32))
+    allocate(M%q(16), M%k(16), M%v(16), M%p(16))
+    allocate(M%fc(64), M%p2(64))
+    call fill(M%wte, 32, 0.3_sp); call fill(M%lm, 32, 0.3_sp)
+    call fill(M%q, 16, 0.3_sp); call fill(M%k, 16, 0.3_sp)
+    call fill(M%v, 16, 0.3_sp); call fill(M%p, 16, 0.3_sp)
+    call fill(M%fc, 64, 0.3_sp); call fill(M%p2, 64, 0.3_sp)
+    allocate(M0%wte(32), M0%lm(32))
+    allocate(M0%q(16), M0%k(16), M0%v(16), M0%p(16))
+    allocate(M0%fc(64), M0%p2(64))
+    M0%wte = M%wte; M0%lm = M%lm; M0%q = M%q; M0%k = M%k
+    M0%v = M%v; M0%p = M%p; M0%fc = M%fc; M0%p2 = M%p2
+    allocate(GR%wte(32), GR%lm(32))
+    allocate(GR%q(16), GR%k(16), GR%v(16), GR%p(16))
+    allocate(GR%fc(64), GR%p2(64))
+    call init_state(M, S)
+    call init_temp(G, tmp)
+    ! Adam reference, 5 steps
+    n0a = -1.0_sp
+    do k = 1, 5
+      call train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, nll, k, &
+          0.02_sp, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp)
+      if (k == 1) n0a = nll
+      call check(nll == nll, "adam nll finite")
+    end do
+    n5a = nll
+    d_adam = maxval(abs(M%q - M0%q))
+    allocate(MA%q(16))
+    MA%q = M%q
+    ! reset to init + zero state, then Muon 5 steps
+    M%wte = M0%wte; M%lm = M0%lm; M%q = M0%q; M%k = M0%k
+    M%v = M0%v; M%p = M0%p; M%fc = M0%fc; M%p2 = M0%p2
+    S%wte = 0.0_sp; S%lm = 0.0_sp; S%q = 0.0_sp; S%k = 0.0_sp
+    S%v = 0.0_sp; S%p = 0.0_sp; S%fc = 0.0_sp; S%p2 = 0.0_sp
+    S%vwte = 0.0_sp; S%vlm = 0.0_sp; S%vq = 0.0_sp; S%vk = 0.0_sp
+    S%vv = 0.0_sp; S%vp = 0.0_sp; S%vfc = 0.0_sp; S%vp2 = 0.0_sp
+    S%mq = 0.0_sp; S%mk = 0.0_sp; S%mv = 0.0_sp; S%mp = 0.0_sp
+    S%mfc = 0.0_sp; S%mp2 = 0.0_sp
+    n0m = -1.0_sp
+    do k = 1, 5
+      call train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, nll, k, &
+          0.02_sp, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, use_muon=.true., &
+          lr_muon=0.01_sp)
+      if (k == 1) n0m = nll
+      call check(nll == nll, "muon nll finite")
+    end do
+    n5m = nll
+    d_muon = maxval(abs(M%q - M0%q))
+    d_cross = maxval(abs(M%q - MA%q))
+    print '(A,4F10.5)', "  adam/muon nll: ", n0a, n5a, n0m, n5m
+    call check(n5a < n0a, "adam descends (control)")
+    call check(n5m < n0m, "muon descends")
+    call check(d_adam > 1.0e-7_sp, "adam moved")
+    call check(d_muon > 1.0e-7_sp, "muon moved (not a no-op)")
+    call check(maxval(abs(S%mq)) > 0.0_sp, "muon momentum flowed")
+    call check(maxval(abs(S%vwte)) > 0.0_sp, "adam side alive in hybrid")
+    call check(d_cross > 1.0e-6_sp, "trajectories differ (flag routes)")
+  end subroutine test_muon_opt
+
+  subroutine test_muon_state_io()
+    ! muon_moment_*.npy save/load roundtrip + missing-dir behavior.
+    use fortran_adam_state_mod, only: save_muon_state, load_muon_state
+    type(params_t) :: M
+    type(state_t) :: S
+    logical :: found
+    print '(A)', "=== test_muon_state_io ==="
+    allocate(M%q(16), M%k(8), M%v(8), M%p(16), M%fc(64), M%p2(64))
+    allocate(M%wte(1), M%lm(1))
+    call init_state(M, S)
+    S%mq = 1.5_sp; S%mp2 = -2.5_sp
+    call execute_command_line("mkdir -p /tmp/rt_muon")
+    call save_muon_state("/tmp/rt_muon", S)
+    S%mq = 0.0_sp; S%mp2 = 0.0_sp
+    call load_muon_state("/tmp/rt_muon", S, found)
+    call check(found, "found after save")
+    call check(all(S%mq == 1.5_sp) .and. all(S%mp2 == -2.5_sp), &
+        "roundtrip exact")
+    call load_muon_state("/tmp/does_not_exist_xyz", S, found)
+    call check(.not. found, "missing -> .false.")
+  end subroutine test_muon_state_io
+
   subroutine test_save_load()
     use load_weights_mod, only: load_gpt_weights, save_gpt_weights
     real(sp), allocatable :: wte(:), lm(:), cq(:), ck(:), cv(:)

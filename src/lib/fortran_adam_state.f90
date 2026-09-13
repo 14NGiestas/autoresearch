@@ -64,6 +64,34 @@ contains
     call mast_save1(trim(wdir) // "/adam_v_p2.npy", S%vp2)
   end subroutine save_adam_state
 
+  ! Muon momentum buffers (one per 2D matrix group, no variance).
+  ! Saved ONLY for --opt muon runs; Adam checkpoints stay clean.
+  subroutine save_muon_state(wdir, S)
+    character(*), intent(in) :: wdir
+    type(state_t), intent(in) :: S
+    call mast_save1(trim(wdir) // "/muon_moment_q.npy", S%mq)
+    call mast_save1(trim(wdir) // "/muon_moment_k.npy", S%mk)
+    call mast_save1(trim(wdir) // "/muon_moment_v.npy", S%mv)
+    call mast_save1(trim(wdir) // "/muon_moment_p.npy", S%mp)
+    call mast_save1(trim(wdir) // "/muon_moment_fc.npy", S%mfc)
+    call mast_save1(trim(wdir) // "/muon_moment_p2.npy", S%mp2)
+  end subroutine save_muon_state
+
+  subroutine load_muon_state(wdir, S, found)
+    character(*), intent(in) :: wdir
+    type(state_t), intent(inout) :: S
+    logical, intent(out) :: found
+    logical :: ok
+    ok = .true.
+    call mast_load1(trim(wdir) // "/muon_moment_q.npy", S%mq, ok)
+    call mast_load1(trim(wdir) // "/muon_moment_k.npy", S%mk, ok)
+    call mast_load1(trim(wdir) // "/muon_moment_v.npy", S%mv, ok)
+    call mast_load1(trim(wdir) // "/muon_moment_p.npy", S%mp, ok)
+    call mast_load1(trim(wdir) // "/muon_moment_fc.npy", S%mfc, ok)
+    call mast_load1(trim(wdir) // "/muon_moment_p2.npy", S%mp2, ok)
+    found = ok
+  end subroutine load_muon_state
+
   ! Load moments over preallocated (zeroed) S; found=.false. if any file
   ! is missing or mis-sized (caller keeps zeros = old behavior).
   subroutine load_adam_state(wdir, S, found)
