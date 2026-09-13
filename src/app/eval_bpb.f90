@@ -24,37 +24,49 @@ program eval_bpb
   implicit none
 
   integer, parameter :: sp = c_float
-  integer, parameter :: B = 1
+  integer, parameter :: BMAX = 64
   integer, parameter :: D = A_D, N_HEAD = A_HEAD, N_KV = A_KV, HD = A_HD
   integer, parameter :: N_LAYER = A_LAYER, VV = A_VOCAB, TT = A_CTX
 
   character(len=512) :: wdir, rowsfile, line
-  integer :: ios, unit, tc, i, j, tgt, rownum
-  integer :: idx(TT)
-  integer, allocatable :: full(:)
+  character(len=32) :: batchstr
+  integer :: ios, unit, tc, i, j, r, nb, tgt, rownum, nbatch
+  integer :: idx(BMAX*TT)
+  integer :: fullb(BMAX, TT + 1)
   real(sp), allocatable :: cos_b(:), sin_b(:)
   real(sp), allocatable :: wte(:), lm(:)
   real(sp), allocatable :: c_q(:), c_k(:), c_v(:), c_pr(:), c_fc(:), c_pr2(:)
-  real(sp), allocatable :: outp(:)
+  real(sp), allocatable :: outp(:), nllbuf(:, :)
   real(sp) :: theta, ang, m, s, nll
   character(len=65536) :: buf
   logical :: attn_blas = .false.
+  integer :: base
 
-  call set_args('--weights WEIGHTS --rows ROWS --attn naive', &
+  call set_args('--weights WEIGHTS --rows ROWS --attn naive --batch 1', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  eval_bpb - bits-per-byte evaluation (prints per-position NLLs)', &
       'SYNOPSIS', &
       '  eval_bpb --weights DIR --rows FILE [--attn naive|blas]', &
+      '           [--batch N]', &
       'OPTIONS', &
       '  --attn MODE   naive (default, the kernel every recorded bpb used) or', &
       '                blas: attn_sgemm, ~13x faster at T=2048, agrees to', &
       '                ~3e-06. Use blas to make a bpb pass affordable; use', &
-      '                naive to reproduce an older number exactly.'], &
-      version_text=[character(len=80) :: 'eval_bpb 1.1'])
+      '                naive to reproduce an older number exactly.', &
+      '  --batch N     rows per forward pass (default 1). N>1 amortizes the', &
+      '                40MB weight stream over N rows (GEMV->GEMM); output', &
+      '                is identical, row order preserved.'], &
+      version_text=[character(len=80) :: 'eval_bpb 1.2'])
   wdir = trim(sget('weights'))
   rowsfile = trim(sget('rows'))
   attn_blas = trim(sget('attn')) == 'blas'
+  batchstr = trim(sget('batch'))
+  read (batchstr, *, iostat=ios) nbatch
+  if (ios /= 0 .or. nbatch < 1 .or. nbatch > BMAX) then
+    print '(A)', 'require 1 <= --batch <= 64'
+    call exit(2)
+  end if
   if (.not. specified('weights') .or. .not. specified('rows')) then
     print '(A)', 'require --weights DIR --rows FILE (--help for all)'
     call exit(2)
@@ -64,56 +76,73 @@ program eval_bpb
       wte, lm, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
   call require_arch(trim(wdir))
 
-  allocate(full(TT + 1))
+  ! RoPE tables for TT: identical for every row, build once
+  allocate(cos_b(TT*(HD/2)), sin_b(TT*(HD/2)))
+  do i = 1, TT
+    do j = 1, HD/2
+      theta = 10000.0_sp ** (-2.0_sp * real(j-1, sp) / real(HD, sp))
+      ang = real(i-1, sp) * theta
+      cos_b((i-1)*(HD/2)+j) = cos(ang)
+      sin_b((i-1)*(HD/2)+j) = sin(ang)
+    end do
+  end do
+  allocate(outp(nbatch*TT*VV), nllbuf(nbatch, TT))
+
   open (newunit=unit, file=trim(rowsfile), status='old', action='read')
   rownum = 0
   do
-    read (unit, '(A)', iostat=ios) buf
-    if (ios /= 0) exit
-    read (buf, *, iostat=ios) full
-    if (ios /= 0) then
-      print '(A)', "bad row (need TT+1 ids)"
-      call exit(1)
-    end if
-    idx = full(1:TT)
-
-    ! RoPE tables for TT
-    allocate(cos_b(TT*(HD/2)), sin_b(TT*(HD/2)))
-    do i = 1, TT
-      do j = 1, HD/2
-        theta = 10000.0_sp ** (-2.0_sp * real(j-1, sp) / real(HD, sp))
-        ang = real(i-1, sp) * theta
-        cos_b((i-1)*(HD/2)+j) = cos(ang)
-        sin_b((i-1)*(HD/2)+j) = sin(ang)
-      end do
+    ! fill one batch (last chunk may be partial)
+    nb = 0
+    do r = 1, nbatch
+      read (unit, '(A)', iostat=ios) buf
+      if (ios /= 0) exit
+      read (buf, *, iostat=ios) fullb(r, :)
+      if (ios /= 0) then
+        print '(A)', "bad row (need TT+1 ids)"
+        call exit(1)
+      end if
+      nb = r
     end do
-    allocate(outp(B*TT*VV))
+    if (nb == 0) exit
+    do r = 1, nb
+      idx((r-1)*TT+1:r*TT) = fullb(r, 1:TT)
+    end do
 
-    call gpt_forward(idx, cos_b, sin_b, &
+    call gpt_forward(idx(1:nb*TT), cos_b, sin_b, &
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
-        outp, B, TT, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp, &
+        outp(1:nb*TT*VV), nb, TT, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp, &
         attn_blas=attn_blas)
 
-    ! per-position NLL in nats: logsumexp(logits) - logit[target]
-    do tc = 1, TT
-      tgt = full(tc + 1) + 1   ! 0-based id -> 1-based position
-      m = outp((tc-1)*VV+1)
-      do j = 2, VV
-        if (outp((tc-1)*VV+j) > m) m = outp((tc-1)*VV+j)
+    ! per-position NLL in nats: logsumexp(logits) - logit[target].
+    ! Rows are independent: parallel over batch, print serially in order.
+    !$omp parallel do private(r, tc, tgt, m, s, j) schedule(static)
+    do r = 1, nb
+      base = (r-1)*TT*VV
+      do tc = 1, TT
+        tgt = fullb(r, tc + 1) + 1   ! 0-based id -> 1-based position
+        m = outp(base+(tc-1)*VV+1)
+        do j = 2, VV
+          if (outp(base+(tc-1)*VV+j) > m) m = outp(base+(tc-1)*VV+j)
+        end do
+        s = 0.0_sp
+        do j = 1, VV
+          s = s + exp(outp(base+(tc-1)*VV+j) - m)
+        end do
+        nllbuf(r, tc) = (m + log(s)) - outp(base+(tc-1)*VV+tgt)
       end do
-      s = 0.0_sp
-      do j = 1, VV
-        s = s + exp(outp((tc-1)*VV+j) - m)
-      end do
-      nll = (m + log(s)) - outp((tc-1)*VV+tgt)
-      if (tc > 1) write (*, '(A)', advance='no') ' '
-      write (*, '(ES14.7)', advance='no') nll
     end do
-    print *
-    ! progress on stderr (unbuffered): the only monitor for hour-long runs
-    rownum = rownum + 1
-    write (0, '(A,I0)') "row done: ", rownum
-    deallocate(cos_b, sin_b, outp)
+    !$omp end parallel do
+
+    do r = 1, nb
+      do tc = 1, TT
+        if (tc > 1) write (*, '(A)', advance='no') ' '
+        write (*, '(ES14.7)', advance='no') nllbuf(r, tc)
+      end do
+      print *
+      ! progress on stderr (unbuffered): the only monitor for hour-long runs
+      rownum = rownum + 1
+      write (0, '(A,I0)') "row done: ", rownum
+    end do
   end do
   close (unit)
 
