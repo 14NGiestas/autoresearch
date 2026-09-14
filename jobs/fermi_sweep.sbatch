@@ -17,11 +17,13 @@ cd /home/pauli/autoresearch
 FS=(0 25 50 75 100)
 f=${FS[$SLURM_ARRAY_TASK_ID]}
 BIN=$(ls -t src/build/arch_d96_h6_kv2_l12_v8192_c1024/*/app/train_run | head -1)
-N=$(wc -l < /tmp/mix/train_f$f.txt)
+# .npy direto: load_batch indexa por linha (txt faz scan sequencial por batch).
+# ntrain vem do manifesto (rows); val sao as 5 linhas apos a janela de treino.
+N=$(.venv-numpy/bin/python3 -c "import json;print(json.load(open('/tmp/mix/man_f$f.json'))['rows'])")
 echo "arm wiki=${f}%  rows=$N  job=${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID:-0}  host=$(hostname)  $(date '+%F %H:%M:%S')"
 echo "bin=$BIN"
 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FALSE "$BIN" \
-  --weights /tmp/mix/init3m --rows /tmp/mix/rows_f$f.txt --out /tmp/mix/w_f$f \
+  --weights /tmp/mix/init3m --rows /tmp/mix/rows_f$f.npy --out /tmp/mix/w_f$f \
   --nsteps 7812 --lr 0.0006 --ntrain $N --nval 5 --val_every 1000 \
   --save_every 4000 --keep_last 1 --trn_probe 200 --attn blas \
   --bytes "$HOME/.cache/autoresearch/tok_tables/token_bytes.txt"
