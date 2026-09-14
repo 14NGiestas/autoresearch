@@ -583,3 +583,63 @@ como toks. Estoque literario real: 53,7M + 36,2M = ~90M (nao 147M). Mesmo
 pipeline da wiki; multistream disponivel. Gatilho: regime >~4 tok/param no 25M.
 Dominiopublico.gov.br avaliado e descartado (JSP sem bulk, metade PDF,
 duplica MEC/Gutenberg).
+
+## Virada 13->14/set: H2, sopas, cirurgia, Muon (resumo da madrugada)
+
+119+ evidencias no HEP. Fios fechados, cada um com commit.
+
+### H2 como eixo lexico (TOK-LEX hyp_688b63: supported 0.80)
+`scripts/neologism_rate.py` + 4 fontes (hunspell, Figueiredo-1899 63k,
+wiki_forms 642k, prose_forms 229k). Propriedades: estavel entre estagios,
+compoe com comprimento (+0.10/256 toks, sopa +0.20), held-out mata
+memorizacao, dissocia de bpb (wiki desce H2 e sobe bpb).
+Tabela (full-form): m25a 0.015, f100 0.079, B2 0.092, f0 0.110, drop01 0.148, sopa 0.238.
+Intervencao: BPE-dropout p=0.1 PIOROU (H2 +35%, bpb +0.07) em 3M/8M --
+segmentacao diversa fragmenta modelo faminto; TOK-LEX movel, direcao exige escala.
+
+### Dose-resposta wiki (MIXED-FINAL 0.75) + matriz cruzada
+bpb-prosa monotomico em wiki%: 1.951/1.965/2.032/2.162/2.620 (+gap junto).
+Matriz 2x2 ASSIMETRICA: f0->wiki +0.33, f100->prosa +1.08 = hierarquia de
+COMPLEXIDADE (hard->easy), nao continencia topica (correcao registrada).
+
+### Sopas: resgate, gate, subspace (SOUP-BASIN 0.85 / PROXIMITY 0.87)
+- soup_cont (halfbeast): sopa P2 + 2000 steps => 2.00->1.926, B2=1.877.
+  Resgate INCOMPLETO: dano estrutural.
+- Drift M25A-B = 1.15 (val 1.60 vs 1.84): gate rejeita sopa M25. M25B achado
+  pronto 13/set 23:55 (ninguem tinha avisado).
+- Sopa positiva (janelas 94% overlap, mesmo init): drift 1.08. Overlap nao
+  salva: ruido de otimizacao domina. SVD: corpo high-rank (sem subspace),
+  lm_head rank-1 (bias global, trivial).
+- Conclusao: sopa de runs independentes invalida nesta escala; vale so
+  mesma-trajetoria (EMA/snapshots).
+
+### Cirurgia de pesos (mapa da bacia)
+negate = simetria EXATA (greedy bit-identico, provado por rastreio de sinal);
+paired-perm intra-grupo GQA = exata (72 elementos, nao 720; 2 tentativas
+falhas ensinaram); square = untraining (igual ao init: salada codigo/LaTeX);
+sin intacto (0.04), cbrt destroi (amplifica noise floor), cube->codigo,
+vale unico de escala (0.9-1.1, penhasco p/ cima); anisotropia attn(0.40) >
+mlp ~= emb(0.20). PCA 9pts: posicao != funcao (negate a 2.00 funciona,
+n001 a 0.08 degradado). `basin_map.svg`, `scripts/weight_surgery.py`.
+
+### Turing (hyp_5aab09 0.63)
+Copy-rate ZERO ate 25M (m25a inventa Xiaoping'er, m25b Adam Smith):
+induction nao emergiu 10M->25M. H7 local-cue (fala apos "gritou:") SIM nas
+duas escalas = dissociacao: frame imediato sim, referentes nao.
+
+### Muon em campo (hyp_fe4afe 0.70)
+Implementacao correta (goldens numpy 7e-7; teste tinha bug de X clobbered,
+corrigido; suite verde). Canonico 0.02 PERDE (2.109 vs 1.951). Sweep LR:
+curva em U, vale 0.005 (2.198 < Adam 2.301 @2000). Full-run 0.005: val
+**1.9365** + H2 **0.073** — VENCE Adam nos dois eixos.
+
+### Infra no caminho
+- sweep usa .npy direto (legado .txt aposentado; 7e802b4). ATENCAO: .txt do
+  /tmp evaporam -- reconstruir do .npy com --gate se sumirem.
+- Scripts novos: bpe_dropout.py, build_drop_rows.py (+man_f_drop.json),
+  build_wordlists.py, archaism_rate.py, weight_surgery.py, basin_map.py;
+  jobs: fermi_drop, fermi_muon, fermi_mu*, fermi_mufull.
+- REPLs vivas (tmux): inf_f0, inf_f100, m25a_probe, m25b_probe, sq_repl.
+- Suite: `fortran-fpm test` verde (dentro de `nix develop`; fora dele o
+  linker nao acha BLAS). Default arch = d216 deliberado (453bddc); teste
+  arch atualizado junto.
