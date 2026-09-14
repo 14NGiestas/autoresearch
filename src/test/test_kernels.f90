@@ -1640,6 +1640,7 @@ contains
     real(sp) :: e, max_err
     integer :: i
     real(sp) :: Xa(24), Wa(24), Ua(24)
+    real(sp) :: Xn(6, 4)
     real(sp) :: gin(24) = reshape([ &
       0.0012302_sp, -0.4546708_sp, -0.4922065_sp, 0.1054142_sp, &
       -1.3442146_sp, -1.8417350_sp, 0.2987455_sp, -0.9916465_sp, &
@@ -1685,13 +1686,14 @@ contains
     print '(A)', "=== test_muon_ns ==="
     X = reshape(gin, [6, 4])
     call ns_orthogonalize(X)
+    Xn = X
     W = reshape(win, [4, 6])
     call ns_orthogonalize(W)
     mbuf = 0.0_sp
     X = reshape(muin, [6, 4])
     call muon_update_mat(X, mbuf, 0.95_sp, upd, 6, 4)
     max_err = 0.0_sp
-    Xa = reshape(X, [24]); Wa = reshape(W, [24]); Ua = reshape(upd, [24])
+    Xa = reshape(Xn, [24]); Wa = reshape(W, [24]); Ua = reshape(upd, [24])
     do i = 1, 24
       e = abs(Xa(i) - gout(i))
       if (e > max_err) max_err = e
