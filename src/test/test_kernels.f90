@@ -762,10 +762,10 @@ contains
     logical :: ok
 
     print '(A)', "=== test_arch (fonte de verdade única + validação de forma) ==="
-    call check(D_MODEL == 768 .and. N_LAYER == 12 .and. VV == 8192 .and. &
-        N_HEAD == 6 .and. N_KV == 6 .and. HD == 128 .and. TT == 2048 .and. &
+    call check(D_MODEL == 216 .and. N_LAYER == 12 .and. VV == 8192 .and. &
+        N_HEAD == 6 .and. N_KV == 2 .and. HD == 36 .and. TT == 1024 .and. &
         BOS == 8188, &
-        "defaults = valores históricos (todo bpb já medido continua válido)")
+        "defaults = d216 deliberado (453bddc; builds por arch isolam o bpb)")
     call check(HD == D_MODEL / N_HEAD, "HD é derivado de D_MODEL/N_HEAD, não digitado")
 
     ! o que transforma lixo silencioso em erro: a expectativa conferida
@@ -774,7 +774,7 @@ contains
     call check_shape("wte", VV * D_MODEL, 10000 * 768, ok)
     call check(.not. ok, "check_shape FALHA se o checkpoint tem outro vocab (10000)")
     call check_shape("lm_head", VV * D_MODEL, 8192 * 96, ok)
-    call check(.not. ok, "check_shape FALHA para checkpoint de modelo menor (3M)")
+    call check(.not. ok, "check_shape FALHA se o checkpoint e de outro d_model")
     call arch_report(6)
   end subroutine
 
