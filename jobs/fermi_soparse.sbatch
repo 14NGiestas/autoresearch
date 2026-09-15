@@ -5,6 +5,7 @@
 #SBATCH -o /home/pauli/autoresearch/logs/soparse_%j.log
 # SO-PT: extrai Posts.xml, pareia Q + resposta aceita, limpa HTML, conta.
 set -u
+unset LD_LIBRARY_PATH
 cd /home/pauli/autoresearch
 export OMP_NUM_THREADS=8
 7z x -y /tmp/bench/ptSO.7z -o /tmp/bench/so_xml 2>&1 | tail -2
