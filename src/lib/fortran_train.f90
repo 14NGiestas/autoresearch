@@ -19,7 +19,7 @@ module fortran_train_mod
   use fortran_rope_mod
   use fortran_attn_mod
   use fortran_muon_mod, only: muon_update_mat
-  use fortran_qkhop_mod, only: qkhop_fwd, qkhop_bwd
+  use fortran_qkhop_mod, only: qkhop_sgemm, qkhop_bwd_sgemm
   implicit none
   private
 
@@ -230,7 +230,7 @@ contains
       useqk = .false.
       if (present(attn_qk)) useqk = attn_qk
       if (useqk) then
-        call qkhop_fwd(tmp%qrot, tmp%krot, tmp%xn, tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &
+        call qkhop_sgemm(tmp%qrot, tmp%krot, tmp%xn, tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &
             G%nh, G%nkv, G%hd)
       else if (useblas) then
         call attn_sgemm(tmp%qrot, tmp%krot, tmp%vo, tmp%ao, G%B, G%T, &
@@ -360,10 +360,10 @@ contains
       useqk = .false.
       if (present(attn_qk)) useqk = attn_qk
       if (useqk) then
-        call qkhop_fwd(C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
+        call qkhop_sgemm(C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
             C%xa(ll*BT*DD+1:), tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &
             G%nh, G%nkv, G%hd)
-        call qkhop_bwd(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
+        call qkhop_bwd_sgemm(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
             C%xa(ll*BT*DD+1:), tmp%sqk, tmp%dr(1:BT*DD), tmp%dq, tmp%dk, &
             tmp%sh1, tmp%sdh1, tmp%sdsm, G%B, G%T, G%nh, G%nkv, G%hd)
       else if (useblas) then

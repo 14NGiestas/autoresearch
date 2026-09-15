@@ -153,7 +153,7 @@ contains
       call rope_4d(k, cos_buf, sin_buf, krot, BB, TT, n_kv_head, head_dim)
 
       if (useqk) then
-        call qkhop_fwd(qrot, krot, xn, attn_out, Sqk, h1qk, BB, TT, n_head, &
+        call qkhop_sgemm(qrot, krot, xn, attn_out, Sqk, h1qk, BB, TT, n_head, &
             n_kv_head, head_dim)
       else if (useblas) then
         call attn_sgemm(qrot, krot, v, attn_out, BB, TT, n_head, n_kv_head, &

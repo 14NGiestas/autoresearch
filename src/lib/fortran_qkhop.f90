@@ -6,9 +6,10 @@
 ! Usa os mesmos pesos Q/K/P do checkpoint (V alocado mas nao lido).
 module fortran_qkhop_mod
   use fortran_kinds_mod, only: wp
+  use fortran_blas_mod, only: sgemm
   implicit none
   private
-  public :: qkhop_fwd, qkhop_bwd
+  public :: qkhop_fwd, qkhop_bwd, qkhop_sgemm, qkhop_bwd_sgemm
 
 contains
 
@@ -182,5 +183,194 @@ contains
       end do
     end do
   end subroutine qkhop_bwd
+
+
+  ! BLAS twin (mesma matematica do naive; copias explicitas so onde stride mente).
+  ! S: (B,H,T,T) sections contiguas T*T. X/h1/y: blocos (T,D) row-major.
+  subroutine qkhop_sgemm(q, k, x, y, S, h1w, B, T, H, K_H, D)
+    use iso_c_binding, only: c_int64_t, c_int
+    integer(c_int), intent(in) :: B, T, H, K_H, D
+    real(wp), intent(in) :: q(:), k(:), x(:)
+    real(wp), intent(out) :: y(:), S(:), h1w(:)
+    integer :: aa, bb, kb, rep, ii, jj
+    integer(c_int64_t) :: m, n, kk
+    real(wp) :: scale, mx, smx
+    real(wp), allocatable :: Sm(:,:), SmT(:,:), XT(:,:), h1T(:,:), yT(:,:)
+    scale = 1.0_wp / sqrt(real(D, wp))
+    rep = H / K_H
+    allocate (Sm(T,T), SmT(T,T), XT(D,T), h1T(D,T), yT(D,T))
+    do aa = 1, B
+      Sm = 0.0_wp
+      do bb = 1, H
+        kb = (bb - 1) / rep + 1
+        m = int(T, c_int64_t); n = int(T, c_int64_t); kk = int(D, c_int64_t)
+        call sgemm('T', 'N', m, n, kk, scale, &
+             k((aa-1)*T*K_H*D + (kb-1)*D + 1:), int(K_H*D, c_int64_t), &
+             q((aa-1)*T*H*D + (bb-1)*D + 1:), int(H*D, c_int64_t), &
+             0.0_wp, S(((aa-1)*H+bb-1)*T*T+1:), int(T, c_int64_t))
+        do ii = 1, T
+          mx = -huge(1.0_wp)
+          do jj = 1, ii
+            if (S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj) > mx) &
+              mx = S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj)
+          end do
+          smx = 0.0_wp
+          do jj = 1, ii
+            smx = smx + exp(S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj) - mx)
+          end do
+          do jj = 1, ii
+            S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj) = &
+              exp(S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj) - mx) / smx
+          end do
+          do jj = ii + 1, T
+            S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj) = 0.0_wp
+          end do
+        end do
+        do jj = 1, T
+          do ii = 1, T
+            Sm(ii, jj) = Sm(ii, jj) + S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj)
+          end do
+        end do
+      end do
+      Sm = Sm / real(H, wp)
+      do jj = 1, T
+        do ii = 1, D
+          XT(ii, jj) = x((aa-1)*T*D + (jj-1)*D + ii)
+        end do
+        do ii = 1, T
+          SmT(ii, jj) = Sm(jj, ii)
+        end do
+      end do
+      m = int(D, c_int64_t); n = int(T, c_int64_t); kk = int(T, c_int64_t)
+      call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+           XT, int(D, c_int64_t), SmT, int(T, c_int64_t), &
+           0.0_wp, h1T, int(D, c_int64_t))
+      call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+           h1T, int(D, c_int64_t), SmT, int(T, c_int64_t), &
+           0.0_wp, yT, int(D, c_int64_t))
+      do jj = 1, T
+        do ii = 1, D
+          h1w((aa-1)*T*D + (jj-1)*D + ii) = h1T(ii, jj)
+          y((aa-1)*T*D + (jj-1)*D + ii) = yT(ii, jj)
+        end do
+      end do
+    end do
+    deallocate (Sm, SmT, XT, h1T, yT)
+  end subroutine qkhop_sgemm
+
+
+
+  subroutine qkhop_bwd_sgemm(dy, q, k, x, S, dx, dq, dk, h1w, dh1w, dSmw, &
+      B, T, H, K_H, D)
+    use iso_c_binding, only: c_int64_t, c_int
+    integer(c_int), intent(in) :: B, T, H, K_H, D
+    real(wp), intent(in) :: dy(:), q(:), k(:), x(:), S(:)
+    real(wp), intent(out) :: dx(:), dq(:), dk(:)
+    real(wp), intent(out) :: h1w(:), dh1w(:), dSmw(:)
+    integer :: aa, bb, cc, ss, kb, rep, ii, jj
+    integer(c_int64_t) :: m, n, kk
+    real(wp) :: sdot, dlx, scale
+    real(wp), allocatable :: Sm(:,:), dL(:,:)
+    real(wp), allocatable :: dyC(:,:), h1C(:,:), xC(:,:), dh1C(:,:)
+    real(wp), allocatable :: Kc(:,:), Qc(:,:), dSmC(:,:), SmT(:,:)
+    real(wp), allocatable :: dxC(:,:)
+    rep = H / K_H
+    scale = 1.0_wp / sqrt(real(D, wp))
+    allocate (Sm(T,T), dL(T,T), dyC(T,D), h1C(T,D), xC(T,D), dh1C(T,D))
+    allocate (Kc(T,D), Qc(T,D), dSmC(T,T), SmT(T,T), dxC(T,D))
+    dx = 0.0_wp; dq = 0.0_wp; dk = 0.0_wp
+    do aa = 1, B
+      Sm = 0.0_wp
+      do bb = 1, H
+        do jj = 1, T
+          do ii = 1, T
+            Sm(ii, jj) = Sm(ii, jj) + S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj)
+          end do
+        end do
+      end do
+      Sm = Sm / real(H, wp)
+      do jj = 1, T
+        do ii = 1, D
+          dyC(jj, ii) = dy((aa-1)*T*D + (jj-1)*D + ii)
+          xC(jj, ii) = x((aa-1)*T*D + (jj-1)*D + ii)
+        end do
+        do ii = 1, T
+          SmT(ii, jj) = Sm(jj, ii)
+        end do
+      end do
+      m = int(T, c_int64_t); n = int(D, c_int64_t); kk = int(T, c_int64_t)
+      call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+           Sm, int(T, c_int64_t), xC, int(T, c_int64_t), &
+           0.0_wp, h1C, int(T, c_int64_t))
+      call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+           SmT, int(T, c_int64_t), dyC, int(T, c_int64_t), &
+           0.0_wp, dh1C, int(T, c_int64_t))
+      call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+           SmT, int(T, c_int64_t), dh1C, int(T, c_int64_t), &
+           0.0_wp, dxC, int(T, c_int64_t))
+      m = int(T, c_int64_t); n = int(D, c_int64_t); kk = int(T, c_int64_t)
+      call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+           Sm, int(T, c_int64_t), xC, int(T, c_int64_t), &
+           0.0_wp, h1C, int(T, c_int64_t))
+      do jj = 1, T
+        do ii = 1, D
+          dh1w((aa-1)*T*D + (jj-1)*D + ii) = dh1C(jj, ii)
+          dx((aa-1)*T*D + (jj-1)*D + ii) = dxC(jj, ii)
+          h1w((aa-1)*T*D + (jj-1)*D + ii) = h1C(jj, ii)
+        end do
+      end do
+      m = int(T, c_int64_t); n = int(T, c_int64_t); kk = int(D, c_int64_t)
+      call sgemm('N', 'T', m, n, kk, 1.0_wp, &
+           dyC, int(T, c_int64_t), h1C, int(T, c_int64_t), &
+           0.0_wp, dSmC, int(T, c_int64_t))
+      call sgemm('N', 'T', m, n, kk, 1.0_wp, &
+           dh1C, int(T, c_int64_t), xC, int(T, c_int64_t), &
+           1.0_wp, dSmC, int(T, c_int64_t))
+      do jj = 1, T
+        do ii = 1, T
+          dSmw(((aa-1)*T+ii-1)*T+jj) = dSmC(ii, jj) / real(H, wp)
+        end do
+      end do
+      do bb = 1, H
+        kb = (bb - 1) / rep + 1
+        do cc = 1, T
+          sdot = 0.0_wp
+          do ss = 1, cc
+            sdot = sdot + S(((aa-1)*H+bb-1)*T*T+(cc-1)*T+ss) * &
+                            dSmw(((aa-1)*T+cc-1)*T+ss)
+          end do
+          do ss = 1, cc
+            dlx = S(((aa-1)*H+bb-1)*T*T+(cc-1)*T+ss) * &
+                 (dSmw(((aa-1)*T+cc-1)*T+ss) - sdot) * scale
+            dL(cc, ss) = dlx
+          end do
+          do ss = cc + 1, T
+            dL(cc, ss) = 0.0_wp
+          end do
+        end do
+        do jj = 1, T
+          do ii = 1, D
+            Kc(jj, ii) = k((aa-1)*T*K_H*D + (jj-1)*K_H*D + (kb-1)*D + ii)
+            Qc(jj, ii) = q((aa-1)*T*H*D + (jj-1)*H*D + (bb-1)*D + ii)
+          end do
+        end do
+        do jj = 1, T
+          do ii = 1, D
+            dh1C(jj, ii) = sum(dL(jj, 1:T) * Kc(1:T, ii))
+            xC(jj, ii) = sum(dL(1:T, jj) * Qc(1:T, ii))
+          end do
+        end do
+        do jj = 1, T
+          do ii = 1, D
+            dq((aa-1)*T*H*D + (jj-1)*H*D + (bb-1)*D + ii) = dh1C(jj, ii)
+            dk((aa-1)*T*K_H*D + (jj-1)*K_H*D + (kb-1)*D + ii) = &
+              dk((aa-1)*T*K_H*D + (jj-1)*K_H*D + (kb-1)*D + ii) + xC(jj, ii)
+          end do
+        end do
+      end do
+    end do
+    deallocate (Sm, dL, dyC, h1C, xC, dh1C, Kc, Qc, dSmC, SmT, dxC)
+  end subroutine qkhop_bwd_sgemm
+
 
 end module fortran_qkhop_mod

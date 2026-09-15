@@ -43,7 +43,7 @@ program test_kernels
   use fortran_kv_mod, only: gpt_step, gpt_step_multi
   use fortran_spec_mod, only: accept_prefix, lookup_draft
   use fortran_recurrent_mod, only: recurrent_forward
-  use fortran_qkhop_mod, only: qkhop_fwd, qkhop_bwd
+  use fortran_qkhop_mod, only: qkhop_fwd, qkhop_bwd, qkhop_sgemm, qkhop_bwd_sgemm
   implicit none
 
   integer, parameter :: sp = c_float
@@ -63,6 +63,7 @@ program test_kernels
   call test_causal_attn_doc()
   call test_attn_bwd_doc()
   call test_qkhop()
+  call test_qkhop_sgemm()
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
   call test_corpus_golden()
@@ -836,6 +837,87 @@ contains
     print '(A,E10.3)', "  max err = ", worst
     call check(worst < 2.0e-3_sp, "qkhop_bwd")
   end subroutine test_qkhop
+
+  subroutine test_qkhop_sgemm()
+    integer, parameter :: QB = 1, QT = 16, QH = 2, QK = 2, QD = 8
+    real(sp) :: svv
+    real(sp) :: q(QB*QT*QH*QD), k(QB*QT*QK*QD), x(QB*QT*QD)
+    real(sp) :: y1(QB*QT*QD), y2(QB*QT*QD), S1(QB*QH*QT*QT), S2(QB*QH*QT*QT)
+    real(sp) :: h1(QB*QT*QD), dy(QB*QT*QD)
+    real(sp) :: dx1(QB*QT*QD), dx2(QB*QT*QD), dq1(QB*QT*QH*QD), dq2(QB*QT*QH*QD)
+    real(sp) :: dk1(QB*QT*QK*QD), dk2(QB*QT*QK*QD)
+    real(sp) :: w1(QB*QT*QD), w2(QB*QT*QD), w3(QB*QT*QT)
+    real(sp) :: e, worst
+    real(sp) :: lp, lm
+    integer :: i
+    print '(A)', "=== test_qkhop_sgemm (equivale ao naive) ==="
+    call fill(q, QB*QT*QH*QD, 0.5_sp)
+    call fill(k, QB*QT*QK*QD, 0.5_sp)
+    call fill(x, QB*QT*QD, 0.5_sp)
+    call qkhop_fwd(q, k, x, y1, S1, h1, QB, QT, QH, QK, QD)
+    call qkhop_sgemm(q, k, x, y2, S2, h1, QB, QT, QH, QK, QD)
+    worst = 0.0_sp
+    do i = 1, QB*QT*QD
+      e = abs(y1(i) - y2(i))
+      if (e > worst) worst = e
+    end do
+    do i = 1, QB*QH*QT*QT
+      e = abs(S1(i) - S2(i))
+      if (e > worst) worst = e
+    end do
+    print '(A,E10.3)', "  fwd err = ", worst
+    dy = y1
+    call qkhop_bwd(dy, q, k, x, S1, dx1, dq1, dk1, w1, w2, w3, &
+        QB, QT, QH, QK, QD)
+    call qkhop_bwd_sgemm(dy, q, k, x, S2, dx2, dq2, dk2, w1, w2, w3, &
+        QB, QT, QH, QK, QD)
+    do i = 1, QB*QT*QD
+      e = abs(dx1(i) - dx2(i))
+      if (e > worst) worst = e
+    end do
+    print '(A,E10.3)', "  dx err = ", worst
+    worst = 0.0_sp
+    do i = 1, QB*QT*QH*QD
+      e = abs(dq1(i) - dq2(i))
+      if (e > worst) worst = e
+    end do
+    print '(A,E10.3)', "  dq err = ", worst
+    worst = 0.0_sp
+    do i = 1, QB*QT*QK*QD
+      e = abs(dk1(i) - dk2(i))
+      if (e > worst) worst = e
+    end do
+    print '(A,E10.3)', "  dk err = ", worst
+    worst = 0.0_sp
+    do i = 1, QB*QT*QD
+      e = abs(dx1(i) - dx2(i))
+      if (e > worst) worst = e
+    end do
+    do i = 1, QB*QT*QH*QD
+      e = abs(dq1(i) - dq2(i))
+      if (e > worst) worst = e
+    end do
+    do i = 1, QB*QT*QK*QD
+      e = abs(dk1(i) - dk2(i))
+      if (e > worst) worst = e
+    end do
+    print '(A,E10.3)', "  max err = ", worst
+    call check(worst < 1.0e-4_sp, "qkhop_sgemm==naive")
+    worst = 0.0_sp
+    do i = 1, QB*QT*QH*QD
+      svv = q(i); q(i) = svv + 1.0e-3_sp
+      call qkhop_sgemm(q, k, x, y2, S2, h1, QB, QT, QH, QK, QD)
+      lp = 0.5_sp*sum(y2*y2)
+      q(i) = svv - 1.0e-3_sp
+      call qkhop_sgemm(q, k, x, y2, S2, h1, QB, QT, QH, QK, QD)
+      lm = 0.5_sp*sum(y2*y2)
+      q(i) = svv
+      e = abs((lp - lm)/2.0e-3_sp - dq2(i))
+      if (e > worst) worst = e
+    end do
+    print '(A,E10.3)', "  sgemm-FD dq err = ", worst
+    call check(worst < 2.0e-3_sp, "qkhop_bwd_sgemm-FD")
+  end subroutine test_qkhop_sgemm
 
   subroutine test_valid_mask()
     use sample_mod, only: sample_next, apply_byte_mask
