@@ -34,7 +34,7 @@ module fortran_gpt_mod
   use fortran_rmsnorm_mod, only: rmsnorm0
   use fortran_rope_mod, only: rope_4d
   use fortran_attn_mod, only: causal_attn, relu2, attn_sgemm
-  use fortran_qkhop_mod, only: qkhop_fwd
+  use fortran_qkhop_mod, only: qkhop_sgemm
   implicit none
 
   ! Inference workspace: allocated once, reused forever (no per-call

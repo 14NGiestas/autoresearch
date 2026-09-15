@@ -208,6 +208,7 @@ contains
              k((aa-1)*T*K_H*D + (kb-1)*D + 1:), int(K_H*D, c_int64_t), &
              q((aa-1)*T*H*D + (bb-1)*D + 1:), int(H*D, c_int64_t), &
              0.0_wp, S(((aa-1)*H+bb-1)*T*T+1:), int(T, c_int64_t))
+        !$omp parallel do private(ii,jj,mx,smx) schedule(static)
         do ii = 1, T
           mx = -huge(1.0_wp)
           do jj = 1, ii
@@ -226,8 +227,11 @@ contains
             S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj) = 0.0_wp
           end do
         end do
-        do jj = 1, T
-          do ii = 1, T
+      end do
+      !$omp parallel do collapse(2) private(ii,jj,bb) schedule(static)
+      do jj = 1, T
+        do ii = 1, T
+          do bb = 1, H
             Sm(ii, jj) = Sm(ii, jj) + S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj)
           end do
         end do
@@ -281,19 +285,24 @@ contains
     dx = 0.0_wp; dq = 0.0_wp; dk = 0.0_wp
     do aa = 1, B
       Sm = 0.0_wp
-      do bb = 1, H
-        do jj = 1, T
-          do ii = 1, T
+      !$omp parallel do collapse(2) private(ii,jj,bb) schedule(static)
+      do jj = 1, T
+        do ii = 1, T
+          do bb = 1, H
             Sm(ii, jj) = Sm(ii, jj) + S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj)
           end do
         end do
       end do
       Sm = Sm / real(H, wp)
+      !$omp parallel do private(jj,ii) schedule(static)
       do jj = 1, T
         do ii = 1, D
           dyC(jj, ii) = dy((aa-1)*T*D + (jj-1)*D + ii)
           xC(jj, ii) = x((aa-1)*T*D + (jj-1)*D + ii)
         end do
+      end do
+      !$omp parallel do collapse(2) private(ii,jj) schedule(static)
+      do jj = 1, T
         do ii = 1, T
           SmT(ii, jj) = Sm(jj, ii)
         end do
