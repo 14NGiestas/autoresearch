@@ -34,6 +34,7 @@ module fortran_gpt_mod
   use fortran_rmsnorm_mod, only: rmsnorm0
   use fortran_rope_mod, only: rope_4d
   use fortran_attn_mod, only: causal_attn, relu2, attn_sgemm
+  use fortran_qkhop_mod, only: qkhop_fwd
   implicit none
 
   ! Inference workspace: allocated once, reused forever (no per-call
@@ -56,7 +57,7 @@ contains
        outp, &
        BB, TT, vocab_size, d_model, &
        n_head, n_kv_head, head_dim, &
-       n_layer, eps, attn_blas)
+       n_layer, eps, attn_blas, attn_qk)
 
     integer(c_int), intent(in) :: BB, TT, vocab_size, d_model
     integer(c_int), intent(in) :: n_head, n_kv_head, head_dim, n_layer
@@ -66,9 +67,9 @@ contains
     ! and equal to ~2.6e-06, but a different summation order -- so it is opt-in
     ! and stays off by default, which is what keeps previously recorded bpb
     ! numbers comparable (see eval_bpb --attn).
-    logical, intent(in), optional :: attn_blas
-    logical :: useblas
-    real(wp), allocatable :: Satt(:)
+    logical, intent(in), optional :: attn_blas, attn_qk
+    logical :: useblas, useqk
+    real(wp), allocatable :: Satt(:), Sqk(:), h1qk(:)
 
     integer(c_int), intent(in) :: idx(:)
     real(wp), intent(in) :: cos_buf(:)
@@ -102,7 +103,10 @@ contains
     d_ff = 4 * d_model
     useblas = .false.
     if (present(attn_blas)) useblas = attn_blas
+    useqk = .false.
+    if (present(attn_qk)) useqk = attn_qk
     if (useblas) allocate (Satt(TT*TT))
+    if (useqk) allocate (Sqk(BB*n_head*TT*TT), h1qk(BB*TT*d_model))
     d2   = head_dim / 2
     qsz  = n_head*head_dim*d_model
     ksz  = n_kv_head*head_dim*d_model
@@ -148,7 +152,10 @@ contains
       call rope_4d(q, cos_buf, sin_buf, qrot, BB, TT, n_head, head_dim)
       call rope_4d(k, cos_buf, sin_buf, krot, BB, TT, n_kv_head, head_dim)
 
-      if (useblas) then
+      if (useqk) then
+        call qkhop_fwd(qrot, krot, xn, attn_out, Sqk, h1qk, BB, TT, n_head, &
+            n_kv_head, head_dim)
+      else if (useblas) then
         call attn_sgemm(qrot, krot, v, attn_out, BB, TT, n_head, n_kv_head, &
             head_dim, Satt)
       else

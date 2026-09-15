@@ -786,6 +786,8 @@ contains
     real(sp) :: y(QB*QT*QD), SS(QB*QH*QT*QT), dy(QB*QT*QD)
     real(sp) :: dx(QB*QT*QD), dq(QB*QT*QH*QD), dk(QB*QT*QK*QD)
     real(sp) :: yp(QB*QT*QD), SXH(QB*QH*QT*QT)
+    real(sp) :: wh1(QB*QT*QD), wdh1(QB*QT*QD), wdsm(QB*QT*QT)
+    real(sp) :: wh1t(QB*QT*QD)
     real(sp), parameter :: HH = 1.0e-3_sp
     real(sp) :: lp, lm, err, worst
     integer :: i
@@ -794,16 +796,16 @@ contains
     call fill(q, QB*QT*QH*QD, 0.5_sp)
     call fill(k, QB*QT*QK*QD, 0.5_sp)
     call fill(x, QB*QT*QD, 0.5_sp)
-    call qkhop_fwd(q, k, x, y, SS, QB, QT, QH, QK, QD)
+    call qkhop_fwd(q, k, x, y, SS, wh1t, QB, QT, QH, QK, QD)
     dy = y
-    call qkhop_bwd(dy, q, k, x, SS, dx, dq, dk, QB, QT, QH, QK, QD)
+    call qkhop_bwd(dy, q, k, x, SS, dx, dq, dk, wh1, wdh1, wdsm, QB, QT, QH, QK, QD)
     worst = 0.0_sp
     do i = 1, QB*QT*QH*QD
       svv = q(i); q(i) = svv + HH
-      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      call qkhop_fwd(q, k, x, yp, SXH, wh1t, QB, QT, QH, QK, QD)
       lp = 0.5_sp*sum(yp*yp)
       q(i) = svv - HH
-      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      call qkhop_fwd(q, k, x, yp, SXH, wh1t, QB, QT, QH, QK, QD)
       lm = 0.5_sp*sum(yp*yp)
       q(i) = svv
       err = abs((lp - lm)/(2.0_sp*HH) - dq(i))
@@ -811,10 +813,10 @@ contains
     end do
     do i = 1, QB*QT*QK*QD
       svv = k(i); k(i) = svv + HH
-      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      call qkhop_fwd(q, k, x, yp, SXH, wh1t, QB, QT, QH, QK, QD)
       lp = 0.5_sp*sum(yp*yp)
       k(i) = svv - HH
-      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      call qkhop_fwd(q, k, x, yp, SXH, wh1t, QB, QT, QH, QK, QD)
       lm = 0.5_sp*sum(yp*yp)
       k(i) = svv
       err = abs((lp - lm)/(2.0_sp*HH) - dk(i))
@@ -822,10 +824,10 @@ contains
     end do
     do i = 1, QB*QT*QD
       svv = x(i); x(i) = svv + HH
-      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      call qkhop_fwd(q, k, x, yp, SXH, wh1t, QB, QT, QH, QK, QD)
       lp = 0.5_sp*sum(yp*yp)
       x(i) = svv - HH
-      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      call qkhop_fwd(q, k, x, yp, SXH, wh1t, QB, QT, QH, QK, QD)
       lm = 0.5_sp*sum(yp*yp)
       x(i) = svv
       err = abs((lp - lm)/(2.0_sp*HH) - dx(i))

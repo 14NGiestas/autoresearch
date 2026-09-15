@@ -42,6 +42,7 @@ program eval_bpb
   real(sp) :: theta, ang, m, s, nll
   character(len=65536) :: buf
   logical :: attn_blas = .false.
+  logical :: attn_qk = .false.
   integer :: base
   ! npy rows: single (N,TT+1) Fortran-order int32 file, zero text parsing.
   ! (numpy saves logical (N,TT+1) with fortran_order=True; stdlib reads it
@@ -60,7 +61,7 @@ program eval_bpb
       '           [--batch N]', &
       'OPTIONS', &
       '  --attn MODE   naive (default, the kernel every recorded bpb used) or', &
-      '                blas: attn_sgemm, ~13x faster at T=2048, agrees to', &
+      '                blas: attn_sgemm, ~13x faster at T=2048; qkhop: QK-hop (sem V)', &
       '                ~3e-06. Use blas to make a bpb pass affordable; use', &
       '                naive to reproduce an older number exactly.', &
       '  --batch N     rows per forward pass (default 1). N>1 amortizes the', &
@@ -70,6 +71,7 @@ program eval_bpb
   wdir = trim(sget('weights'))
   rowsfile = trim(sget('rows'))
   attn_blas = trim(sget('attn')) == 'blas'
+  attn_qk = trim(sget('attn')) == 'qkhop'
   batchstr = trim(sget('batch'))
   read (batchstr, *, iostat=ios) nbatch
   if (ios /= 0 .or. nbatch < 1 .or. nbatch > BMAX) then
@@ -147,7 +149,7 @@ program eval_bpb
     call gpt_forward(idx(1:nb*TT), cos_b, sin_b, &
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
         outp(1:nb*TT*VV), nb, TT, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp, &
-        attn_blas=attn_blas)
+        attn_blas=attn_blas, attn_qk=attn_qk)
 
     ! per-position NLL in nats: logsumexp(logits) - logit[target].
     ! Rows are independent: parallel over batch, print serially in order.

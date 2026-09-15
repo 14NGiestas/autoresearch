@@ -19,6 +19,7 @@ module fortran_train_mod
   use fortran_rope_mod
   use fortran_attn_mod
   use fortran_muon_mod, only: muon_update_mat
+  use fortran_qkhop_mod, only: qkhop_fwd, qkhop_bwd
   implicit none
   private
 
@@ -86,6 +87,7 @@ module fortran_train_mod
     ! BLAS-attention scratch (only touched when attn_blas is on): satt serves
     ! both the forward scores+softmax and the backward dP/dS staging.
     real(wp), allocatable :: satt(:), dPbuf(:), dSbuf(:), dkv(:)
+    real(wp), allocatable :: sqk(:), sh1(:), sdh1(:), sdsm(:)
   end type temp_t
 
 contains
@@ -121,6 +123,8 @@ contains
     ! T=2048 that is ~50 MB, allocated once and reused every step)
     allocate(tmp%satt(G%T*G%T), tmp%dPbuf(G%T*G%T), tmp%dSbuf(G%T*G%T))
     allocate(tmp%dkv(2*G%T*kvd))
+    allocate(tmp%sqk(G%B*G%nh*G%T*G%T), tmp%sh1(BT*DD), tmp%sdh1(BT*DD), tmp%sdsm(BT*G%T*G%T))
+    tmp%sqk = 0.0_wp; tmp%sh1 = 0.0_wp; tmp%sdh1 = 0.0_wp; tmp%sdsm = 0.0_wp
     tmp%satt = 0.0_wp; tmp%dPbuf = 0.0_wp; tmp%dSbuf = 0.0_wp; tmp%dkv = 0.0_wp
     tmp%emd  = 0.0_wp; tmp%xn  = 0.0_wp; tmp%sub = 0.0_wp
     tmp%qo   = 0.0_wp; tmp%ko  = 0.0_wp; tmp%vo  = 0.0_wp
@@ -159,13 +163,17 @@ contains
     if (allocated(tmp%dx2))   deallocate(tmp%dx2)
     if (allocated(tmp%dx3))   deallocate(tmp%dx3)
     if (allocated(tmp%dxa))   deallocate(tmp%dxa)
+    if (allocated(tmp%sqk))  deallocate(tmp%sqk)
+    if (allocated(tmp%sh1))  deallocate(tmp%sh1)
+    if (allocated(tmp%sdh1)) deallocate(tmp%sdh1)
+    if (allocated(tmp%sdsm)) deallocate(tmp%sdsm)
     if (allocated(tmp%mx))    deallocate(tmp%mx)
     if (allocated(tmp%demd))   deallocate(tmp%demd)
   end subroutine free_temp
 
-  subroutine forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, attn_blas)
-    logical, intent(in), optional :: attn_blas
-    logical :: useblas
+  subroutine forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, attn_blas, attn_qk)
+    logical, intent(in), optional :: attn_blas, attn_qk
+    logical :: useblas, useqk
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
     type(params_t), intent(in) :: M
@@ -219,7 +227,12 @@ contains
       else
         useblas = .false.
       end if
-      if (useblas) then
+      useqk = .false.
+      if (present(attn_qk)) useqk = attn_qk
+      if (useqk) then
+        call qkhop_fwd(tmp%qrot, tmp%krot, tmp%xn, tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &
+            G%nh, G%nkv, G%hd)
+      else if (useblas) then
         call attn_sgemm(tmp%qrot, tmp%krot, tmp%vo, tmp%ao, G%B, G%T, &
             G%nh, G%nkv, G%hd, tmp%satt)
       else
@@ -270,9 +283,9 @@ contains
   ! r = relu(f) is recomputed from saved f. dk/dv zeroed per layer
   ! (attn_bwd accumulates inout). GR arrays zeroed up front.
   subroutine compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, &
-      attn_blas)
-    logical, intent(in), optional :: attn_blas
-    logical :: useblas
+      attn_blas, attn_qk)
+    logical, intent(in), optional :: attn_blas, attn_qk
+    logical :: useblas, useqk
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
     type(params_t), intent(in) :: M
@@ -344,7 +357,16 @@ contains
       else
         useblas = .false.
       end if
-      if (useblas) then
+      useqk = .false.
+      if (present(attn_qk)) useqk = attn_qk
+      if (useqk) then
+        call qkhop_fwd(C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
+            C%xa(ll*BT*DD+1:), tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &
+            G%nh, G%nkv, G%hd)
+        call qkhop_bwd(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
+            C%xa(ll*BT*DD+1:), tmp%sqk, tmp%dr(1:BT*DD), tmp%dq, tmp%dk, &
+            tmp%sh1, tmp%sdh1, tmp%sdsm, G%B, G%T, G%nh, G%nkv, G%hd)
+      else if (useblas) then
         call attn_bwd_sgemm(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
             C%v(ll*BT*kvd+1:), tmp%dq, tmp%dk, tmp%dv, &
             G%B, G%T, G%nh, G%nkv, G%hd, tmp%satt, tmp%dPbuf, tmp%dSbuf, &
@@ -364,7 +386,11 @@ contains
           GR%v(ll*ksz+1:), G%B, G%T, DD, kvd)
       !$omp parallel do simd
       do jj = 1, BT*DD
-        tmp%dxa(jj) = tmp%dx1(jj) + tmp%dx2(jj) + tmp%dx3(jj)   ! d(xa)
+        if (useqk) then
+          tmp%dxa(jj) = tmp%dx1(jj) + tmp%dx2(jj) + tmp%dr(jj)   ! d(xa)+direto
+        else
+          tmp%dxa(jj) = tmp%dx1(jj) + tmp%dx2(jj) + tmp%dx3(jj)   ! d(xa)
+        end if
       end do
       call rmsnorm0_bwd(tmp%dxa, C%e(ll*BT*DD+1:), tmp%dx1, BT, DD, G%eps)
       !$omp parallel do simd
@@ -451,10 +477,10 @@ contains
   ! geometry -- never reuse the Adam LR (different units). Optionals so
   ! train_1step/train_loop/tests keep compiling unchanged (Adam default).
   subroutine train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, &
-      nll, tstep, lr, b1, b2, beps, wd, attn_blas, use_muon, lr_muon)
-    logical, intent(in), optional :: attn_blas, use_muon
+      nll, tstep, lr, b1, b2, beps, wd, attn_blas, use_muon, lr_muon, attn_qk)
+    logical, intent(in), optional :: attn_blas, use_muon, attn_qk
     real(wp), intent(in), optional :: lr_muon
-    logical :: useblas, m_opt
+    logical :: useblas, m_opt, useqk
     real(wp) :: lr_mu
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
@@ -469,12 +495,14 @@ contains
     real(wp), intent(in) :: lr, b1, b2, beps, wd
     useblas = .false.
     if (present(attn_blas)) useblas = attn_blas
+    useqk = .false.
+    if (present(attn_qk)) useqk = attn_qk
     m_opt = .false.
     if (present(use_muon)) m_opt = use_muon
     lr_mu = 0.0_wp
     if (present(lr_muon)) lr_mu = lr_muon
-    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas)
-    call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas)
+    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas, useqk)
+    call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas, useqk)
     call apply_group(M%wte, GR%wte, S%wte, S%vwte, lr, b1, b2, beps, wd, tstep)
     call apply_group(M%lm, GR%lm, S%lm, S%vlm, lr, b1, b2, beps, wd, tstep)
     call apply_opt(M%q, GR%q, S%q, S%vq, S%mq, lr, lr_mu, b1, b2, beps, wd, &
