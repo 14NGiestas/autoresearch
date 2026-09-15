@@ -192,6 +192,8 @@ contains
 
 
     if (allocated(Satt)) deallocate (Satt)
+    if (allocated(Sqk)) deallocate (Sqk)
+    if (allocated(h1qk)) deallocate (h1qk)
   end subroutine gpt_forward
 
 end module fortran_gpt_mod
