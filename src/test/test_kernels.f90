@@ -43,6 +43,7 @@ program test_kernels
   use fortran_kv_mod, only: gpt_step, gpt_step_multi
   use fortran_spec_mod, only: accept_prefix, lookup_draft
   use fortran_recurrent_mod, only: recurrent_forward
+  use fortran_qkhop_mod, only: qkhop_fwd, qkhop_bwd
   implicit none
 
   integer, parameter :: sp = c_float
@@ -61,6 +62,7 @@ program test_kernels
   call test_causal_attn_gqa()
   call test_causal_attn_doc()
   call test_attn_bwd_doc()
+  call test_qkhop()
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
   call test_corpus_golden()
@@ -777,6 +779,61 @@ contains
     call check(.not. ok, "check_shape FALHA se o checkpoint e de outro d_model")
     call arch_report(6)
   end subroutine
+
+  subroutine test_qkhop()
+    integer, parameter :: QB = 1, QT = 4, QH = 2, QK = 2, QD = 3
+    real(sp) :: q(QB*QT*QH*QD), k(QB*QT*QK*QD), x(QB*QT*QD)
+    real(sp) :: y(QB*QT*QD), SS(QB*QH*QT*QT), dy(QB*QT*QD)
+    real(sp) :: dx(QB*QT*QD), dq(QB*QT*QH*QD), dk(QB*QT*QK*QD)
+    real(sp) :: yp(QB*QT*QD), SXH(QB*QH*QT*QT)
+    real(sp), parameter :: HH = 1.0e-3_sp
+    real(sp) :: lp, lm, err, worst
+    integer :: i
+    real(sp) :: svv
+    print '(A)', "=== test_qkhop (FD fwd/bwd, sem V) ==="
+    call fill(q, QB*QT*QH*QD, 0.5_sp)
+    call fill(k, QB*QT*QK*QD, 0.5_sp)
+    call fill(x, QB*QT*QD, 0.5_sp)
+    call qkhop_fwd(q, k, x, y, SS, QB, QT, QH, QK, QD)
+    dy = y
+    call qkhop_bwd(dy, q, k, x, SS, dx, dq, dk, QB, QT, QH, QK, QD)
+    worst = 0.0_sp
+    do i = 1, QB*QT*QH*QD
+      svv = q(i); q(i) = svv + HH
+      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      lp = 0.5_sp*sum(yp*yp)
+      q(i) = svv - HH
+      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      lm = 0.5_sp*sum(yp*yp)
+      q(i) = svv
+      err = abs((lp - lm)/(2.0_sp*HH) - dq(i))
+      if (err > worst) worst = err
+    end do
+    do i = 1, QB*QT*QK*QD
+      svv = k(i); k(i) = svv + HH
+      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      lp = 0.5_sp*sum(yp*yp)
+      k(i) = svv - HH
+      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      lm = 0.5_sp*sum(yp*yp)
+      k(i) = svv
+      err = abs((lp - lm)/(2.0_sp*HH) - dk(i))
+      if (err > worst) worst = err
+    end do
+    do i = 1, QB*QT*QD
+      svv = x(i); x(i) = svv + HH
+      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      lp = 0.5_sp*sum(yp*yp)
+      x(i) = svv - HH
+      call qkhop_fwd(q, k, x, yp, SXH, QB, QT, QH, QK, QD)
+      lm = 0.5_sp*sum(yp*yp)
+      x(i) = svv
+      err = abs((lp - lm)/(2.0_sp*HH) - dx(i))
+      if (err > worst) worst = err
+    end do
+    print '(A,E10.3)', "  max err = ", worst
+    call check(worst < 2.0e-3_sp, "qkhop_bwd")
+  end subroutine test_qkhop
 
   subroutine test_valid_mask()
     use sample_mod, only: sample_next, apply_byte_mask
