@@ -59,6 +59,8 @@ program repl
   integer :: npass_all = 0, nacc_all = 0, ngen_sp = 0, nplain_left = 0, nhist
   real(sp) :: spec_minacc = 0.5_sp
   logical :: spec_on, mode_spec, round_spec
+  logical :: attn_qk = .false.
+  real(sp), allocatable :: outfull(:)
   integer, allocatable :: draft(:), targ(:)
   real(sp), allocatable :: outspec(:)
   real(sp), allocatable :: outc(:)
@@ -73,7 +75,8 @@ program repl
   call set_args('--tables /home/pauli/.cache/autoresearch/tok_tables --weights /tmp/w_long100/best --n 40 --temp 0.0' // &
       ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --pwin 0 --plen 0.0 --nblock 0' // &
       ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream F --pchunk 64' // &
-      ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5 --space SPACE --keep 0', &
+      ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5 --space SPACE --keep 0' // &
+      ' --attn MODE', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  repl - interactive pure-Fortran chat REPL', &
@@ -185,6 +188,7 @@ program repl
 
     space = 'byte'
     if (specified('space')) space = trim(sget('space'))
+    attn_qk = specified('attn') .and. trim(sget('attn')) == 'qkhop'
     if (trim(space) /= 'byte' .and. trim(space) /= 'bpe') then
       print '(2A)', 'unknown --space (byte|bpe): ', trim(space)
       call exit(1)
@@ -238,6 +242,8 @@ program repl
     cvv = 0.0_sp
     clen = 0
     allocate(out1(B*VV))
+    if (allocated(outfull)) deallocate(outfull)
+    if (attn_qk) allocate(outfull(B*MAXT*VV))
 
     ! ---- prompt prefill, pchunk tokens per pass (--pchunk 1 = per-token) ----
     ! gpt_step_multi is row-for-row identical to the per-token loop
@@ -250,7 +256,10 @@ program repl
     if (dostats) call system_clock(count_rate=crate)
     cms_pre = 0; cms_dec = 0
     if (dostats) call system_clock(ca)
-    if (npre >= 1 .and. pchunk > 1) then
+    if (attn_qk) then
+      ! QK-hop: sem cache KV; prefill = so estende idx (forward integral/turno)
+      clen = npre
+    else if (npre >= 1 .and. pchunk > 1) then
       allocate(outc(max(1, min(pchunk, npre))*VV))
       srow = 1
       do while (srow <= npre)
@@ -409,10 +418,18 @@ program repl
       do step = nprompt, ntot - 1
         tc = step
         if (dostats) call system_clock(ca)
+        if (attn_qk) then
+          call gpt_forward(idx(1:tc), cos_b, sin_b, &
+              wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
+              outfull(1:tc*VV), 1, tc, VV, D, N_HEAD, N_KV, HD, N_LAYER, &
+              1.0e-5_sp, attn_qk=.true.)
+          out1 = outfull((tc-1)*VV+1:tc*VV)
+        else
         call gpt_step(idx(tc:tc), cos_b((tc-1)*d2+1:), sin_b((tc-1)*d2+1:), &
             wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
             ckv, cvv, clen, MAXT, out1, &
             B, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
+        end if
         if (dostats) then
           call system_clock(cb)
           cms_dec = cms_dec + (cb - ca)
