@@ -101,7 +101,7 @@ class Lab:
         cmd = [self.train_bin, "--weights", init, "--rows", self.rows, "--out", d,
                "--nsteps", str(nsteps), "--lr", str(lr), "--ntrain", str(ntrain),
                "--start_row", str(start_row), "--nval", "1",
-               "--val_every", "9999999", "--save_every", str(nsteps),
+               "--val_every", "9999999", "--save_every", str(nsteps), "--trn_probe", "2",
                "--attn", "blas",
                "--bytes", os.path.expanduser(
                    "~/.cache/autoresearch/tok_tables/token_bytes.txt")]
@@ -239,7 +239,7 @@ def main():
         K = 4
         st = TOTAL // K
         sz = NFULL // K
-        for lr in (2e-4, 6e-5, 2e-5):
+        for lr in (2e-4, 6e-5):
             tag = f"lr{lr:g}".replace(".", "").replace("-", "")
             ds = [L.train(f"{tag}_s{k}", L.init, sz, k * sz, st, lr)
                   for k in range(K)]
