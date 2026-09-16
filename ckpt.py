@@ -127,7 +127,32 @@ class Registry:
                     e = json.loads(line)
                     if e["type"] == "register":
                         out[e["payload"]["ckpt"]] = e["payload"]
+        self._resolve(out)
         return out
+
+    def _resolve(self, out):
+        """parents aceita id (ckpt_xxx) ou label; normaliza para id.
+
+        Labels duplicados: o registro mais recente (maior seq) vence.
+        """
+        by_label = {}
+        for cid, p in out.items():
+            lab = p.get("label")
+            if lab and lab not in by_label:
+                by_label[lab] = cid
+        for p in out.values():
+            ps = p.get("parents") or []
+            novo, mudou = [], False
+            for q in ps:
+                if q in out:
+                    novo.append(q)
+                elif q in by_label:
+                    novo.append(by_label[q])
+                    mudou = True
+                else:
+                    novo.append(q)
+            if mudou:
+                p["parents"] = novo
 
     def show(self, cid=None):
         allc = self._all()
@@ -160,6 +185,7 @@ class Registry:
             p = allc.get(cid)
             if not p:
                 print("  " * depth + f"{cid}  (fora do registro)")
+                print("  " * depth + "  dica: --parents aceita ckpt id OU label")
                 break
             e = p.get("eval", {}) or {}
             print("  " * depth + f"{p['ckpt']}  {p.get('label')}  "
