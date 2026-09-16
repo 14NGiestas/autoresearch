@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J compose
 #SBATCH -c 8
-#SBATCH -t 06:00:00
+#SBATCH -t 12:00:00
 #SBATCH -o /home/pauli/autoresearch/logs/compose_%j.log
 # Taxonomia da composicao linear: disj/order/seed/lr/anneal (ver scripts/compose_grid.py).
 set -u

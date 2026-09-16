@@ -12,7 +12,7 @@ rm -rf /tmp/timing
 S=$(date +%s.%N)
 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FALSE "$BIN" \
   --weights /tmp/mix/init3m --rows /tmp/mix/rows_f0.npy --out /tmp/timing \
-  --nsteps 400 --lr 0.0006 --ntrain 7812 --nval 1 --val_every 100000 \
+  --nsteps 400 --lr 0.0006 --ntrain 7812 --nval 1 --val_every 100000 --attn blas \
   --save_every 100000 --bytes "$HOME/.cache/autoresearch/tok_tables/token_bytes.txt" \
   > /tmp/timing.log 2>&1
 E=$(date +%s.%N)

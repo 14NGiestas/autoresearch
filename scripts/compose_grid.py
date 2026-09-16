@@ -102,6 +102,7 @@ class Lab:
                "--nsteps", str(nsteps), "--lr", str(lr), "--ntrain", str(ntrain),
                "--start_row", str(start_row), "--nval", "1",
                "--val_every", "9999999", "--save_every", str(nsteps),
+               "--attn", "blas",
                "--bytes", os.path.expanduser(
                    "~/.cache/autoresearch/tok_tables/token_bytes.txt")]
         if anneal:
