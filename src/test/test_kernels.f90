@@ -43,7 +43,7 @@ program test_kernels
   use fortran_kv_mod, only: gpt_step, gpt_step_multi
   use fortran_spec_mod, only: accept_prefix, lookup_draft
   use fortran_recurrent_mod, only: recurrent_forward
-  use fortran_qkhop_mod, only: qkhop_fwd, qkhop_bwd, qkhop_sgemm, qkhop_bwd_sgemm
+  use fortran_qkhop_mod, only: qkhop_fwd, qkhop_bwd, qkhop_sgemm, qkhop_bwd_sgemm, qkhop_ph_fwd, qkhop_ph_bwd
   implicit none
 
   integer, parameter :: sp = c_float
@@ -64,6 +64,7 @@ program test_kernels
   call test_attn_bwd_doc()
   call test_qkhop()
   call test_qkhop_sgemm()
+  call test_qkhop_ph()
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
   call test_corpus_golden()
@@ -918,6 +919,82 @@ contains
     print '(A,E10.3)', "  sgemm-FD dq err = ", worst
     call check(worst < 2.0e-3_sp, "qkhop_bwd_sgemm-FD")
   end subroutine test_qkhop_sgemm
+
+  subroutine test_qkhop_ph()
+    ! Goldens numpy (seed 7, float64 math): analitico-vs-analitico, sem ruido FD.
+    integer, parameter :: QB = 1, QT = 8, QH = 1, QK = 1, QD = 4
+    real(sp) :: q(QB*QT*QH*QD), k(QB*QT*QK*QD), x(QB*QT*QD)
+    real(sp) :: y(QB*QT*QH*QD), S(QB*QH*QT*QT), h1(QB*QT*QH*QD)
+    real(sp) :: dy(QB*QT*QH*QD)
+    real(sp) :: dx(QB*QT*QD), dq(QB*QT*QH*QD), dk(QB*QT*QK*QD)
+    real(sp) :: w1(QB*QT*QD), w2(QB*QT*QD), w3(QB*QT*QT)
+    real(sp) :: e, worst
+    integer :: i
+    real(sp) :: qin(32) = reshape([ &
+      0.0003690_sp, 0.0896237_sp, -0.0822414_sp, -0.2671776_sp, -0.1364012_sp, -0.2974940_sp, 0.0180431_sp, 0.4020646_sp, &
+      -0.1476620_sp, -0.1861425_sp, 0.1469526_sp, 0.1070661_sp, 0.0316243_sp, -0.2791404_sp, -0.0087755_sp, 0.2085910_sp, &
+      -0.4032644_sp, -0.1372847_sp, -0.5703669_sp, -0.3868614_sp, -0.5525205_sp, -0.0705273_sp, -0.3802340_sp, 0.0813793_sp, &
+      0.0470253_sp, -0.0560793_sp, -0.7550279_sp, -0.1616079_sp, -0.0145503_sp, 0.0339927_sp, -0.4590407_sp, -0.1433260_sp], [32])
+    real(sp) :: kin(32) = reshape([ &
+      -0.2935557_sp, -0.2426512_sp, 0.3182696_sp, -0.2422604_sp, -0.0097565_sp, 0.2653170_sp, -0.1750802_sp, -0.0335106_sp, &
+      0.0331392_sp, 0.0191345_sp, -0.3675168_sp, 0.0228421_sp, 0.4076470_sp, -0.4641434_sp, 0.2578148_sp, 0.0358062_sp, &
+      -0.1924411_sp, 0.6001250_sp, 0.2286779_sp, -0.3597867_sp, 0.0223549_sp, 0.1730069_sp, -0.0566346_sp, 0.2048731_sp, &
+      -0.0199552_sp, 0.2001743_sp, 0.4315568_sp, -0.2026987_sp, 0.0609416_sp, -0.1389923_sp, 0.0381805_sp, -0.3561584_sp], [32])
+    real(sp) :: xin(32) = reshape([ &
+      -0.2896508_sp, -0.0980980_sp, 0.4493819_sp, 0.5726110_sp, -0.6617639_sp, -0.3973212_sp, 0.3234517_sp, -0.9962099_sp, &
+      -0.2315849_sp, -0.0486435_sp, 0.6285075_sp, 0.3447019_sp, -0.1636067_sp, -0.1842880_sp, -0.1250977_sp, 0.7617647_sp, &
+      -0.2140125_sp, -0.1518402_sp, 0.1762945_sp, -0.0603852_sp, -0.0986421_sp, -0.5570336_sp, -0.0057607_sp, -0.2217906_sp, &
+      0.5830639_sp, 0.3265443_sp, -0.0120718_sp, 0.3341905_sp, -0.1699348_sp, 0.5260632_sp, -0.0026998_sp, 0.2916912_sp], [32])
+    real(sp) :: yout(32) = reshape([ &
+      -0.2896508_sp, -0.0980980_sp, 0.4493819_sp, 0.5726110_sp, -0.3774174_sp, -0.1686727_sp, 0.4196801_sp, 0.2025890_sp, &
+      -0.3805986_sp, -0.1709396_sp, 0.4354167_sp, 0.1393393_sp, -0.3684169_sp, -0.1743369_sp, 0.4023038_sp, 0.1469981_sp, &
+      -0.3612605_sp, -0.1749048_sp, 0.3885359_sp, 0.1315161_sp, -0.3475577_sp, -0.1858263_sp, 0.3658149_sp, 0.1186191_sp, &
+      -0.3278771_sp, -0.1854259_sp, 0.3474942_sp, 0.1040699_sp, -0.3048852_sp, -0.1707836_sp, 0.3251523_sp, 0.1089391_sp], [32])
+    real(sp) :: dxo(32) = reshape([ &
+      -1.5561676_sp, -0.7153217_sp, 1.8355191_sp, 1.0809698_sp, -0.6011986_sp, -0.2987535_sp, 0.6544984_sp, 0.2318487_sp, &
+      -0.3091137_sp, -0.1585774_sp, 0.3335281_sp, 0.1103867_sp, -0.1504323_sp, -0.0791352_sp, 0.1607039_sp, 0.0532436_sp, &
+      -0.0808439_sp, -0.0437912_sp, 0.0859070_sp, 0.0277589_sp, -0.0407398_sp, -0.0226436_sp, 0.0432152_sp, 0.0138319_sp, &
+      -0.0141840_sp, -0.0079732_sp, 0.0150923_sp, 0.0048610_sp, -0.0049844_sp, -0.0027920_sp, 0.0053157_sp, 0.0017810_sp], [32])
+    real(sp) :: dqo(32) = reshape([ &
+      0.0000000_sp, 0.0000000_sp, 0.0000000_sp, 0.0000000_sp, -0.0090582_sp, -0.0162131_sp, 0.0157465_sp, -0.0066628_sp, &
+      -0.0018583_sp, -0.0051482_sp, 0.0025654_sp, -0.0012269_sp, -0.0123493_sp, 0.0075910_sp, -0.0054909_sp, -0.0035460_sp, &
+      -0.0043300_sp, -0.0037404_sp, -0.0058774_sp, 0.0015858_sp, -0.0031478_sp, -0.0035727_sp, -0.0029646_sp, -0.0020574_sp, &
+      -0.0015509_sp, -0.0035941_sp, -0.0073201_sp, 0.0006186_sp, -0.0016123_sp, -0.0011088_sp, -0.0041254_sp, 0.0024337_sp], [32])
+    real(sp) :: dko(32) = reshape([ &
+      -0.0131446_sp, -0.0163237_sp, -0.0142268_sp, 0.0113091_sp, 0.0027635_sp, 0.0109970_sp, -0.0120402_sp, -0.0165088_sp, &
+      -0.0079973_sp, -0.0057642_sp, -0.0154347_sp, -0.0021466_sp, 0.0057431_sp, 0.0079674_sp, 0.0079580_sp, -0.0011653_sp, &
+      0.0077239_sp, 0.0020768_sp, 0.0099913_sp, 0.0042794_sp, 0.0052648_sp, 0.0008711_sp, 0.0078449_sp, 0.0001615_sp, &
+      -0.0004663_sp, 0.0004393_sp, 0.0123476_sp, 0.0029592_sp, 0.0001128_sp, -0.0002636_sp, 0.0035599_sp, 0.0011115_sp], [32])
+    print '(A)', "=== test_qkhop_ph (goldens numpy) ==="
+    q = qin; k = kin; x = xin
+    call qkhop_ph_fwd(q, k, x, y, S, h1, QB, QT, QH, QK, QD)
+    worst = 0.0_sp
+    do i = 1, QB*QT*QH*QD
+      e = abs(y(i) - yout(i))
+      if (e > worst) worst = e
+    end do
+    print '(A,E10.3)', "  y err = ", worst
+    call check(worst < 2.0e-5_sp, "qkhop_ph_fwd")
+    dy = y
+    call qkhop_ph_bwd(dy, q, k, x, S, dx, dq, dk, w1, w2, w3, &
+        QB, QT, QH, QK, QD)
+    worst = 0.0_sp
+    do i = 1, QB*QT*QD
+      e = abs(dx(i) - dxo(i))
+      if (e > worst) worst = e
+    end do
+    do i = 1, QB*QT*QH*QD
+      e = abs(dq(i) - dqo(i))
+      if (e > worst) worst = e
+    end do
+    do i = 1, QB*QT*QK*QD
+      e = abs(dk(i) - dko(i))
+      if (e > worst) worst = e
+    end do
+    print '(A,E10.3)', "  max err = ", worst
+    call check(worst < 2.0e-5_sp, "qkhop_ph_bwd")
+  end subroutine test_qkhop_ph
+
 
   subroutine test_valid_mask()
     use sample_mod, only: sample_next, apply_byte_mask

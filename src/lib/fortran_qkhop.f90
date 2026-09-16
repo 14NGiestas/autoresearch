@@ -9,7 +9,7 @@ module fortran_qkhop_mod
   use fortran_blas_mod, only: sgemm
   implicit none
   private
-  public :: qkhop_fwd, qkhop_bwd, qkhop_sgemm, qkhop_bwd_sgemm
+  public :: qkhop_fwd, qkhop_bwd, qkhop_sgemm, qkhop_bwd_sgemm, qkhop_ph_fwd, qkhop_ph_bwd
 
 contains
 
@@ -380,6 +380,187 @@ contains
     end do
     deallocate (Sm, dL, dyC, h1C, xC, dh1C, Kc, Qc, dSmC, SmT, dxC)
   end subroutine qkhop_bwd_sgemm
+
+
+
+  ! Per-head (sem media): y_b = S_b@(S_b@X), concat heads. Mesma tese, sem
+  ! colapsar especializacao. y: (B,T,H,D) p/ o-proj (hdd==D nos nossos archs).
+  subroutine qkhop_ph_fwd(q, k, x, y, S, h1w, B, T, H, K_H, D)
+    use iso_c_binding, only: c_int64_t, c_int
+    integer(c_int), intent(in) :: B, T, H, K_H, D
+    real(wp), intent(in) :: q(:), k(:), x(:)
+    real(wp), intent(out) :: y(:), S(:), h1w(:)
+    integer :: aa, bb, kb, rep, ii, jj
+    integer(c_int64_t) :: m, n, kk
+    real(wp) :: scale, mx, smx
+    real(wp), allocatable :: Sb(:,:), Xb(:,:), H1(:,:), Yb(:,:)
+    scale = 1.0_wp / sqrt(real(D, wp))
+    rep = H / K_H
+    allocate (Sb(T,T), Xb(T,D), H1(T,D), Yb(T,D))
+    do aa = 1, B
+      do jj = 1, T
+        do ii = 1, D
+          Xb(jj, ii) = x((aa-1)*T*D + (jj-1)*D + ii)
+        end do
+      end do
+      do bb = 1, H
+        kb = (bb - 1) / rep + 1
+        m = int(T, c_int64_t); n = int(T, c_int64_t); kk = int(D, c_int64_t)
+        call sgemm('T', 'N', m, n, kk, scale, &
+             k((aa-1)*T*K_H*D + (kb-1)*D + 1:), int(K_H*D, c_int64_t), &
+             q((aa-1)*T*H*D + (bb-1)*D + 1:), int(H*D, c_int64_t), &
+             0.0_wp, Sb, int(T, c_int64_t))
+        do ii = 1, T
+          do jj = 1, ii - 1
+            mx = Sb(ii, jj)
+            Sb(ii, jj) = Sb(jj, ii)
+            Sb(jj, ii) = mx
+          end do
+        end do
+        do ii = 1, T
+          mx = -huge(1.0_wp)
+          do jj = 1, ii
+            if (Sb(ii, jj) > mx) mx = Sb(ii, jj)
+          end do
+          smx = 0.0_wp
+          do jj = 1, ii
+            smx = smx + exp(Sb(ii, jj) - mx)
+          end do
+          do jj = 1, ii
+            Sb(ii, jj) = exp(Sb(ii, jj) - mx) / smx
+          end do
+          do jj = ii + 1, T
+            Sb(ii, jj) = 0.0_wp
+          end do
+        end do
+        do jj = 1, T
+          do ii = 1, T
+            S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj) = Sb(ii, jj)
+          end do
+        end do
+        m = int(T, c_int64_t); n = int(D, c_int64_t); kk = int(T, c_int64_t)
+        call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+             Sb, int(T, c_int64_t), Xb, int(T, c_int64_t), &
+             0.0_wp, H1, int(T, c_int64_t))
+        call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+             Sb, int(T, c_int64_t), H1, int(T, c_int64_t), &
+             0.0_wp, Yb, int(T, c_int64_t))
+        do jj = 1, T
+          do ii = 1, D
+            h1w((aa-1)*T*H*D + (bb-1)*T*D + (jj-1)*D + ii) = H1(jj, ii)
+            y((aa-1)*T*H*D + (bb-1)*T*D + (jj-1)*D + ii) = Yb(jj, ii)
+          end do
+        end do
+      end do
+    end do
+    deallocate (Sb, Xb, H1, Yb)
+  end subroutine qkhop_ph_fwd
+
+
+
+  subroutine qkhop_ph_bwd(dy, q, k, x, S, dx, dq, dk, w1, w2, w3, &
+      B, T, H, K_H, D)
+    use iso_c_binding, only: c_int64_t, c_int
+    integer(c_int), intent(in) :: B, T, H, K_H, D
+    real(wp), intent(in) :: dy(:), q(:), k(:), x(:), S(:)
+    real(wp), intent(out) :: dx(:), dq(:), dk(:)
+    real(wp), intent(out) :: w1(:), w2(:), w3(:)
+    integer :: aa, bb, kb, rep, cc, ss, ii, jj
+    integer(c_int64_t) :: m, n, kk
+    real(wp) :: scale, sdot, dlx
+    real(wp), allocatable :: Sb(:,:), Xb(:,:), H1(:,:), Yb(:,:)
+    real(wp), allocatable :: DYc(:,:), dH1(:,:), dSm(:,:), dLb(:,:)
+    real(wp), allocatable :: KBc(:,:), Qb(:,:)
+    real(wp), allocatable :: SbT(:,:)
+    scale = 1.0_wp / sqrt(real(D, wp))
+    rep = H / K_H
+    allocate (Sb(T,T), Xb(T,D), H1(T,D), Yb(T,D))
+    allocate (DYc(T,D), dH1(T,D), dSm(T,T), dLb(T,T), KBc(T,D), Qb(T,D))
+    allocate (SbT(T,T))
+    dx = 0.0_wp; dq = 0.0_wp; dk = 0.0_wp
+    w1 = 0.0_wp; w2 = 0.0_wp; w3 = 0.0_wp
+    do aa = 1, B
+      do jj = 1, T
+        do ii = 1, D
+          Xb(jj, ii) = x((aa-1)*T*D + (jj-1)*D + ii)
+        end do
+      end do
+      do bb = 1, H
+        kb = (bb - 1) / rep + 1
+        do jj = 1, T
+          do ii = 1, T
+            Sb(ii, jj) = S(((aa-1)*H+bb-1)*T*T+(ii-1)*T+jj)
+          end do
+          do ii = 1, D
+            DYc(jj, ii) = dy((aa-1)*T*H*D + (bb-1)*T*D + (jj-1)*D + ii)
+            KBc(jj, ii) = k((aa-1)*T*K_H*D + (jj-1)*K_H*D + (kb-1)*D + ii)
+            Qb(jj, ii) = q((aa-1)*T*H*D + (jj-1)*H*D + (bb-1)*D + ii)
+          end do
+        end do
+        m = int(T, c_int64_t); n = int(D, c_int64_t); kk = int(T, c_int64_t)
+        call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+             Sb, int(T, c_int64_t), Xb, int(T, c_int64_t), &
+             0.0_wp, H1, int(T, c_int64_t))
+        do jj = 1, T
+          do ii = 1, T
+            SbT(ii, jj) = Sb(jj, ii)
+          end do
+        end do
+        call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+             SbT, int(T, c_int64_t), DYc, int(T, c_int64_t), &
+             0.0_wp, dH1, int(T, c_int64_t))
+        call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+             SbT, int(T, c_int64_t), dH1, int(T, c_int64_t), &
+             0.0_wp, Yb, int(T, c_int64_t))
+        !$omp parallel do collapse(2) private(ii,jj) schedule(static)
+        do jj = 1, T
+          do ii = 1, D
+            dx((aa-1)*T*D + (jj-1)*D + ii) = dx((aa-1)*T*D + (jj-1)*D + ii) + &
+              Yb(jj, ii)
+          end do
+        end do
+        m = int(T, c_int64_t); n = int(D, c_int64_t); kk = int(T, c_int64_t)
+        call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+             Sb, int(T, c_int64_t), Xb, int(T, c_int64_t), &
+             0.0_wp, H1, int(T, c_int64_t))
+        m = int(T, c_int64_t); n = int(T, c_int64_t); kk = int(D, c_int64_t)
+        call sgemm('N', 'T', m, n, kk, 1.0_wp, &
+             DYc, int(T, c_int64_t), H1, int(T, c_int64_t), &
+             0.0_wp, dSm, int(T, c_int64_t))
+        call sgemm('N', 'T', m, n, kk, 1.0_wp, &
+             dH1, int(T, c_int64_t), Xb, int(T, c_int64_t), &
+             1.0_wp, dSm, int(T, c_int64_t))
+        do cc = 1, T
+          sdot = 0.0_wp
+          do ss = 1, cc
+            sdot = sdot + Sb(cc, ss) * dSm(cc, ss)
+          end do
+          do ss = 1, cc
+            dlx = Sb(cc, ss) * (dSm(cc, ss) - sdot) * scale
+            dLb(cc, ss) = dlx
+          end do
+          do ss = cc + 1, T
+            dLb(cc, ss) = 0.0_wp
+          end do
+        end do
+        m = int(T, c_int64_t); n = int(D, c_int64_t); kk = int(T, c_int64_t)
+        call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+             dLb, int(T, c_int64_t), KBc, int(T, c_int64_t), &
+             0.0_wp, H1, int(T, c_int64_t))
+        call sgemm('T', 'N', m, n, kk, 1.0_wp, &
+             dLb, int(T, c_int64_t), Qb, int(T, c_int64_t), &
+             0.0_wp, Yb, int(T, c_int64_t))
+        do jj = 1, T
+          do ii = 1, D
+            dq((aa-1)*T*H*D + (jj-1)*H*D + (bb-1)*D + ii) = H1(jj, ii)
+            dk((aa-1)*T*K_H*D + (jj-1)*K_H*D + (kb-1)*D + ii) = &
+              dk((aa-1)*T*K_H*D + (jj-1)*K_H*D + (kb-1)*D + ii) + Yb(jj, ii)
+          end do
+        end do
+      end do
+    end do
+    deallocate (Sb, Xb, H1, Yb, DYc, dH1, dSm, dLb, KBc, Qb, SbT)
+  end subroutine qkhop_ph_bwd
 
 
 end module fortran_qkhop_mod
