@@ -55,7 +55,7 @@ program train_run
   integer :: nsteps, t0, log_every, save_every, start_row
   integer :: ntrain, val_every, nval, keep_last, nprobe, nprobe_opt
   integer :: k, i, j, tstep, u, ios, r, nbad
-  logical :: attn_blas, attn_qk, attn_qkph
+  logical :: attn_blas, attn_qk, attn_qkph, anneal
   real(sp) :: theta, ang
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
@@ -78,7 +78,9 @@ program train_run
       '                recorded run used), blas (attn_sgemm/attn_bwd_sgemm) or qkhop:', &
       '                ~13x faster at T=2048, agrees to ~1e-6, different', &
       '                summation order). Applies to training AND to the val', &
-      '                probes so both sides use the same kernel.'], &
+      '                probes so both sides use the same kernel.', &
+      '  --anneal 1    cosine LR to zero over the run (local-SGD reconvergence', &
+      '                before a merge). Default 0 = constant LR.'], &
       version_text=[character(len=80) :: 'train_run 1.0'])
   wdir = trim(sget('weights'))
   rowsfile = trim(sget('rows'))
@@ -99,6 +101,9 @@ program train_run
   keep_last = iget('keep_last')
   bytesfile = trim(sget('bytes'))
   use_muon = trim(sget('opt')) == 'muon'
+  ! --anneal: cosine ate zero no fim do run. E o que a teoria de local SGD
+  ! exige para os descendentes reconvergirem antes do merge (composicao).
+  anneal = trim(sget('anneal')) == '1' .or. trim(sget('anneal')) == 'sim'
   muon_lr = rget('muon-lr')
   if (use_muon) print '(A,F8.5)', "opt=muon (hybrid: Muon 2D + Adam resto), muon_lr=", muon_lr
   if (.not. specified('weights') .or. .not. specified('rows') &
@@ -187,6 +192,10 @@ program train_run
     tstep = t0 + k - 1
     ! 2-step linear warmup on run-relative k (overfit-run lesson)
     lr_eff = lr * min(1.0_sp, real(k, sp) / 2.0_sp)
+    if (anneal .and. nsteps > 1) then
+      lr_eff = lr_eff * 0.5_sp * (1.0_sp + cos(3.14159265358979_sp * &
+          real(k - 1, sp) / real(nsteps - 1, sp)))
+    end if
     ! cycle within [start_row, start_row+ntrain): r is 0-based offset
     r = mod(k - 1, ntrain)
     call load_batch(trim(rowsfile), start_row + r, B, TT, idx, targets, ngot)
