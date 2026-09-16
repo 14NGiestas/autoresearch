@@ -55,7 +55,7 @@ program train_run
   integer :: nsteps, t0, log_every, save_every, start_row
   integer :: ntrain, val_every, nval, keep_last, nprobe, nprobe_opt
   integer :: k, i, j, tstep, u, ios, r, nbad
-  logical :: attn_blas, attn_qk
+  logical :: attn_blas, attn_qk, attn_qkph
   real(sp) :: theta, ang
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
@@ -93,6 +93,7 @@ program train_run
   nprobe_opt = iget('trn_probe')
   attn_blas = trim(sget('attn')) == 'blas'
   attn_qk = trim(sget('attn')) == 'qkhop'
+  attn_qkph = trim(sget('attn')) == 'qkhop-ph'
   val_every = iget('val_every')
   nval = iget('nval')
   keep_last = iget('keep_last')
@@ -194,7 +195,7 @@ program train_run
       call exit(1)
     end if
     call train_step(idx, targets, ct, st, M, S, G, GR, C, tmp, nll, tstep, &
-        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas, attn_qk=attn_qk, &
+        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas, attn_qk=attn_qk, attn_qkph=attn_qkph, &
         use_muon=use_muon, lr_muon=muon_lr)
     if (mod(k, log_every) == 0 .or. k == nsteps) then
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &

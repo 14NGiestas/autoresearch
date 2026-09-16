@@ -19,7 +19,7 @@ module fortran_train_mod
   use fortran_rope_mod
   use fortran_attn_mod
   use fortran_muon_mod, only: muon_update_mat
-  use fortran_qkhop_mod, only: qkhop_sgemm, qkhop_bwd_sgemm
+  use fortran_qkhop_mod, only: qkhop_sgemm, qkhop_bwd_sgemm, qkhop_ph_fwd, qkhop_ph_bwd
   implicit none
   private
 
@@ -171,9 +171,9 @@ contains
     if (allocated(tmp%demd))   deallocate(tmp%demd)
   end subroutine free_temp
 
-  subroutine forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, attn_blas, attn_qk)
-    logical, intent(in), optional :: attn_blas, attn_qk
-    logical :: useblas, useqk
+  subroutine forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, attn_blas, attn_qk, attn_qkph)
+    logical, intent(in), optional :: attn_blas, attn_qk, attn_qkph
+    logical :: useblas, useqk, useqkph
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
     type(params_t), intent(in) :: M
@@ -229,7 +229,16 @@ contains
       end if
       useqk = .false.
       if (present(attn_qk)) useqk = attn_qk
-      if (useqk) then
+      useqkph = .false.
+      if (present(attn_qkph)) useqkph = attn_qkph
+      if (useqkph .and. G%nh*G%hd /= G%D) then
+        print '(A)', "qkhop-ph exige hdd==D"
+        call exit(1)
+      end if
+      if (useqkph) then
+        call qkhop_ph_fwd(tmp%qrot, tmp%krot, tmp%xn, tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &
+            G%nh, G%nkv, G%hd)
+      else if (useqk) then
         call qkhop_sgemm(tmp%qrot, tmp%krot, tmp%xn, tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &
             G%nh, G%nkv, G%hd)
       else if (useblas) then
@@ -283,9 +292,9 @@ contains
   ! r = relu(f) is recomputed from saved f. dk/dv zeroed per layer
   ! (attn_bwd accumulates inout). GR arrays zeroed up front.
   subroutine compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, &
-      attn_blas, attn_qk)
-    logical, intent(in), optional :: attn_blas, attn_qk
-    logical :: useblas, useqk
+      attn_blas, attn_qk, attn_qkph)
+    logical, intent(in), optional :: attn_blas, attn_qk, attn_qkph
+    logical :: useblas, useqk, useqkph
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
     type(params_t), intent(in) :: M
@@ -359,7 +368,16 @@ contains
       end if
       useqk = .false.
       if (present(attn_qk)) useqk = attn_qk
-      if (useqk) then
+      useqkph = .false.
+      if (present(attn_qkph)) useqkph = attn_qkph
+      if (useqkph) then
+        call qkhop_ph_fwd(C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
+            C%xa(ll*BT*DD+1:), tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &
+            G%nh, G%nkv, G%hd)
+        call qkhop_ph_bwd(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
+            C%xa(ll*BT*DD+1:), tmp%sqk, tmp%dr(1:BT*DD), tmp%dq, tmp%dk, &
+            tmp%sh1, tmp%sdh1, tmp%sdsm, G%B, G%T, G%nh, G%nkv, G%hd)
+      else if (useqk) then
         call qkhop_sgemm(C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
             C%xa(ll*BT*DD+1:), tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &
             G%nh, G%nkv, G%hd)
@@ -386,7 +404,7 @@ contains
           GR%v(ll*ksz+1:), G%B, G%T, DD, kvd)
       !$omp parallel do simd
       do jj = 1, BT*DD
-        if (useqk) then
+        if (useqk .or. useqkph) then
           tmp%dxa(jj) = tmp%dx1(jj) + tmp%dx2(jj) + tmp%dr(jj)   ! d(xa)+direto
         else
           tmp%dxa(jj) = tmp%dx1(jj) + tmp%dx2(jj) + tmp%dx3(jj)   ! d(xa)
@@ -477,10 +495,10 @@ contains
   ! geometry -- never reuse the Adam LR (different units). Optionals so
   ! train_1step/train_loop/tests keep compiling unchanged (Adam default).
   subroutine train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, &
-      nll, tstep, lr, b1, b2, beps, wd, attn_blas, use_muon, lr_muon, attn_qk)
-    logical, intent(in), optional :: attn_blas, use_muon, attn_qk
+      nll, tstep, lr, b1, b2, beps, wd, attn_blas, use_muon, lr_muon, attn_qk, attn_qkph)
+    logical, intent(in), optional :: attn_blas, use_muon, attn_qk, attn_qkph
     real(wp), intent(in), optional :: lr_muon
-    logical :: useblas, m_opt, useqk
+    logical :: useblas, m_opt, useqk, useqkph
     real(wp) :: lr_mu
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
@@ -497,12 +515,14 @@ contains
     if (present(attn_blas)) useblas = attn_blas
     useqk = .false.
     if (present(attn_qk)) useqk = attn_qk
+    useqkph = .false.
+    if (present(attn_qkph)) useqkph = attn_qkph
     m_opt = .false.
     if (present(use_muon)) m_opt = use_muon
     lr_mu = 0.0_wp
     if (present(lr_muon)) lr_mu = lr_muon
-    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas, useqk)
-    call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas, useqk)
+    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas, useqk, useqkph)
+    call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas, useqk, useqkph)
     call apply_group(M%wte, GR%wte, S%wte, S%vwte, lr, b1, b2, beps, wd, tstep)
     call apply_group(M%lm, GR%lm, S%lm, S%vlm, lr, b1, b2, beps, wd, tstep)
     call apply_opt(M%q, GR%q, S%q, S%vq, S%mq, lr, lr_mu, b1, b2, beps, wd, &
