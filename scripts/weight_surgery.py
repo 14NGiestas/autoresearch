@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """weight_surgery.py — transformacoes em espaco de pesos + teste de funcao.
 Controles: perm paired (prediz IDENTICO), resto (prediz destruicao graduada).
+Aceita checkpoint st (model.safetensors) ou npy legado, e escreve cada variante no
+MESMO formato da entrada.
+
 Uso: .venv-numpy/bin/python3 scripts/weight_surgery.py --ckpt /tmp/mix/w_f0/best --out /tmp/surgery
 """
 import argparse
@@ -13,14 +16,14 @@ MAT2D = ("attn_c_q_weight", "attn_c_k_weight", "attn_c_v_weight", "attn_c_proj_w
 
 
 def load(d):
-    return {f: np.load(os.path.join(d, f)) for f in os.listdir(d)
-            if f.endswith(".npy") and not f.startswith("adam_")}
+    import ckio
+    return ckio.load_ckpt_dir(d)
 
 
-def save(W, d):
-    os.makedirs(d, exist_ok=True)
-    for f, a in W.items():
-        np.save(os.path.join(d, f), np.asfortranarray(a))
+def save(W, d, like):
+    """Grava no MESMO formato da entrada (st -> model.safetensors)."""
+    import ckio
+    ckio.save_ckpt_dir(d, W, like=like, op="weight_surgery")
 
 
 def main():
@@ -28,6 +31,7 @@ def main():
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    import ckio
     rng = np.random.default_rng(7)
     base = load(args.ckpt)
     arch = open(os.path.join(args.ckpt, "arch.txt")).read()
@@ -52,9 +56,9 @@ def main():
                    for k, v in base.items()}
     for nm, W in out.items():
         d = os.path.join(args.out, nm)
-        save(W, d)
+        save(W, d, args.ckpt)
         open(os.path.join(d, "arch.txt"), "w").write(arch)
-        print(f"{nm}: {len(W)} arrays")
+        print(f"{nm}: {len(W)} arrays ({ckio.fmt(d)})")
     print("nota: paired-perm (controle exato) exige perm consistente q/k/v/p/fc/p2;",
           "fazer apos ver o padrao de destruicao")
 

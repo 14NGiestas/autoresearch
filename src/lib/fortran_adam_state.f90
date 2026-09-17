@@ -34,7 +34,14 @@ contains
     integer :: ios
     character(len=:), allocatable :: msg
     call load_npy(path, tmp, iostat=ios, iomsg=msg)
-    if (ios /= 0 .or. size(tmp) /= size(a)) then
+    ! `allocated` antes de `size`: com arquivo ausente o load_npy devolve ios/=0
+    ! SEM alocar tmp, e `size(tmp)` de alocavel nao alocado e erro de runtime sob
+    ! -fcheck=all (semantica intacta: ios/=0 ja levava a ok=.false.).
+    if (ios /= 0 .or. .not. allocated(tmp)) then
+      ok = .false.
+      return
+    end if
+    if (size(tmp) /= size(a)) then
       ok = .false.
       return
     end if

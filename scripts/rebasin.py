@@ -27,8 +27,10 @@ def blk(ph):
 
 
 def load(d):
-    return {f: np.load(os.path.join(d, f)) for f in os.listdir(d)
-            if f.endswith(".npy") and not f.startswith("adam_")}
+    """Pesos por nome logico (st | npy legado); as chaves sao os nomes .npy, que
+    e o que as permutacoes abaixo indexam."""
+    import ckio
+    return ckio.load_ckpt_dir(d)
 
 
 def main():
@@ -87,18 +89,18 @@ def main():
         print(f"layer {l}: drift-local {best[0]:.4f}", flush=True)
     # lm_head acompanha o stream final; wte fica (Pin inicial = identidade)
     Bt["lm_head_weight.npy"] = M(Bt, "lm_head_weight.npy", V, D)[:, Pin].ravel()
-    os.makedirs(args.out, exist_ok=True)
-    for k, v in Bt.items():
-        if k.endswith(".npy") and not k.startswith("adam_"):
-            np.save(os.path.join(args.out, k), np.asfortranarray(v.astype(np.float32)))
+    import ckio
+    out_w = {k: v.astype(np.float32) for k, v in Bt.items() if k.endswith(".npy")}
+    ckio.save_ckpt_dir(args.out, out_w, like=args.a, op="rebasin",
+                       extra_meta={"op": "rebasin", "a": args.a, "b": args.b})
     open(os.path.join(args.out, "arch.txt"), "w").write(arch)
 
+    A = ckio.load_ckpt_dir(args.a)
+    B2 = ckio.load_ckpt_dir(args.out)
     sq = dr = 0.0
-    for f in sorted(os.listdir(args.a)):
-        if not f.endswith(".npy") or f.startswith("adam_"):
-            continue
-        a = np.load(os.path.join(args.a, f)).astype(np.float64).ravel()
-        b = np.load(os.path.join(args.out, f)).astype(np.float64).ravel()
+    for f in sorted(A):
+        a = A[f].astype(np.float64).ravel()
+        b = B2[f].astype(np.float64).ravel()
         sq += float(((a - b) ** 2).sum())
         dr += float((a ** 2).sum())
     print(f"drift antes=1.083 depois={(sq/max(dr,1e-30))**0.5:.6f}")

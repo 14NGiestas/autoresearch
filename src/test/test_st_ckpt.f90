@@ -14,7 +14,14 @@
 !   6. verify_ckpt_dir continua pegando checkpoint corrompido -- inclusive o caso
 !      real que motivou o verify (disco cheio = payload truncado);
 !   7. o MESMO arquivo e lido por Python (oraculo pure-Python da biblioteca), com
-!      os hashes de payload batendo com os .npy -- prova cross-language.
+!      os hashes de payload batendo com os .npy -- prova cross-language;
+!   8. o caminho DEFAULT do trainer (train_run SEM --ckpt-format, que hoje e st) e
+!      o --ckpt-format npy: dois passos de treino REAIS de 1 step em scratch,
+!      conferindo que o default escreve SO model.safetensors (+ adam/arch/
+!      template), que o legado continua escrevendo os .npy e que os payloads dos
+!      dois sao byte a byte iguais (o que o job 91 (fermi_stsmoke) faz a mao);
+!      e as FERRAMENTAS Python (scripts/test_ckio.py) lendo esse checkpoint
+!      st-only real -- no minimo duas delas.
 !
 ! Nada aqui treina: sao ~4 KiB de pesos sinteticos e uma arquitetura minuscula.
 !
@@ -25,6 +32,9 @@
 program test_st_ckpt
   use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32
   use fortran_kinds_mod, only: wp
+  use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
+      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
+      write_arch_txt
   use fortran_sys_mod, only: mkdir_p
   use fortran_chat_mod, only: write_template_txt
   use load_weights_mod, only: save_gpt_weights, save_gpt_weights_st, &
@@ -102,6 +112,7 @@ program test_st_ckpt
   call test_arch_mismatch()
   call test_meta_utf8_empty()
   call test_python_reader()
+  call test_train_run_default_path()
 
   print '(A,I0,A)', '===', fail_count, ' failures ==='
   if (fail_count > 0) call exit(1)
@@ -413,6 +424,364 @@ contains
     end if
     call check(est == 0, 'python: payloads .st == .npy, card e arch.* validos')
   end subroutine test_python_reader
+
+  ! ==================================================================== 8
+  ! Caminho DEFAULT do trainer (sem --ckpt-format) e o legado (--ckpt-format npy),
+  ! com um passo de treino DE VERDADE (1 step, arch compilada, ~4 s cada). O que
+  ! este bloco prova e o que o job 91 faz a mao:
+  !   (a) sem flag o checkpoint sai st-only (model.safetensors, zero peso .npy);
+  !   (b) com --ckpt-format npy sai tudo .npy como sempre;
+  !   (c) os payloads dos dois sao byte a byte iguais (mesma init/rows/lr);
+  !   (d) as ferramentas Python leem o checkpoint st-only real (>=2 delas).
+  subroutine test_train_run_default_path()
+    integer, parameter :: DD = A_D, HH = A_HEAD, KV = A_KV, HDL = A_HD
+    integer, parameter :: NL2 = A_LAYER, VVV = A_VOCAB
+    real(wp), allocatable :: wte(:), lm(:), q(:), k(:), v(:), p(:), fc(:), p2(:)
+    character(len=:), allocatable :: trun, evdir, nydir, ddir, py, script, cmd
+    logical :: ran
+    integer :: stat, ios
+
+    print '(A)', '-- 8. train_run: default (st) x --ckpt-format npy, 1 step real'
+    trun = find_binary('train_run')
+    if (len(trun) == 0) then
+      print '(A)', '  skip  binario train_run nao encontrado (rode fpm build antes do test)'
+      return
+    end if
+    if (A_D < 16) then
+      print '(A)', '  skip  arch minuscula demais para um passo de treino'
+      return
+    end if
+
+    ! --- init legado em .npy (o trainer carrega e o --ckpt-format npy reescreve)
+    ddir = ROOT//'/train_init'
+    call wipe(ddir)
+    if (mkdir_p(ddir) /= 0) then
+      call check(.false., 'mkdir '//ddir)
+      return
+    end if
+    allocate (wte(VVV*DD), lm(VVV*DD))
+    allocate (q(NL2*HH*HDL*DD), k(NL2*KV*HDL*DD), v(NL2*KV*HDL*DD))
+    allocate (p(NL2*DD*HH*HDL), fc(NL2*4*DD*DD), p2(NL2*DD*4*DD))
+    ! 0.02 constante: init valida e sem NaN (make_init usa N(0, 0.02^2))
+    wte = 0.02_wp; lm = 0.02_wp; q = 0.02_wp; k = 0.02_wp
+    v = 0.02_wp; p = 0.02_wp; fc = 0.02_wp; p2 = 0.02_wp
+    call save_gpt_weights(ddir, NL2, DD, HH, KV, HDL, VVV, &
+        wte, lm, q, k, v, p, fc, p2)
+    call write_arch_txt(ddir)
+    call write_template_txt(ddir)
+    call write_rows_file(ROOT//'/train_rows.txt', 2, A_CTX)
+    call write_token_bytes(ROOT//'/train_tokbytes.txt', VVV)
+
+    evdir = ROOT//'/run_default'
+    nydir = ROOT//'/run_npy'
+    call wipe(evdir)
+    call wipe(nydir)
+    call run_train(trun, ddir, evdir, '', ran)
+    if (.not. ran) return
+    call run_train(trun, ddir, nydir, '--ckpt-format npy', ran)
+    if (.not. ran) return
+
+    ! (a) default = st-only
+    call check(file_exists(evdir//'/step_1/model.safetensors'), &
+        'default (sem flag): model.safetensors existe')
+    call check(n_weight_npy(evdir//'/step_1') == 0, &
+        'default (sem flag): zero transformer_*.npy de peso')
+    call check(count_state_npy(evdir//'/step_1') == 16, &
+        'default (sem flag): 16 adam_*.npy de estado')
+    call check(file_exists(evdir//'/step_1/arch.txt') .and. &
+        file_exists(evdir//'/step_1/template.txt'), &
+        'default (sem flag): arch.txt + template.txt')
+
+    ! (b) --ckpt-format npy continua como sempre
+    call check(.not. file_exists(nydir//'/step_1/model.safetensors'), &
+        '--ckpt-format npy: nenhum model.safetensors')
+    call check(n_weight_npy(nydir//'/step_1') == 2 + 6*NL2, &
+        '--ckpt-format npy: 2+6*n_layer .npy de peso')
+
+    ! (c) mesmos bytes nos dois caminhos (o check manual do job 91, automatizado)
+    call cmp_st_vs_npy(evdir//'/step_1', nydir//'/step_1', NL2)
+
+    ! (d) st_read.py valida o checkpoint que o DEFAULT escreveu
+    script = find_script([character(len=48) :: '../scripts/st_read.py', &
+                          'scripts/st_read.py', '../../scripts/st_read.py'])
+    py = pick_python()
+    if (len(script) > 0) then
+      cmd = trim(py)//' '//script//' --ckpt-dir '//abs_path(evdir//'/step_1')//' --quiet'
+      call execute_command_line(trim(cmd), exitstat=stat, cmdstat=ios)
+      call check(ios == 0 .and. stat == 0, &
+          'st_read.py valida o checkpoint escrito pelo DEFAULT')
+    else
+      print '(A)', '  skip  scripts/st_read.py nao encontrado'
+    end if
+
+    ! (e) as ferramentas Python sobre o checkpoint st-only real (>=2 ferramentas)
+    script = find_script([character(len=48) :: '../scripts/test_ckio.py', &
+                          'scripts/test_ckio.py', '../../scripts/test_ckio.py'])
+    if (len(script) > 0) then
+      if (numpy_disponivel(py)) then
+        cmd = trim(py)//' '//script//' --ckpt-st '//abs_path(evdir//'/step_1')// &
+              ' --ckpt-npy '//abs_path(nydir//'/step_1')// &
+              ' --work '//abs_path(ROOT//'/ckio_tools')
+        call execute_command_line(trim(cmd), exitstat=stat, cmdstat=ios)
+        call check(ios == 0 .and. stat == 0, &
+            'test_ckio.py: ferramentas Python leem o checkpoint st-only real '// &
+            '(rescale, merge, cirurgia, compose_metrics, fedavg)')
+      else
+        print '(A)', '  skip  test_ckio.py: '//trim(py)//' nao tem numpy '// &
+            '(defina ST_PYTHON=/caminho/python-com-numpy para rodar)'
+      end if
+    else
+      print '(A)', '  skip  scripts/test_ckio.py nao encontrado'
+    end if
+
+    ! (f) o CLI: default aceita 'st' e recusa valor invalido
+    cmd = trim(trun)//' --weights '//ddir//' --rows '//ROOT//'/train_rows.txt'// &
+          ' --out '//ROOT//'/cli_probe --nsteps 1 --ckpt-format bogus'// &
+          ' --bytes '//ROOT//'/train_tokbytes.txt >/dev/null 2>&1'
+    call execute_command_line(trim(cmd), exitstat=stat, cmdstat=ios)
+    call check(ios == 0 .and. stat /= 0, '--ckpt-format invalido: aborta (exit != 0)')
+
+    deallocate (wte, lm, q, k, v, p, fc, p2)
+  end subroutine test_train_run_default_path
+
+  ! Roda o train_run 1 step em scratch. `extra` = flags adicionais (string).
+  ! --nval 0 de proposito: o val_bpb com 0 linhas da NaN, o teste do "best
+  ! snapshot" (vnll < best) nao dispara, e assim o passo nao escreve um SEGUNDO
+  ! checkpoint inteiro so para o teste ficar mais lento.
+  subroutine run_train(trun, wdir, outdir, extra, ok)
+    character(*), intent(in) :: trun, wdir, outdir, extra
+    logical, intent(out) :: ok
+    character(len=:), allocatable :: cmd
+    integer :: stat, ios
+    ! OMP_NUM_THREADS explicito: sem isso o OpenBLAS pega os 16 cores e o passo de
+    ! 1 s vira 23 s de thrash (medido); 4 threads mantem o teste curto e a mesma
+    ! ordem de reducao nos dois runs (e o que faz a comparacao byte a byte valer).
+    cmd = 'OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 OMP_DYNAMIC=FALSE '// &
+          trim(trun)//' --weights '//trim(wdir)//' --rows '//ROOT//'/train_rows.txt'// &
+          ' --out '//trim(outdir)//' --nsteps 1 --lr 0.0003 --ntrain 1 --nval 0'// &
+          ' --val_every 9999999 --trn_probe 0 --save_every 1 --attn blas'// &
+          ' --anneal 0 --bytes '//ROOT//'/train_tokbytes.txt '//trim(extra)// &
+          ' >'//ROOT//'/train_last.log 2>&1'
+    call execute_command_line(trim(cmd), exitstat=stat, cmdstat=ios)
+    ok = (ios == 0 .and. stat == 0)
+    call check(ok, 'train_run 1 step '//trim(extra)//' (exit '//trim(i2s(stat))//')')
+    if (.not. ok) then
+      print '(A)', '  (log em '//ROOT//'/train_last.log)'
+    end if
+  end subroutine run_train
+
+  integer function n_weight_npy(d)
+    character(*), intent(in) :: d
+    n_weight_npy = count_npy(d, skip_state=.true.)
+  end function n_weight_npy
+
+  integer function count_state_npy(d)
+    character(*), intent(in) :: d
+    count_state_npy = count_npy(d, skip_state=.false.)
+  end function count_state_npy
+
+  ! Conta .npy no diretorio (em Fortran puro: le o diretorio via ls)
+  integer function count_npy(d, skip_state)
+    character(*), intent(in) :: d
+    logical, intent(in) :: skip_state
+    character(len=:), allocatable :: cmd
+    character(len=512) :: buf
+    integer :: u, ios, cnt
+    logical :: ex
+    if (skip_state) then
+      cmd = 'ls '//trim(d)//'/*.npy 2>/dev/null | grep -vc "/adam_[mv]_\\|/muon_"'
+    else
+      cmd = 'ls '//trim(d)//'/*.npy 2>/dev/null | grep -c "/adam_[mv]_\\|/muon_"'
+    end if
+    call execute_command_line(trim(cmd)//' >'//ROOT//'/count.txt', exitstat=ios)
+    cnt = 0
+    inquire (file=ROOT//'/count.txt', exist=ex)
+    if (ex) then
+      open (newunit=u, file=ROOT//'/count.txt', status='old', iostat=ios)
+      if (ios == 0) then
+        read (u, '(A)', iostat=ios) buf
+        if (ios == 0) read (buf, *, iostat=ios) cnt
+        close (u)
+      end if
+    end if
+    count_npy = cnt
+  end function count_npy
+
+  ! Compara o payload de cada peso canonico no .st com o .npy correspondente.
+  subroutine cmp_st_vs_npy(dir_st, dir_npy, n_layer)
+    character(*), intent(in) :: dir_st, dir_npy
+    integer, intent(in) :: n_layer
+    type(st_reader) :: r
+    character(len=:), allocatable :: msg
+    character(len=16) :: lstr
+    integer :: stat, ll, nbad2, ncmp
+    call r%open(trim(dir_st)//'/'//ST_CKPT, stat, msg)
+    if (stat /= st_ok) then
+      call check(.false., 'cmp st x npy: open '//trim(msg))
+      return
+    end if
+    nbad2 = 0
+    ncmp = 0
+    call cmp_one(r, 'wte', trim(dir_npy)//'/transformer_wte_weight.npy', nbad2, ncmp)
+    call cmp_one(r, 'lm', trim(dir_npy)//'/lm_head_weight.npy', nbad2, ncmp)
+    do ll = 0, n_layer - 1
+      write (lstr, '(I0)') ll
+      call cmp_one(r, 'l'//trim(lstr)//'.q', trim(dir_npy)//'/transformer_h_'// &
+          trim(lstr)//'_attn_c_q_weight.npy', nbad2, ncmp)
+      call cmp_one(r, 'l'//trim(lstr)//'.k', trim(dir_npy)//'/transformer_h_'// &
+          trim(lstr)//'_attn_c_k_weight.npy', nbad2, ncmp)
+      call cmp_one(r, 'l'//trim(lstr)//'.v', trim(dir_npy)//'/transformer_h_'// &
+          trim(lstr)//'_attn_c_v_weight.npy', nbad2, ncmp)
+      call cmp_one(r, 'l'//trim(lstr)//'.p', trim(dir_npy)//'/transformer_h_'// &
+          trim(lstr)//'_attn_c_proj_weight.npy', nbad2, ncmp)
+      call cmp_one(r, 'l'//trim(lstr)//'.fc', trim(dir_npy)//'/transformer_h_'// &
+          trim(lstr)//'_mlp_c_fc_weight.npy', nbad2, ncmp)
+      call cmp_one(r, 'l'//trim(lstr)//'.p2', trim(dir_npy)//'/transformer_h_'// &
+          trim(lstr)//'_mlp_c_proj_weight.npy', nbad2, ncmp)
+    end do
+    call check(nbad2 == 0, 'st x npy: '//trim(i2s(ncmp))// &
+        ' payloads byte a byte iguais ('//trim(i2s(nbad2))//' diferentes)')
+    call r%close()
+  end subroutine cmp_st_vs_npy
+
+  ! Um par (tensor canonico no .st, payload do .npy) -- incrementa os contadores.
+  subroutine cmp_one(r, name, npypath, nbad, ncmp)
+    type(st_reader), intent(in) :: r
+    character(*), intent(in) :: name, npypath
+    integer, intent(inout) :: nbad, ncmp
+    integer(int8), pointer :: raw(:) => null()
+    integer(int8), allocatable :: want(:)
+    character(len=:), allocatable :: msg
+    integer :: stat
+    call npy_payload(npypath, want)
+    call r%get_raw(name, raw, stat, msg)
+    ncmp = ncmp + 1
+    if (stat /= st_ok .or. size(raw) /= size(want) .or. .not. all(raw == want)) then
+      nbad = nbad + 1
+      if (nbad <= 3) print '(A)', '    difere: '//trim(name)
+    end if
+    if (associated(raw)) deallocate (raw)
+  end subroutine cmp_one
+
+  ! Rows file texto: n_rows linhas de ctx+1 ids 0-based (formato do loader).
+  subroutine write_rows_file(path, n_rows, ctx)
+    character(*), intent(in) :: path
+    integer, intent(in) :: n_rows, ctx
+    integer :: u, r, i, ios
+    open (newunit=u, file=path, status='replace', iostat=ios)
+    if (ios /= 0) then
+      call check(.false., 'write_rows_file '//path)
+      return
+    end if
+    do r = 1, n_rows
+      do i = 1, ctx + 1
+        if (i > 1) write (u, '(A)', advance='no') ' '
+        ! determinista, dentro do vocab (BOS-1)
+        write (u, '(I0)', advance='no') mod((r*7919 + i*104729), A_BOS)
+      end do
+      write (u, '(A)') ''
+    end do
+    close (u)
+  end subroutine write_rows_file
+
+  ! token_bytes.txt: usa o do laboratorio se existir; senao sintetiza.
+  subroutine write_token_bytes(path, nvocab)
+    character(*), intent(in) :: path
+    integer, intent(in) :: nvocab
+    character(len=512) :: home, cached
+    character(len=:), allocatable :: cmd
+    integer :: u, i, ios
+    home = ''
+    call get_environment_variable('HOME', home)
+    cached = trim(home)//'/.cache/autoresearch/tok_tables/token_bytes.txt'
+    if (file_exists(trim(cached))) then
+      cmd = 'cp '//trim(cached)//' '//trim(path)
+      call execute_command_line(trim(cmd), exitstat=ios)
+      if (ios == 0) return
+    end if
+    open (newunit=u, file=path, status='replace', iostat=ios)
+    do i = 1, nvocab
+      write (u, '(A)') '4'
+    end do
+    close (u)
+  end subroutine write_token_bytes
+
+  ! Caminho absoluto (o fpm roda o teste com cwd=src/, e os scripts Python rodam
+  ! com cwd=raiz do repo: caminho relativo nao serve para os dois).
+  function abs_path(rel) result(p)
+    character(*), intent(in) :: rel
+    character(len=:), allocatable :: p
+    character(len=1024) :: buf
+    character(len=1024), save :: cwd = ''
+    integer :: u, ios
+    if (len_trim(cwd) == 0) then
+      call execute_command_line('pwd > '//ROOT//'/pwd.txt', exitstat=ios)
+      open (newunit=u, file=ROOT//'/pwd.txt', status='old', iostat=ios)
+      if (ios == 0) then
+        read (u, '(A)', iostat=ios) buf
+        close (u)
+        if (ios == 0) cwd = trim(buf)
+      end if
+    end if
+    p = trim(cwd)//'/'//rel
+  end function abs_path
+
+  ! Python para os scripts: $ST_PYTHON, senao o venv-numpy do repo, senao python3.
+  ! (o script st_read.py nao precisa de numpy; o tooling Python precisa.)
+  function pick_python() result(py)
+    character(len=:), allocatable :: py
+    character(len=256) :: buf
+    integer :: ios
+    buf = ''
+    call get_environment_variable('ST_PYTHON', buf)
+    if (len_trim(buf) > 0) then
+      py = trim(buf)
+      return
+    end if
+    call execute_command_line('../.venv-numpy/bin/python3 -c "import numpy" '// &
+        '2>/dev/null', exitstat=ios)
+    if (ios == 0) then
+      py = '../.venv-numpy/bin/python3'
+      return
+    end if
+    py = 'python3'
+  end function pick_python
+
+  logical function numpy_disponivel(py)
+    character(*), intent(in) :: py
+    integer :: ios
+    call execute_command_line(trim(py)//' -c "import numpy" 2>/dev/null', exitstat=ios)
+    numpy_disponivel = (ios == 0)
+  end function numpy_disponivel
+
+  ! Binario de app do MESMO build dir do teste (irmao de app/), com fallback glob.
+  function find_binary(app) result(path)
+    character(*), intent(in) :: app
+    character(len=:), allocatable :: path
+    character(len=512) :: cand, buf
+    integer :: p, u, ios
+    logical :: ex
+    path = ''
+    ! argv0 = .../<build-dir>/<gfortran_hash>/test/test_st_ckpt
+    p = index(argv0, '/test/')
+    if (p > 0) then
+      cand = argv0(1:p - 1)//'/app/'//app
+      inquire (file=trim(cand), exist=ex)
+      if (ex) then
+        path = trim(cand)
+        return
+      end if
+    end if
+    call execute_command_line('ls -t build/*/app/'//app//' 2>/dev/null | head -1 >'// &
+        ROOT//'/bin.txt', exitstat=ios)
+    buf = ''
+    open (newunit=u, file=ROOT//'/bin.txt', status='old', iostat=ios)
+    if (ios == 0) then
+      read (u, '(A)', iostat=ios) buf
+      close (u)
+      if (ios == 0 .and. len_trim(buf) > 0) path = trim(buf)
+    end if
+  end function find_binary
 
   ! ------------------------------------------------------------- utilidades
   subroutine wipe(dir)

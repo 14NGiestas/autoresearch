@@ -69,23 +69,27 @@ def avg_dirs(dirs, out, include_opt=True):
     """
     os.makedirs(out, exist_ok=True)
     import ckio
-    names = ckio.require_weights(dirs[0], "fedavg/avg_dirs")
-    names = names + [f for f in sorted(os.listdir(dirs[0]))
-                     if f.startswith(("adam_", "muon_")) and f.endswith(".npy")]
+
+    # Pesos nos dois formatos (st | npy legado) + momentos, que sao .npy em ambos.
+    # `include_opt=False` mantem a semantica antiga: tira so o adam_ (muon_ entra).
+    W = {f: v.astype(np.float64) for f, v in ckio.load_ckpt_dir(dirs[0]).items()}
+    S = {f: v.astype(np.float64) for f, v in ckio.load_state(dirs[0]).items()}
     if not include_opt:
-        names = [f for f in names if not f.startswith("adam_")]
-    for f in names:
-        acc = None
-        for d in dirs:
-            x = np.load(os.path.join(d, f)).astype(np.float64)
-            acc = x if acc is None else acc + x
-        acc /= len(dirs)
-        np.save(os.path.join(out, f), acc.astype(np.float32))
-    for f in ("arch.txt", "template.txt"):
-        src = os.path.join(dirs[0], f)
-        if os.path.exists(src):
-            shutil.copy(src, os.path.join(out, f))
-    return len(names)
+        S = {f: v for f, v in S.items() if not f.startswith("adam_")}
+    for d in dirs[1:]:
+        wd = ckio.load_ckpt_dir(d)
+        sd = ckio.load_state(d)
+        for f in W:
+            W[f] += np.asarray(wd[f], dtype=np.float64)
+        for f in S:
+            S[f] += np.asarray(sd[f], dtype=np.float64)
+    n = len(dirs)
+    W = {f: (v / n).astype(np.float32) for f, v in W.items()}
+    S = {f: (v / n).astype(np.float32) for f, v in S.items()}
+    ckio.save_ckpt_dir(out, W, state=S, like=dirs[0], op="fedavg/avg_dirs",
+                       extra_meta={"op": "fedavg", "K": n,
+                                   "dirs": ",".join(os.path.basename(d) for d in dirs)})
+    return len(W) + len(S)
 
 
 def bpb_of(evfile, rows):
@@ -138,7 +142,9 @@ def main():
     if not os.path.exists(common):
         os.makedirs(common)
         for f in sorted(os.listdir(a.init)):
-            if f.endswith((".npy", ".txt")):
+            # .safetensors incluido: com o default novo (st) um init st copiado
+            # so em .npy/txt viraria um diretorio de checkpoint VAZIO.
+            if f.endswith((".npy", ".txt", ".safetensors")):
                 shutil.copy(os.path.join(a.init, f), os.path.join(common, f))
     history = []
     for r in range(a.rounds):

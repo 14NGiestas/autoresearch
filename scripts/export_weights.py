@@ -10,6 +10,11 @@ bytes. Writes one flat float32 .npy per model weight + manifest.txt.
 --audit: print structure (keys, shapes, dtypes, config) without writing.
 Requires: nothing but Python 3.8+ stdlib.
 
+Com --st, escreve TAMBEM `model.safetensors` no mesmo diretorio (mesmos bytes,
+nomes canonicos via st_read.canon_of, arch.* no __metadata__), para o checkpoint
+exportado ja sair no formato padrao do trainer. Sem numpy: o payload e lido de
+volta dos .npy recem-escritos com st_read.npy_payload.
+
 Output .npy files are 1-D float32 C-order flats — exactly the layout the
 Fortran engine (src/lib) consumes via stdlib_io_npy::load_npy.
 bfloat16 storages (wte) are converted to float32 on export.
@@ -261,6 +266,7 @@ def main():
     except OSError as e:
         raise SystemExit(f"cannot create {outdir}: {e}")
     manifest = []
+    written = []
     for k, v in msd.items():
         if not isinstance(v, TensorRecord) or v.dtype_tag == "meta":
             continue
@@ -271,6 +277,7 @@ def main():
         flat = storage_to_f32_list(dtype_tag, raw, v)
         name = k.replace(".", "_") + ".npy"
         write_npy_1d_f32(os.path.join(outdir, name), flat)
+        written.append(name)
         manifest.append(f"{name} {v.size} {len(flat)}")
         print(f"wrote {name} n={len(flat)}")
     try:
@@ -279,6 +286,34 @@ def main():
     except OSError as e:
         raise SystemExit(f"cannot write manifest: {e}")
     print("manifest.txt written")
+
+    if "--st" in sys.argv:
+        # Segunda passada pelos .npy (struct, sem numpy) -> um model.safetensors.
+        import st_read
+        rw, oracle = st_read.find_oracle()
+        if rw is None:
+            raise SystemExit("--st: nao achei tools/reference_writer.py da biblioteca")
+        items = []
+        for name in written:
+            payload, hdr = st_read.npy_payload(os.path.join(outdir, name))
+            canon = st_read.canon_of(name) or name.replace(".npy", "")
+            items.append((canon, "F32", [len(payload) // 4], payload))
+        items.sort(key=lambda t: t[0])
+        meta = {"format_version": "1",
+                "producer": "autoresearch/scripts/export_weights.py",
+                "n_tensors": str(len(items)),
+                "source_ckpt": os.path.abspath(ckpt)}
+        arch_keys = (("n_embd", "d_model"), ("n_head", "n_head"),
+                     ("n_kv_head", "n_kv"), ("n_layer", "n_layer"),
+                     ("vocab_size", "vocab"), ("sequence_len", "ctx"))
+        for ck, ak in arch_keys:
+            if ck in cfg:
+                meta["arch." + ak] = str(cfg[ck])
+        if "n_embd" in cfg and "n_head" in cfg:
+            meta["arch.head_dim"] = str(int(cfg["n_embd"]) // int(cfg["n_head"]))
+        rw.write(os.path.join(outdir, "model.safetensors"), items, meta)
+        print(f"wrote model.safetensors ({len(items)} tensores, "
+              f"{os.path.getsize(os.path.join(outdir, 'model.safetensors'))} bytes)")
 
 
 if __name__ == "__main__":

@@ -34,14 +34,84 @@ import os
 import struct
 import sys
 
-# .npy canonico -> nome canonico do tensor (mesmo mapa do adaptador da lib).
-NPY_TO_CANON = {
-    "transformer_wte_weight.npy": "wte",
-    "lm_head_weight.npy": "lm",
+# ---------------------------------------------------------------------------
+# UMA tabela para os dois sentidos. O nome LOGICO de um peso (o que o resto do
+# tooling usa) e o nome do arquivo .npy legado correspondente; o nome CANONICO
+# e o que vai no model.safetensors. `{L}` = indice da camada.
+CANON_TEMPLATES = [
+    ("wte", "transformer_wte_weight.npy"),
+    ("lm", "lm_head_weight.npy"),
+    ("l{L}.q", "transformer_h_{L}_attn_c_q_weight.npy"),
+    ("l{L}.k", "transformer_h_{L}_attn_c_k_weight.npy"),
+    ("l{L}.v", "transformer_h_{L}_attn_c_v_weight.npy"),
+    ("l{L}.p", "transformer_h_{L}_attn_c_proj_weight.npy"),
+    ("l{L}.fc", "transformer_h_{L}_mlp_c_fc_weight.npy"),
+    ("l{L}.p2", "transformer_h_{L}_mlp_c_proj_weight.npy"),
+]
+
+# .npy legado -> nome canonico (compatibilidade: era o mapa original daqui)
+NPY_TO_CANON = {}
+for _canon, _npy in CANON_TEMPLATES:
+    for _L in range(0, 256):
+        NPY_TO_CANON[_npy.replace("{L}", str(_L))] = _canon.replace("{L}", str(_L))
+
+
+def canon_of(npy_name):
+    """Nome canonico de um arquivo .npy legado (None se nao for tensor de peso)."""
+    for canon, npy in CANON_TEMPLATES:
+        if "{L}" not in npy:
+            if npy_name == npy:
+                return canon
+            continue
+        pre, post = npy.split("{L}")
+        if npy_name.startswith(pre) and npy_name.endswith(post):
+            mid = npy_name[len(pre):len(npy_name) - len(post)]
+            if mid.isdigit():
+                return canon.replace("{L}", mid)
+    return None
+
+
+def npy_of(canon):
+    """Arquivo .npy legado de um nome canonico (None se nao for peso conhecido)."""
+    for c, npy in CANON_TEMPLATES:
+        if "{L}" not in c:
+            if canon == c:
+                return npy
+            continue
+        pre, post = c.split("{L}")
+        if canon.startswith(pre) and canon.endswith(post):
+            mid = canon[len(pre):len(canon) - len(post)]
+            if mid.isdigit():
+                return npy.replace("{L}", mid)
+    return None
+
+
+# dtype safetensors -> numpy (so os que o trainer escreve hoje)
+DTYPE_NUMPY = {
+    "F32": "float32", "F64": "float64", "I64": "int64", "I32": "int32",
+    "U8": "uint8", "I8": "int8", "U16": "uint16", "I16": "int16",
+    "U32": "uint32", "U64": "uint64", "BOOL": "bool",
 }
-for _slot, _canon in (("attn_c_q", "q"), ("attn_c_k", "k"), ("attn_c_v", "v"),
-                      ("attn_c_proj", "p"), ("mlp_c_fc", "fc"), ("mlp_c_proj", "p2")):
-    NPY_TO_CANON["transformer_h_{L}_%s_weight.npy" % _slot] = "l{L}." + _canon
+DTYPE_ST = {v: k for k, v in DTYPE_NUMPY.items()}
+
+
+def to_numpy(tensors, import_numpy=True):
+    """{nome: {'dtype','shape','data'}} -> {nome: np.ndarray}.
+
+    `import_numpy=False` devolve os bytes crus (para quem nao tem numpy).
+    """
+    if not import_numpy:
+        return {k: v["data"] for k, v in tensors.items()}
+    import numpy as np
+    out = {}
+    for name, info in tensors.items():
+        dt = DTYPE_NUMPY.get(info["dtype"])
+        if dt is None:
+            raise ValueError("st_read: dtype %s sem mapeamento numpy (%s)"
+                             % (info["dtype"], name))
+        a = np.frombuffer(info["data"], dtype=dt)
+        out[name] = a.reshape(info["shape"]) if info["shape"] else a
+    return out
 
 REQUIRED_META = ("format_version", "producer", "n_tensors", "card")
 REQUIRED_ARCH = ("arch.d_model", "arch.n_head", "arch.n_kv", "arch.n_layer",
@@ -68,6 +138,22 @@ def find_oracle():
     print("st_read: nao achei tools/reference_writer.py (clone da lib, "
           "dependencia do fpm ou $SAFETENSORS_LIB)", file=sys.stderr)
     return None, None
+
+
+def read(path):
+    """(metadata, tensors) do arquivo, via oraculo da biblioteca (valida o header)."""
+    rw, oracle = find_oracle()
+    if rw is None:
+        raise SystemExit("st_read: oraculo da biblioteca nao encontrado "
+                         "(clone em safetensors-fortran/ ou "
+                         "src/build/*/dependencies/safetensors/, ou $SAFETENSORS_LIB)")
+    return rw.read(path)
+
+
+def read_np(path):
+    """(metadata, {nome_canonico: ndarray}) -- precisa de numpy."""
+    meta, tens = read(path)
+    return meta, to_numpy(tens)
 
 
 def npy_payload(path):

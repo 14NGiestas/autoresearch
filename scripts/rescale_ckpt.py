@@ -7,6 +7,9 @@ escala (ja sabemos: vale 0.9-1.1, penhasco acima), entao parte do "imposto" e
 apenas escala efetiva subotima e DESAPARECE se reescalarmos a media. Se nao
 desaparecer, o imposto e cancelamento de conhecimento (nao reversivel).
 
+Escreve no MESMO formato da entrada (st -> model.safetensors, npy legado -> .npy)
+e carrega o estado do otimizador sem tocar nele.
+
 Uso: scripts/rescale_ckpt.py ENTRADA SAIDA --scale 1.1 [--only wte,lm]
 """
 import argparse
@@ -14,8 +17,6 @@ import os
 import shutil
 
 import numpy as np
-
-SKIP = ("adam_", "muon_")
 
 
 def main():
@@ -30,22 +31,33 @@ def main():
     os.makedirs(a.dst, exist_ok=True)
     n_t = 0
     import ckio
-    ckio.require_weights(a.src, "rescale_ckpt")
-    for f in sorted(os.listdir(a.src)):
-        p = os.path.join(a.src, f)
-        if f.endswith((".txt", ".json")):
-            shutil.copy(p, os.path.join(a.dst, f))
-            continue
-        if f.startswith(SKIP) or not f.endswith(".npy"):
-            continue
-        x = np.load(p)
-        if not only or any(f.startswith(pr) for pr in only):
+    import st_read
+
+    # `--only` compara com o nome LOGICO (transformer_h_0_attn_c_q_weight.npy) e
+    # tambem com o nome CANONICO (l0.q, wte, lm): antes so o nome de arquivo era
+    # testado, entao `--only wte` nao casava com nada e a reescala saia identica
+    # em silencio.
+    def selecionado(nome):
+        if not only:
+            return True
+        return any(nome.startswith(pr) or (st_read.canon_of(nome) or "").startswith(pr)
+                   for pr in only)
+
+    W = ckio.load_ckpt_dir(a.src)
+    out = {}
+    for f, x in W.items():
+        if selecionado(f):
             x = (x.astype(np.float64) * a.scale).astype(np.float32)
             n_t += 1
-        np.save(os.path.join(a.dst, f), x)
-    shutil.copy(os.path.join(a.src, "arch.txt"), os.path.join(a.dst, "arch.txt")) \
-        if not os.path.exists(os.path.join(a.dst, "arch.txt")) else None
-    print(f"{a.src} x{a.scale} -> {a.dst}  ({n_t} tensores escalados)")
+        out[f] = x
+    out_fmt = ckio.save_ckpt_dir(a.dst, out, state=ckio.load_state(a.src), like=a.src,
+                                 op="rescale_ckpt",
+                                 extra_meta={"op": "rescale", "scale": a.scale,
+                                             "only": a.only, "src": a.src})
+    for f in sorted(os.listdir(a.src)):
+        if f.endswith((".txt", ".json")):
+            shutil.copy(os.path.join(a.src, f), os.path.join(a.dst, f))
+    print(f"{a.src} x{a.scale} -> {a.dst}  ({n_t} tensores escalados, formato {out_fmt})")
 
 
 if __name__ == "__main__":

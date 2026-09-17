@@ -25,16 +25,16 @@ import os
 
 import numpy as np
 
-SKIP = ("adam_", "muon_")
-
-
 def tensors(d):
-    return sorted(f for f in os.listdir(d)
-                  if f.endswith(".npy") and not f.startswith(SKIP))
+    """Nomes logicos dos pesos (st | npy legado), sem carregar dados."""
+    import ckio
+    return ckio.weight_names(d)
 
 
-def load(d, f):
-    return np.load(os.path.join(d, f)).astype(np.float64).ravel()
+def load_dir(d):
+    """{nome_logico: vetor float64 achatado} -- uma passada por diretorio."""
+    import ckio
+    return {f: v.astype(np.float64).ravel() for f, v in ckio.load_ckpt_dir(d).items()}
 
 
 def group(name):
@@ -60,12 +60,14 @@ def main():
     a = ap.parse_args()
 
     import ckio
-    files = ckio.require_weights(a.merge, "compose_metrics")
+    M = load_dir(a.merge)
+    S = [load_dir(s) for s in a.shards]
+    files = sorted(M)
     per = {}
     sq_mean = sq_shard = 0.0
     for f in files:
-        m = load(a.merge, f)
-        ss = [load(s, f) for s in a.shards]
+        m = M[f]
+        ss = [x[f] for x in S]
         nm = float(np.linalg.norm(m))
         ns = float(np.mean([np.linalg.norm(x) for x in ss]))
         sq_mean += nm * nm
@@ -74,8 +76,8 @@ def main():
 
     # coseno medio par a par (no espaco achatado de todos os tensores)
     flat = []
-    for s in a.shards:
-        flat.append(np.concatenate([load(s, f) for f in files]))
+    for x in S:
+        flat.append(np.concatenate([x[f] for f in files]))
     cs = []
     for i in range(len(flat)):
         for j in range(i + 1, len(flat)):

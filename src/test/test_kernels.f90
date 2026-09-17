@@ -1451,7 +1451,10 @@ contains
           wte, c_q, c_k, c_v, c_proj, c_fc, c_proj2, lm_head, &
           ck, cv, clen, MAXT, outc, &
           BR, VV, DD, n_head, n_kv_head, head_dim, 1, tb, 1.0e-5_sp)
-      out_chunk((srow-1)*VV+1:srow*VV) = outc(1:tb*VV)
+      ! O bloco tem tb*VV valores (nao VV): a fatia declarada estava menor que o
+      ! destino real e, sem -fcheck, o Fortran escrevia alem dela (dentro do array,
+      ! entao o resultado saia certo por acidente). Com -fcheck=all isso ABORTA.
+      out_chunk((srow-1)*VV+1:(srow+tb-1)*VV) = outc(1:tb*VV)
       srow = srow + tb
     end do
 

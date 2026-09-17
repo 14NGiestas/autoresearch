@@ -22,7 +22,8 @@ recomeçam do zero.
 Uso:
   .venv-numpy/bin/python3 scripts/merge_checkpoints.py A B OUT [--alpha 0.5]
 
-Saída: OUT/{*.npy,template.txt,arch.txt,manifest.json}
+Saída: OUT + template.txt/arch.txt/manifest.json, no MESMO formato de A
+(st -> model.safetensors; npy legado -> *.npy). Momentos do Adam omitidos.
 """
 import json
 import os
@@ -48,18 +49,25 @@ if aa and ab and aa != ab:
     print("FALHA: arch.txt dos dois checkpoints não são idênticos -- não misturo.")
     sys.exit(1)
 
-import ckio  # guarda de formato (st-only aborta em vez de virar lixo)
-names = ckio.require_weights(A, "merge_checkpoints")
-missing = [f for f in names if not os.path.exists(os.path.join(B, f))]
+import ckio  # leitor agnostico de formato (st | npy legado)
+
+# Pesos dos dois lados, nas MESMAS chaves logicas. `Both` (as duas representacoes)
+# resolve para o formato st na escrita -- ver ckio.save_ckpt_dir.
+WA = ckio.load_ckpt_dir(A)
+WB = ckio.load_ckpt_dir(B)
+names = sorted(WA)
+missing = [f for f in names if f not in WB]
 if missing:
-    print(f"FALHA: {len(missing)} arquivos faltando em {B}: {missing[:3]}")
+    print(f"FALHA: {len(missing)} tensores faltando em {B}: {missing[:3]}")
     sys.exit(1)
 
 sq = dr = 0.0
-man = {"parent_A": A, "parent_B": B, "alpha": ALPHA, "files": {}, "arch_note": None}
+man = {"parent_A": A, "parent_B": B, "alpha": ALPHA, "files": {}, "arch_note": None,
+       "fmt_A": ckio.fmt(A), "fmt_B": ckio.fmt(B)}
+merged = {}
 for f in names:
-    a = np.load(os.path.join(A, f), mmap_mode="r")
-    b = np.load(os.path.join(B, f), mmap_mode="r")
+    a = WA[f]
+    b = WB[f]
     if a.shape != b.shape or a.dtype != b.dtype:
         print(f"FALHA: {f}: {a.shape}/{a.dtype} vs {b.shape}/{b.dtype}")
         sys.exit(1)
@@ -67,7 +75,7 @@ for f in names:
     bf = b.astype("float64", copy=False)
     rel = float(np.linalg.norm(af - bf) / max(np.linalg.norm(af), 1e-30))
     m = (ALPHA * af + (1.0 - ALPHA) * bf).astype("float32")
-    np.save(os.path.join(OUT, f), m)
+    merged[f] = m
     sq += float(np.sum((af - bf) ** 2))
     dr += float(np.sum(af ** 2))
     man["files"][f] = {"rel_l2": round(rel, 6), "shape": list(a.shape)}
@@ -79,10 +87,13 @@ print(f"drift total (rel_l2 agregado): {man['drift_total_rel_l2']:.6f}")
 print(f"  (pequeno = mesma bacia, soup tende a ajudar; grande = bacias diferentes,"
       f" media pode piorar)")
 
-for extra in ("template.txt", "arch.txt"):
-    s = os.path.join(A, extra)
-    if os.path.exists(s):
-        shutil.copy(s, os.path.join(OUT, extra))
+# Mesmo formato de A (st -> model.safetensors; npy legado -> .npy). Momentos NAO
+# entram: a media deles nao tem significado e o treinador trata a ausencia como
+# zeros (mesma semantica de antes).
+out_fmt = ckio.save_ckpt_dir(OUT, merged, like=A, op="merge_checkpoints",
+                             extra_meta={"op": "merge", "alpha": ALPHA,
+                                         "parent_A": A, "parent_B": B})
+man["out_format"] = out_fmt
 man["arch_note"] = "copiado de A (B é idêntico; validado acima)"
 json.dump(man, open(os.path.join(OUT, "manifest.json"), "w"), indent=2)
 print(f"soup em {OUT}: {len(names)} arquivos + manifest.json")

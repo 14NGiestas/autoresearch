@@ -178,12 +178,13 @@ class Lab:
 
 def rel_drift(a, b):
     """||A-B||/||A|| agregado (metrica barata, ja sabemos que engana)."""
+    import ckio
+    A = ckio.load_ckpt_dir(a)
+    B = ckio.load_ckpt_dir(b)
     na = nb = nd = 0.0
-    for f in sorted(os.listdir(a)):
-        if not f.endswith(".npy") or f.startswith(("adam_", "muon_")):
-            continue
-        x = np.load(os.path.join(a, f)).astype(np.float64).ravel()
-        y = np.load(os.path.join(b, f)).astype(np.float64).ravel()
+    for f in sorted(A):
+        x = A[f].astype(np.float64).ravel()
+        y = B[f].astype(np.float64).ravel()
         na += x @ x
         nb += y @ y
         nd += (x - y) @ (x - y)

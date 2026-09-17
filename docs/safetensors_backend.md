@@ -289,3 +289,134 @@ acima.
    `scripts/compose_grid.py`, `fedavg_rounds.py`): ler bpb/linhagem do
    `__metadata__` em vez de inferir do nome do diretório, que é o motivo original de
    o card existir.
+
+
+---
+
+# Fase 2 — consumidores Python migrados, guarda desarmada
+
+Mudança de contexto: o DEFAULT do trainer passou a ser `--ckpt-format st` (um
+`model.safetensors` por checkpoint; `.npy` de peso só em `both`/legado). A guarda
+`ckio.require_weights` (fase 1) abortava as ferramentas que varriam `.npy` — o
+que impedia lixo silencioso, mas também impedia usar o tooling no formato novo.
+
+## 1. Ponto único: `scripts/ckio.py`
+
+API (chaves públicas = **nome lógico** = o nome do `.npy` correspondente, porque
+era assim que as ferramentas já pensavam):
+
+| função | o que faz |
+|---|---|
+| `fmt(d)` | `'st'` \| `'npy'` \| `'both'` \| `None` |
+| `load_ckpt_dir(d)` | `{nome_logico: ndarray}` dos **pesos** (st via `st_read`, npy via `np.load`) |
+| `load_state(d)` | `{arquivo: ndarray}` do estado (`adam_*`, `muon_*`) — `.npy` nos dois formatos |
+| `load_all(d)` | pesos + estado (quem media os dois) |
+| `save_ckpt_dir(d, w, state=, like=, op=, fmt_out=)` | grava no **mesmo formato de `like`** (st↔npy), copia `arch.txt`/`template.txt` e põe `arch.*` no `__metadata__` |
+| `weight_names(d)`, `meta_of(d)`, `arch_of(d)` | consultas sem carregar dados |
+| `require_weights(d, who)` | **virou aviso**: devolve os nomes; só aborta se não houver peso nenhum |
+
+A tradução nome lógico ↔ nome canônico vive numa **tabela única** em
+`st_read.py` (`CANON_TEMPLATES`, com `canon_of`/`npy_of`), que também ganhou
+`read`/`read_np`/`to_numpy` e `--npy-dir` (comparar um `.st` com os `.npy` de
+outro diretório). `grep -n "np.load" scripts/*.py` agora só encontra leitura de
+checksum dentro do `ckio` e arquivos de *rows* (não de checkpoint).
+
+## 2. Ferramentas migradas (semântica preservada)
+
+| ferramenta | mudança | semântica que ficou igual |
+|---|---|---|
+| `merge_checkpoints.py` | lê os dois lados via `ckio`, escreve no formato de A | média elemento a elemento; **momentos omitidos**; `arch.txt` idêntico obrigatório; `manifest.json` com drift |
+| `fedavg_rounds.py` | `avg_dirs` via `ckio`; `round0_common` copia também `.safetensors` | **média inclui `adam_*`/`muon_*`**; `include_opt=False` continua tirando só `adam_` |
+| `rescale_ckpt.py` | `ckio` nos dois sentidos, saida no formato da entrada | escala só tensores de peso; estado copiado intacto; cópia de `.txt`/`.json` |
+| `weight_surgery.py` | `load`/`save` via `ckio` | 7 variantes, cada uma no formato da entrada + `arch.txt` |
+| `compose_metrics.py` | carrega cada dir **uma vez** (`load_dir`) | s, cossenos e s-por-grupo idênticos |
+| `basin_map.py` | `flat()` via `ckio`; `--pts` (substitui o mapa default) e `--svg`; PCA pula se <2 pontos da mesma arch | ordem do vetor = nomes lógicos ordenados (mesma dos dirs legados); estado do otimizador **não** entra mais (antes só `adam_` era pulado) |
+| `rebasin.py` | `load` via `ckio`, escrita via `save_ckpt_dir(like=A)` | as permutações por camada são as mesmas (as chaves continuam sendo os nomes `.npy`) |
+| `compose_grid.py` | `rel_drift` via `ckio` | métrica idêntica |
+| `export_weights.py` | `--st` (opt-in) escreve também `model.safetensors` (sem numpy: payload lido de volta com `st_read.npy_payload`), com `arch.*` do `config` do `.pt` | default inalterado (só `.npy`), nada de torch |
+
+Dois consertos pequenos de corretude no caminho:
+
+* `rescale_ckpt.py --only wte,lm` **não casava com nada** (comparava o prefixo com
+  o nome do arquivo, e o arquivo do `wte` é `transformer_wte_weight.npy`): a
+  reescala saía idêntica em silêncio. Agora casa com o nome lógico **e** com o
+  canônico (`wte`, `l0.q`, ...).
+* `fedavg_rounds.py` criava o `round0_common` copiando só `.npy`/`.txt`: com um
+  init `st` o diretório sairia **vazio**. Agora copia `.safetensors` também.
+
+## 3. Testes
+
+* **`scripts/test_ckio.py`** (novo, 23 checagens, exit != 0 em falha): cria
+  checkpoints st-only sintéticos e roda as ferramentas de verdade (subprocesso):
+  `rescale_ckpt` (st→st, estado intacto, `--only` por nome canônico),
+  `merge_checkpoints` (média e momentos omitidos), `weight_surgery` (7 variantes
+  em st), `compose_metrics`, `fedavg.avg_dirs` (pesos + `adam_m_*` mediados),
+  `compose_grid.rel_drift` e `basin_map`. Com `--ckpt-st/--ckpt-npy` ele também
+  confere o checkpoint **real** (74 pesos st == 74 .npy, byte a byte) e roda
+  `rescale`/`merge`/`fedavg` nesse checkpoint st-only (≥2 ferramentas exigidas).
+* **`src/test/test_st_ckpt.f90`, seção 8** (novo): dois passos de treino **reais**
+  de 1 step na arch compilada (d216), um **sem flag** (default = st) e um com
+  `--ckpt-format npy`:
+  - default: `model.safetensors` existe, **zero** `transformer_*.npy` de peso,
+    16 `adam_*.npy`, `arch.txt`/`template.txt`;
+  - npy: 74 `.npy` e nenhum `model.safetensors`;
+  - **74 payloads byte a byte iguais** entre os dois caminhos (o check manual do
+    job 91 `fermi_stsmoke`, automatizado);
+  - `st_read.py` valida o checkpoint do default, `test_ckio.py` roda as
+    ferramentas nele, `--ckpt-format bogus` aborta.
+  Os subprocessos do teste exportam `OMP_NUM_THREADS=4`: sem isso o OpenBLAS pega
+  os 16 cores e um passo de ~1 s vira **23,6 s** de thrash (medido; com 4 threads
+  ~7 s, e a mesma ordem de redução nos dois runs é o que faz o `cmp` valer).
+
+## 4. Dois bugs pré-existentes que a seção 8 revelou (e que foram corrigidos)
+
+O perfil `--profile debug` (com `-fcheck=all`) ficou vermelho quando a suíte
+passou a rodar o trainer de verdade. As duas causas **não** eram do backend:
+
+1. **`src/test/test_kernels.f90` (`test_kv_chunk_equiv`)**: a fatia de destino do
+   bloco era `out_chunk((srow-1)*VV+1 : srow*VV)` (VV valores) mas o valor
+   atribuído tem `tb*VV`. Sem `-fcheck`, o Fortran escrevia além da fatia
+   declarada (dentro do array, então o resultado saía certo *por acidente*); com
+   `-fcheck=all` aborta. Corrigido para `(srow+tb-1)*VV`.
+2. **`src/lib/fortran_adam_state.f90` (`mast_load1`)**: com `adam_*.npy` ausente
+   (init novo) o `load_npy` devolve `ios/=0` **sem** alocar `tmp`, e `size(tmp)`
+   de alocável não alocado é erro de runtime sob `-fcheck=all` — o `train_run`
+   morria ao carregar um checkpoint sem momentos. Agora checa
+   `ios /= 0 .or. .not. allocated(tmp)` antes do `size` (mesma semântica: já
+   levava a `ok=.false.`).
+
+Prova de que a correção não mudou comportamento no build normal: a saída do
+`test_kernels` antes/depois é **idêntica** (`diff` vazio), e os dois perfis ficam
+verdes:
+
+```
+fortran-fpm test                                          -> ===0 failures === (x2)
+fortran-fpm test --profile debug --flag "-Wall -Wextra
+    -Wcharacter-truncation -fcheck=all -fbacktrace -finit-real=snan"
+                                                          -> ===0 failures === (x2)
+```
+
+## 5. Tempo da suíte
+
+`fortran-fpm test` passou de ~30 s para **~65–90 s**: são dois passos de treino
+reais (init d216 montado em Fortran, 74 `.npy`; ~7 s cada) + a bateria de
+ferramentas Python sobre um checkpoint real de 38 MB (~10 s) + `st_read.py`
+(~3,6 s). Os `.npy` de 38 MB de `surgery`/`compose_metrics` são pulados no
+checkpoint real (cobertos no sintético) justamente para não inflar a suíte.
+
+## 6. O que NÃO foi verificado nesta fase
+
+* `rebasin.py` em execução real: ele tem as dimensões da d96 cravadas
+  (`D=96, nh=6, hd=16, kvd=32, dff=384, NL=12`) e os checkpoints que ele usa estão
+  sob `/tmp` (proibido tocar). A migração dele é de 4 linhas e usa o mesmo
+  `ckio`/`save_ckpt_dir` que os testes cobrem, mas **não** foi rodado.
+* `export_weights.py --st` num `.pt` real: seriam 373 MB + minutos de conversão
+  em Python puro (>1 min → fora do limite de teste curto). O caminho de escrita
+  (payload via `st_read.npy_payload` → `reference_writer`) é o mesmo que o
+  `test_ckio.py` exercita, mas com um `.pt` de verdade não foi rodado.
+* `compose_metrics.py`/`compose_grid.py` contra os diretórios de experimento
+  (estão sob `/tmp`): a leitura st está coberta pelo `test_ckio.py`; o que não
+  foi rodado é o uso com os shards reais do grid.
+* Os jobs `compose`/`fedavg` de ponta a ponta (não executei nenhum job).
+* `merge_checkpoints.py`: consumidores do `manifest.json` (nada mudou no formato
+  do manifest, mas não há teste deles).

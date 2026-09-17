@@ -2,9 +2,11 @@
 """basin_map.py — geografia do espaco de pesos (stdlib + numpy).
 1. histograma ASCII por variante (forma da distribuicao).
 2. PCA via Gram (N pontos x 3M dims) -> scatter SVG com rotulos.
-Uso: .venv-numpy/bin/python3 scripts/basin_map.py
+Uso: .venv-numpy/bin/python3 scripts/basin_map.py [--pts nome=dir,...] [--svg ARQ]
 """
 import os
+import sys
+
 import numpy as np
 
 PTS = {
@@ -27,11 +29,17 @@ DSETS = {"f0": "d96", "drop": "d96", "sq": "d96", "neg": "d96", "shuf": "d96",
 
 
 def flat(d):
-    a = []
-    for f in sorted(os.listdir(d)):
-        if f.endswith(".npy") and not f.startswith("adam_"):
-            a.append(np.load(os.path.join(d, f)).astype(np.float64).ravel())
-    return np.concatenate(a)
+    """Todos os pesos em um vetor, na ordem dos nomes logicos.
+
+    A ORDEM importa (os pontos vao para uma PCA): ordenar por nome logico mantem
+    checkpoints comparaveis entre si e e a mesma ordem de antes para dirs legados
+    (sorted(os.listdir) == sorted dos nomes .npy). Estado do otimizador fica fora:
+    antes so `adam_` era pulado, entao um dir com muon_moment_*.npy entrava no
+    vetor -- e estado, nao peso.
+    """
+    import ckio
+    W = ckio.load_ckpt_dir(d)
+    return np.concatenate([W[f].astype(np.float64).ravel() for f in sorted(W)])
 
 
 def hist_ascii(v, name, w=48):
@@ -45,6 +53,18 @@ def hist_ascii(v, name, w=48):
 
 
 def main():
+    # --pts permite apontar para outros pontos (o default sao os dirs de
+    # experimento); --svg tira o caminho fixo /tmp/basin_map.svg.
+    argv = sys.argv[1:]
+    if "--pts" in argv:
+        # SUBSTITUI o mapa default (que aponta para os dirs dos experimentos):
+        # permite rodar o mesmo codigo sobre outros checkpoints (e sem depender
+        # de /tmp). Sem --pts, o default fica como estava.
+        PTS.clear()
+        for par in argv[argv.index("--pts") + 1].split(","):
+            nm, _, d = par.partition("=")
+            PTS[nm.strip()] = d.strip()
+    svg_out = argv[argv.index("--svg") + 1] if "--svg" in argv else "/tmp/basin_map.svg"
     print("== histogramas ==")
     vecs = {}
     for nm, d in PTS.items():
@@ -55,6 +75,10 @@ def main():
         hist_ascii(v, nm)
     # PCA so dentro da mesma arquitetura (d96 tem 9 pontos!)
     names = [n for n in vecs if DSETS.get(n) == "d96"]
+    if len(names) < 2:
+        print(f"\n== PCA: preciso de >=2 pontos da mesma arch (tenho {len(names)}: "
+              f"{names}); pulo ==")
+        return
     X = np.stack([vecs[n] for n in names])
     Xc = X - X.mean(0)
     G = Xc @ Xc.T / X.shape[1]
@@ -89,8 +113,8 @@ def main():
         svg.append(f'<circle cx="{px:.0f}" cy="{py:.0f}" r="{r}" fill="{c}"/>'
                    f'<text x="{px+11:.0f}" y="{py+4:.0f}" fill="#e5e7eb" font-size="13">{n}</text>')
     svg.append("</svg>")
-    open("/tmp/basin_map.svg", "w").write("\n".join(svg))
-    print("SVG -> /tmp/basin_map.svg")
+    open(svg_out, "w").write("\n".join(svg))
+    print(f"SVG -> {svg_out}")
 
 
 if __name__ == "__main__":
