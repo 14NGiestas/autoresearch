@@ -7,9 +7,12 @@
 ! Cycles train rows [start_row, start_row+ntrain); every val_every steps
 ! scores rows [start_row+ntrain, +nval) as exact val-bpb (token byte
 ! lengths from bytes_file, default tok_tables/token_bytes.txt).
-! --ckpt-format npy|st|both (default npy = comportamento historico): em st/both
-! o MESMO peso tambem vai para model.safetensors, com nomes canonicos e
-! __metadata__ (arch + card). Ver src/lib/load_weights.f90.
+! --ckpt-format npy|st|both (default BOTH): o mesmo peso sai nos dois formatos,
+! o .npy (compatibilidade com todo o tooling existente) e um model.safetensors
+! unico com nomes canonicos e __metadata__ (arch + card) -- o arquivo
+! autodescritivo que viaja com os pesos. `st` sozinho so quando os consumidores
+! Python migrarem para scripts/st_read.py; `npy` reproduz o comportamento antigo.
+! Ver src/lib/load_weights.f90 e docs/safetensors_backend.md.
 ! 2-step linear warmup in code (lesson of the overfit run): lr * min(1,
 ! k/2) for run-relative step k. Best-val snapshot to outdir/best/,
 ! rotation keeps last keep_last step_N/ dirs.
@@ -74,7 +77,7 @@ program train_run
       ' --lr 0.0003 --t0 1 --log_every 1 --save_every 10' // &
       ' --start_row 0 --ntrain 40 --val_every 5 --nval 8 --keep_last 2' // &
       ' --trn_probe 0 --attn naive --bytes BYTES' // &
-      ' --opt adam --muon-lr 0.02 --ckpt-format npy --anneal 0', &
+      ' --opt adam --muon-lr 0.02 --ckpt-format both --anneal 0', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  train_run - multi-batch trainer (slice 3)', &
@@ -88,8 +91,9 @@ program train_run
       '                probes so both sides use the same kernel.', &
       '  --anneal 1    cosine LR to zero over the run (local-SGD reconvergence', &
       '                before a merge). Default 0 = constant LR.', &
-      '  --ckpt-format npy|st|both   npy (default) keeps the historical', &
-      '                transformer_*.npy layout; st writes one model.safetensors', &
+      '  --ckpt-format npy|st|both   both (default) writes the historical', &
+      '                transformer_*.npy layout AND a model.safetensors with the', &
+      '                same bytes; st writes only the self-describing file', &
       '                per checkpoint (canonical names + arch/card in', &
       '                __metadata__); both writes the two representations of the', &
       '                SAME bytes (the test compares them byte for byte).', &
