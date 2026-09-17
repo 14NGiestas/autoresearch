@@ -9,7 +9,7 @@
 set -u
 cd /home/pauli/autoresearch
 echo "eparity job=${SLURM_JOB_ID} $(date '+%F %H:%M:%S')"
-BIN=$(ls -t energy-fortran/build/*/app/measure_run 2>/dev/null | head -1)
+BIN=$(find energy-fortran/build -name measure_run -type f 2>/dev/null | head -1)
 echo "exemplo: $BIN"
 .venv-numpy/bin/python3 scripts/energy_run.py run --tag parity/energy-fortran \
   --interval 0.25 -- $BIN 2>&1 | tail -3
