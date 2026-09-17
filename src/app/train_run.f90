@@ -7,6 +7,9 @@
 ! Cycles train rows [start_row, start_row+ntrain); every val_every steps
 ! scores rows [start_row+ntrain, +nval) as exact val-bpb (token byte
 ! lengths from bytes_file, default tok_tables/token_bytes.txt).
+! --ckpt-format npy|st|both (default npy = comportamento historico): em st/both
+! o MESMO peso tambem vai para model.safetensors, com nomes canonicos e
+! __metadata__ (arch + card). Ver src/lib/load_weights.f90.
 ! 2-step linear warmup in code (lesson of the overfit run): lr * min(1,
 ! k/2) for run-relative step k. Best-val snapshot to outdir/best/,
 ! rotation keeps last keep_last step_N/ dirs.
@@ -14,8 +17,10 @@
 
 program train_run
   use iso_c_binding
+  use, intrinsic :: iso_fortran_env, only: int64
   use fortran_train_mod
-  use load_weights_mod, only: load_gpt_weights, save_gpt_weights, verify_ckpt_dir
+  use load_weights_mod, only: load_gpt_weights, save_gpt_weights, &
+      save_gpt_weights_st, verify_ckpt_dir
   use fortran_chat_mod, only: write_template_txt
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
@@ -56,6 +61,8 @@ program train_run
   integer :: ntrain, val_every, nval, keep_last, nprobe, nprobe_opt
   integer :: k, i, j, tstep, u, ios, r, nbad
   logical :: attn_blas, attn_qk, attn_qkph, anneal
+  character(len=8) :: ckfmt
+  integer(int64) :: ck_tokens
   real(sp) :: theta, ang
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
@@ -67,7 +74,7 @@ program train_run
       ' --lr 0.0003 --t0 1 --log_every 1 --save_every 10' // &
       ' --start_row 0 --ntrain 40 --val_every 5 --nval 8 --keep_last 2' // &
       ' --trn_probe 0 --attn naive --bytes BYTES' // &
-      ' --opt adam --muon-lr 0.02', &
+      ' --opt adam --muon-lr 0.02 --ckpt-format npy --anneal 0', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  train_run - multi-batch trainer (slice 3)', &
@@ -80,7 +87,14 @@ program train_run
       '                summation order). Applies to training AND to the val', &
       '                probes so both sides use the same kernel.', &
       '  --anneal 1    cosine LR to zero over the run (local-SGD reconvergence', &
-      '                before a merge). Default 0 = constant LR.'], &
+      '                before a merge). Default 0 = constant LR.', &
+      '  --ckpt-format npy|st|both   npy (default) keeps the historical', &
+      '                transformer_*.npy layout; st writes one model.safetensors', &
+      '                per checkpoint (canonical names + arch/card in', &
+      '                __metadata__); both writes the two representations of the', &
+      '                SAME bytes (the test compares them byte for byte).', &
+      '                The Adam/Muon state and arch.txt/template.txt are written', &
+      '                in every mode: only the weights change representation.'], &
       version_text=[character(len=80) :: 'train_run 1.0'])
   wdir = trim(sget('weights'))
   rowsfile = trim(sget('rows'))
@@ -100,12 +114,18 @@ program train_run
   nval = iget('nval')
   keep_last = iget('keep_last')
   bytesfile = trim(sget('bytes'))
+  ckfmt = trim(sget('ckpt-format'))
+  if (ckfmt /= 'npy' .and. ckfmt /= 'st' .and. ckfmt /= 'both') then
+    print '(A)', 'require --ckpt-format npy|st|both'
+    call exit(2)
+  end if
   use_muon = trim(sget('opt')) == 'muon'
   ! --anneal: cosine ate zero no fim do run. E o que a teoria de local SGD
   ! exige para os descendentes reconvergirem antes do merge (composicao).
   anneal = trim(sget('anneal')) == '1' .or. trim(sget('anneal')) == 'sim'
   muon_lr = rget('muon-lr')
   if (use_muon) print '(A,F8.5)', "opt=muon (hybrid: Muon 2D + Adam resto), muon_lr=", muon_lr
+  print '(A)', 'ckpt-format: '//trim(ckfmt)
   if (.not. specified('weights') .or. .not. specified('rows') &
       .or. .not. specified('out') .or. nsteps < 1) then
     print '(A)', 'require --weights --rows --out --nsteps>=1 (--help)'
@@ -217,13 +237,22 @@ program train_run
         print '(2A)', "cannot create ", trim(ckdir)
         call exit(1)
       end if
-      call save_gpt_weights(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
-          M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
+      ck_tokens = int(tstep, int64)*int(B*TT, int64)
+      if (ckfmt == 'npy' .or. ckfmt == 'both') then
+        call save_gpt_weights(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
+            M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
+      end if
+      if (ckfmt == 'st' .or. ckfmt == 'both') then
+        call save_gpt_weights_st(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
+            TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
+            M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
+      end if
       call save_adam_state(trim(ckdir), S)
       if (use_muon) call save_muon_state(trim(ckdir), S)
       call write_template_txt(trim(ckdir))
       call write_arch_txt(trim(ckdir))
-      call verify_ckpt_dir(trim(ckdir), N_LAYER, nbad, badpath)
+      call verify_ckpt_dir(trim(ckdir), N_LAYER, nbad, badpath, &
+          st_only=(ckfmt == 'st'))
       if (nbad /= 0) then
         print '(2A)', "checkpoint verify failed (disk full?): ", trim(badpath)
         call exit(1)
@@ -251,14 +280,22 @@ program train_run
           print '(A)', "cannot create best/"
           call exit(1)
         end if
-        call save_gpt_weights(trim(outdir) // "/best", N_LAYER, D, &
-            N_HEAD, N_KV, HD, VV, M%wte, M%lm, M%q, M%k, M%v, M%p, &
-            M%fc, M%p2)
+        if (ckfmt == 'npy' .or. ckfmt == 'both') then
+          call save_gpt_weights(trim(outdir) // "/best", N_LAYER, D, &
+              N_HEAD, N_KV, HD, VV, M%wte, M%lm, M%q, M%k, M%v, M%p, &
+              M%fc, M%p2)
+        end if
+        if (ckfmt == 'st' .or. ckfmt == 'both') then
+          call save_gpt_weights_st(trim(outdir) // "/best", N_LAYER, D, N_HEAD, &
+              N_KV, HD, VV, TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
+              M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
+        end if
         call save_adam_state(trim(outdir) // "/best", S)
         if (use_muon) call save_muon_state(trim(outdir) // "/best", S)
         call write_template_txt(trim(outdir) // "/best")
       call write_arch_txt(trim(outdir) // "/best")
-        call verify_ckpt_dir(trim(outdir) // "/best", N_LAYER, nbad, badpath)
+        call verify_ckpt_dir(trim(outdir) // "/best", N_LAYER, nbad, badpath, &
+            st_only=(ckfmt == 'st'))
         if (nbad /= 0) then
           print '(2A)', "best verify failed (disk full?): ", trim(badpath)
           call exit(1)

@@ -7,12 +7,54 @@
 ! Filenames: transformer_wte_weight.npy, lm_head_weight.npy,
 !   transformer_h_{L}_attn_{c_q,c_k,c_v,c_proj}_weight.npy,
 !   transformer_h_{L}_mlp_{c_fc,c_proj}_weight.npy   (L = 0-based)
+!
+! DUAS REPRESENTACOES, MESMOS BYTES (fase 1 do backend safetensors): o mesmo peso
+! pode viver num diretorio de .npy (formato historico) ou num unico
+! model.safetensors com nomes canonicos (wte, lm, l{ll}.q/k/v/p/fc/p2). A leitura
+! AUTO-DETECTA pela presenca do model.safetensors -- nenhum app precisa saber qual
+! e; a escrita e escolhida por --ckpt-format no train_run. O objetivo declarado e
+! comparar BYTES entre os dois (test_safetensors_ckpt), nao valores: se os dois
+! caminhos nao produzem o mesmo payload, um deles esta mentindo.
+!
+! A arquitetura viaja no __metadata__ (arch.*) do .safetensors: um diretorio que
+! so tem model.safetensors continua sendo recusado se nao casar com este binario
+! (mesma politica do arch.txt, ver check_declared_arch).
 
 module load_weights_mod
+  use, intrinsic :: iso_fortran_env, only: int64, real32
   use fortran_kinds_mod, only: wp
   use stdlib_io_npy, only: load_npy, save_npy
+  use safetensors, only: st_writer, st_reader, st_ok
   implicit none
+
+  ! Nome do arquivo unico e convencao de nomes dos tensores.
+  character(*), parameter :: ST_CKPT = 'model.safetensors'
 contains
+
+  ! Falha alta e unica do modulo (o resto do arquivo ja fazia isso com print+exit).
+  subroutine die(what)
+    character(*), intent(in) :: what
+    print '(A)', trim(what)
+    call exit(1)
+  end subroutine die
+
+  ! Formata um real para um numero JSON valido (o card e um STRING no metadata,
+  ! mas quem le faz json.loads nele; "3.00000000E-04" e JSON valido).
+  function json_real(x) result(s)
+    real(wp), intent(in) :: x
+    character(len=:), allocatable :: s
+    character(len=32) :: buf
+    write (buf, '(ES15.8E2)') x
+    s = trim(adjustl(buf))
+  end function json_real
+
+  ! Chave de metadata com valor inteiro (arch.* etc).
+  subroutine set_meta_i(w, key, v)
+    type(st_writer), intent(inout) :: w
+    character(*), intent(in) :: key
+    integer, intent(in) :: v
+    call w%set_meta_int(key, int(v, int64))
+  end subroutine set_meta_i
 
   subroutine load1(path, a)
     character(*), intent(in) :: path
@@ -100,40 +142,74 @@ contains
   ! destroyed phase-3 step_300/step_400 (2026-09-09, disk full from nix
   ! store). Call after every save; abort LOUDLY on mismatch. Never train
   ! on with garbage recovery points.
-  subroutine verify_ckpt_dir(wdir, n_layer, nbad, badpath)
+  subroutine verify_ckpt_dir(wdir, n_layer, nbad, badpath, st_only)
     character(*), intent(in) :: wdir
     integer, intent(in) :: n_layer
     integer, intent(out) :: nbad
     character(len=:), allocatable, intent(out) :: badpath
+    logical, intent(in), optional :: st_only
     character(len=16) :: lstr
     character(len=3) :: mname(8) = ["wte", "lm ", "q  ", "k  ", "v  ", &
                                     "p  ", "fc ", "p2 "]
     integer :: ll, ii
+    logical :: st_mode
+    st_mode = .false.
+    if (present(st_only)) st_mode = st_only
     nbad = 0
     badpath = ""
-    call check1(trim(wdir) // "/transformer_wte_weight.npy")
-    call check1(trim(wdir) // "/lm_head_weight.npy")
-    do ll = 0, n_layer - 1
-      write (lstr, '(I0)') ll
-      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
-          "_attn_c_q_weight.npy")
-      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
-          "_attn_c_k_weight.npy")
-      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
-          "_attn_c_v_weight.npy")
-      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
-          "_attn_c_proj_weight.npy")
-      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
-          "_mlp_c_fc_weight.npy")
-      call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
-          "_mlp_c_proj_weight.npy")
-    end do
+    if (st_mode) then
+      ! Checagem mais FORTE que a do .npy: nao basta o arquivo existir com
+      ! tamanho plausivel -- o header e revalidado por inteiro (offsets, dtypes,
+      ! cobertura do buffer). Um arquivo truncado por disco cheio falha aqui,
+      ! que e exatamente o caso que o verify existe para pegar.
+      call check_st(trim(wdir) // "/" // ST_CKPT, 2 + 6*n_layer)
+    else
+      call check1(trim(wdir) // "/transformer_wte_weight.npy")
+      call check1(trim(wdir) // "/lm_head_weight.npy")
+      do ll = 0, n_layer - 1
+        write (lstr, '(I0)') ll
+        call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+            "_attn_c_q_weight.npy")
+        call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+            "_attn_c_k_weight.npy")
+        call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+            "_attn_c_v_weight.npy")
+        call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+            "_attn_c_proj_weight.npy")
+        call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+            "_mlp_c_fc_weight.npy")
+        call check1(trim(wdir) // "/transformer_h_" // trim(lstr) // &
+            "_mlp_c_proj_weight.npy")
+      end do
+    end if
     do ii = 1, 8
       call check1(trim(wdir) // "/adam_m_" // trim(mname(ii)) // ".npy")
       call check1(trim(wdir) // "/adam_v_" // trim(mname(ii)) // ".npy")
     end do
     call check_exists(trim(wdir) // "/template.txt")
   contains
+    ! Header inteiro do .safetensors revalidado + contagem de tensores esperada.
+    subroutine check_st(path, want_tensors)
+      character(*), intent(in) :: path
+      integer, intent(in) :: want_tensors
+      type(st_reader) :: r
+      character(len=:), allocatable :: msg
+      integer :: stat
+      if (nbad /= 0) return
+      call r%open(path, stat, msg)
+      if (stat /= st_ok) then
+        nbad = 1
+        badpath = path // ' (' // trim(msg) // ')'
+        return
+      end if
+      if (r%n_tensors() /= want_tensors) then
+        nbad = 1
+        write (badpath, '(A,A,I0,A,I0)') trim(path), ' has ', r%n_tensors(), &
+            ' tensors, expected ', want_tensors
+      end if
+      call r%close()
+    end subroutine check_st
+
     subroutine check1(path)
       character(*), intent(in) :: path
       logical :: ex
@@ -157,6 +233,243 @@ contains
     end subroutine check_exists
   end subroutine verify_ckpt_dir
 
+  ! ---------------------------------------------------------------------------
+  ! Escrita safetensors: UM arquivo, nomes canonicos (wte, lm, l{ll}.q/k/v/p/fc/p2),
+  ! arquitetura e procedencia no __metadata__. Os mesmos bytes do caminho .npy --
+  ! e isso que o teste compara (payload byte a byte), nao os valores.
+  !
+  ! `step`, `lr`, `tokens` e `rowsfile` vao no campo `card` (JSON): o checkpoint
+  ! passa a se descrever sozinho. As metricas ficam VAZIAS de proposito -- quem
+  ! treina preenche depois; um numero inventado aqui viraria verdade no experimento.
+  subroutine save_gpt_weights_st(wdir, n_layer, d_model, n_head, n_kv_head, &
+      head_dim, vocab_size, ctx, bos, step, lr, tokens, rowsfile, &
+      wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
+    character(*), intent(in) :: wdir, rowsfile
+    integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim
+    integer, intent(in) :: vocab_size, ctx, bos, step
+    real(wp), intent(in) :: lr
+    integer(int64), intent(in) :: tokens
+    real(wp), intent(in) :: wte(:), lm_head(:)
+    real(wp), intent(in) :: c_q(:), c_k(:), c_v(:)
+    real(wp), intent(in) :: c_pr(:), c_fc(:), c_pr2(:)
+    type(st_writer) :: w
+    character(len=:), allocatable :: msg, card, tname
+    character(len=16) :: lstr
+    integer :: ll, qsz, ksz, psz, fcsz, p2sz, stat
+
+    qsz = n_head*head_dim*d_model
+    ksz = n_kv_head*head_dim*d_model
+    psz = d_model*n_head*head_dim
+    fcsz = 4*d_model*d_model
+    p2sz = d_model*4*d_model
+
+    ! Sanidade barata: se as fatias nao fecham, o arquivo sairia certo na
+    ! contagem e errado no conteudo -- o pior caso possivel. Melhor morrer aqui.
+    if (size(wte) /= vocab_size*d_model .or. size(lm_head) /= vocab_size*d_model .or. &
+        size(c_q) /= n_layer*qsz .or. size(c_k) /= n_layer*ksz .or. &
+        size(c_v) /= n_layer*ksz .or. size(c_pr) /= n_layer*psz .or. &
+        size(c_fc) /= n_layer*fcsz .or. size(c_pr2) /= n_layer*p2sz) then
+      call die('save_gpt_weights_st: buffer sizes do not match the arch (refusing to write)')
+    end if
+
+    call w%init()
+    call w%set_meta('format_version', '1')
+    call w%set_meta('producer', 'autoresearch/src train_run')
+    call w%set_meta('arch.source', 'fortran_arch_mod')
+    call set_meta_i(w, 'arch.d_model', d_model)
+    call set_meta_i(w, 'arch.n_head', n_head)
+    call set_meta_i(w, 'arch.n_kv', n_kv_head)
+    call set_meta_i(w, 'arch.n_layer', n_layer)
+    call set_meta_i(w, 'arch.vocab', vocab_size)
+    call set_meta_i(w, 'arch.ctx', ctx)
+    call set_meta_i(w, 'arch.bos', bos)
+    call set_meta_i(w, 'arch.head_dim', head_dim)
+    call set_meta_i(w, 'n_tensors', 2 + 6*n_layer)
+    card = '{"steps":'//i2c(step)//',"lr":'//json_real(lr)// &
+           ',"tokens":'//i8c(tokens)//',"rows_file":"'//trim(rowsfile)// &
+           '","metrics":{}}'
+    call w%set_meta('card', card)
+
+    call w%set('wte', wte)
+    call w%set('lm', lm_head)
+    do ll = 0, n_layer - 1
+      write (lstr, '(I0)') ll
+      tname = 'l'//trim(lstr)//'.q'
+      call w%set(tname, c_q(ll*qsz+1:(ll+1)*qsz))
+      tname = 'l'//trim(lstr)//'.k'
+      call w%set(tname, c_k(ll*ksz+1:(ll+1)*ksz))
+      tname = 'l'//trim(lstr)//'.v'
+      call w%set(tname, c_v(ll*ksz+1:(ll+1)*ksz))
+      tname = 'l'//trim(lstr)//'.p'
+      call w%set(tname, c_pr(ll*psz+1:(ll+1)*psz))
+      tname = 'l'//trim(lstr)//'.fc'
+      call w%set(tname, c_fc(ll*fcsz+1:(ll+1)*fcsz))
+      tname = 'l'//trim(lstr)//'.p2'
+      call w%set(tname, c_pr2(ll*p2sz+1:(ll+1)*p2sz))
+    end do
+    call w%write(trim(wdir) // '/' // ST_CKPT, stat, msg)
+    if (stat /= st_ok) then
+      call die('safetensors save failed for '//trim(wdir)//': '//trim(msg))
+    end if
+  end subroutine save_gpt_weights_st
+
+  ! Inteiros -> texto (o card e montado a mao; nao vale arrastar um emissor JSON).
+  function i2c(v) result(s)
+    integer, intent(in) :: v
+    character(len=:), allocatable :: s
+    character(len=32) :: b
+    write (b, '(I0)') v
+    s = trim(b)
+  end function i2c
+
+  function i8c(v) result(s)
+    integer(int64), intent(in) :: v
+    character(len=:), allocatable :: s
+    character(len=32) :: b
+    write (b, '(I0)') v
+    s = trim(b)
+  end function i8c
+
+  ! ---------------------------------------------------------------------------
+  ! Leitura safetensors. Mesma politica do caminho .npy: qualquer divergencia
+  ! entre o que o arquivo declara e o que este binario espera ABORTA (nao existe
+  ! "ler o que der"). Aqui isso vale duas vezes: primeiro a arquitetura declarada
+  ! no __metadata__ (arch.*), depois o tamanho de cada tensor.
+  subroutine load_gpt_weights_st(wdir, n_layer, d_model, n_head, n_kv_head, &
+      head_dim, vocab_size, wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
+    character(*), intent(in) :: wdir
+    integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim
+    integer, intent(in) :: vocab_size
+    real(wp), allocatable, intent(out) :: wte(:), lm_head(:)
+    real(wp), allocatable, intent(out) :: c_q(:), c_k(:), c_v(:)
+    real(wp), allocatable, intent(out) :: c_pr(:), c_fc(:), c_pr2(:)
+    type(st_reader) :: r
+    character(len=:), allocatable :: msg, tname
+    character(len=16) :: lstr
+    integer :: ll, qsz, ksz, psz, fcsz, p2sz, stat
+
+    qsz = n_head*head_dim*d_model
+    ksz = n_kv_head*head_dim*d_model
+    psz = d_model*n_head*head_dim
+    fcsz = 4*d_model*d_model
+    p2sz = d_model*4*d_model
+
+    call r%open(trim(wdir) // '/' // ST_CKPT, stat, msg)
+    if (stat /= st_ok) then
+      call die('cannot open '//trim(wdir)//'/'//ST_CKPT//': '//trim(msg))
+    end if
+    call check_declared_arch(r, wdir, n_layer, d_model, n_head, n_kv_head, &
+        head_dim, vocab_size)
+
+    call st_load(r, 'wte', wdir, wte)
+    call st_load(r, 'lm', wdir, lm_head)
+    allocate(c_q(n_layer*qsz), c_k(n_layer*ksz), c_v(n_layer*ksz))
+    allocate(c_pr(n_layer*psz), c_fc(n_layer*fcsz), c_pr2(n_layer*p2sz))
+    do ll = 0, n_layer - 1
+      write (lstr, '(I0)') ll
+      tname = 'l'//trim(lstr)//'.q'
+      call st_load_into(r, tname, wdir, c_q, ll*qsz + 1)
+      tname = 'l'//trim(lstr)//'.k'
+      call st_load_into(r, tname, wdir, c_k, ll*ksz + 1)
+      tname = 'l'//trim(lstr)//'.v'
+      call st_load_into(r, tname, wdir, c_v, ll*ksz + 1)
+      tname = 'l'//trim(lstr)//'.p'
+      call st_load_into(r, tname, wdir, c_pr, ll*psz + 1)
+      tname = 'l'//trim(lstr)//'.fc'
+      call st_load_into(r, tname, wdir, c_fc, ll*fcsz + 1)
+      tname = 'l'//trim(lstr)//'.p2'
+      call st_load_into(r, tname, wdir, c_pr2, ll*p2sz + 1)
+    end do
+    call r%close()
+  end subroutine load_gpt_weights_st
+
+  ! Um tensor para um buffer novo. p32 (e nao real(wp)) de proposito: o get
+  ! tipado da lib resolve pelo TIPO do ponteiro, entao fixar F32 aqui mantem o
+  ! caminho valido mesmo se `wp` virar real64 um dia (a atribuicao converte).
+  subroutine st_load(r, name, wdir, dest)
+    type(st_reader), intent(in) :: r
+    character(*), intent(in) :: name, wdir
+    real(wp), allocatable, intent(out) :: dest(:)
+    real(real32), pointer :: p32(:)
+    integer :: stat
+    character(len=:), allocatable :: msg
+    p32 => null()
+    call r%get(name, p32, stat, msg)
+    if (stat /= st_ok) then
+      call die('tensor '//trim(name)//' in '//trim(wdir)//'/'//ST_CKPT//': '//trim(msg))
+    end if
+    dest = p32
+    deallocate(p32)
+  end subroutine st_load
+
+  ! Um tensor para dentro de um buffer empilhado (fatia ja existente).
+  subroutine st_load_into(r, name, wdir, dest, at)
+    type(st_reader), intent(in) :: r
+    character(*), intent(in) :: name, wdir
+    real(wp), intent(inout) :: dest(:)
+    integer, intent(in) :: at
+    real(wp), allocatable :: tmp(:)
+    call st_load(r, name, wdir, tmp)
+    if (at < 1 .or. at + size(tmp) - 1 > size(dest)) then
+      call die('tensor '//trim(name)//' in '//trim(wdir)//'/'//ST_CKPT// &
+          ': does not fit the expected per-layer slot (wrong arch?)')
+    end if
+    dest(at:at+size(tmp)-1) = tmp
+    deallocate(tmp)
+  end subroutine st_load_into
+
+  ! A arquitetura declarada no __metadata__ (arch.*) tem de bater com a deste
+  ! binario. Chave AUSENTE e ignorada (arquivo de outra ferramenta); chave
+  ! presente e divergente aborta -- mesma politica do arch.txt, pelo mesmo
+  ! motivo: checkpoint de outra arquitetura produz lixo silencioso.
+  subroutine check_declared_arch(r, wdir, n_layer, d_model, n_head, n_kv_head, &
+      head_dim, vocab_size)
+    type(st_reader), intent(in) :: r
+    character(*), intent(in) :: wdir
+    integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim, vocab_size
+    character(len=:), allocatable :: val
+    logical :: found
+    call cmp_meta(r, wdir, 'arch.d_model', d_model)
+    call cmp_meta(r, wdir, 'arch.n_head', n_head)
+    call cmp_meta(r, wdir, 'arch.n_kv', n_kv_head)
+    call cmp_meta(r, wdir, 'arch.n_layer', n_layer)
+    call cmp_meta(r, wdir, 'arch.vocab', vocab_size)
+    call cmp_meta(r, wdir, 'arch.head_dim', head_dim)
+    ! ctx/bos nao entram na checagem: nao afetam o layout dos pesos (So o
+    ! require_arch do arch.txt os confere, e so quando o arch.txt existe).
+  end subroutine check_declared_arch
+
+  subroutine cmp_meta(r, wdir, key, want)
+    type(st_reader), intent(in) :: r
+    character(*), intent(in) :: wdir, key
+    integer, intent(in) :: want
+    character(len=:), allocatable :: val
+    integer :: got, ios
+    logical :: found
+    call r%meta(key, val, found)
+    if (.not. found) return
+    read (val, *, iostat=ios) got
+    if (ios /= 0) then
+      call die('metadata '//trim(key)//' in '//trim(wdir)//'/'//ST_CKPT// &
+          ' is not an integer: "'//trim(val)//'"')
+    end if
+    if (got /= want) then
+      print '(A,I0,A,I0)', 'FATAL: architecture mismatch ('//trim(key)// &
+          '): this binary expects ', want, ' | file declares ', got
+      print '(2A)', '  checkpoint: ', trim(wdir)
+      print '(A)', '  este binario foi compilado para outro tamanho de modelo;'
+      print '(A)', '  aponte para o checkpoint certo (ou use set_arch.sh e rebuild)'
+      call exit(1)
+    end if
+  end subroutine cmp_meta
+
+  ! Ponto de entrada unico dos apps: escolhe a representacao pela PRESENCA do
+  ! model.safetensors no diretorio. Nenhum app precisa saber qual e -- e por isso
+  ! que a auto-deteccao vive aqui e nao em cada leitor.
+  !
+  ! O aviso de qual caminho foi lido vai para o STDERR (unit 0), nunca para o
+  ! stdout: eval_bpb tem o stdout parseado por scripts/eval_driver.py, que espera
+  ! linhas de NLL. Um "loading..." no stdout quebraria o driver em silencio.
   subroutine load_gpt_weights(wdir, n_layer, d_model, n_head, n_kv_head, &
       head_dim, vocab_size, wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
     character(*), intent(in) :: wdir
@@ -167,6 +480,16 @@ contains
     real(wp), allocatable, intent(out) :: c_pr(:), c_fc(:), c_pr2(:)
     integer :: ll
     character(len=16) :: lstr
+    logical :: has_st
+
+    inquire (file=trim(wdir) // '/' // ST_CKPT, exist=has_st)
+    if (has_st) then
+      write (0, '(3A)') 'weights: ', trim(wdir), '/'//ST_CKPT//' (safetensors, canonical names)'
+      call load_gpt_weights_st(wdir, n_layer, d_model, n_head, n_kv_head, &
+          head_dim, vocab_size, wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
+      return
+    end if
+    write (0, '(3A)') 'weights: ', trim(wdir), '/transformer_*.npy (legacy layout)'
 
     call load1(trim(wdir) // "/transformer_wte_weight.npy", wte)
     call load1(trim(wdir) // "/lm_head_weight.npy", lm_head)

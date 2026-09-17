@@ -12,6 +12,7 @@ source-dir = "lib"
 [dependencies]
 openmp = "*"
 stdlib = "*"
+safetensors = { git = "https://github.com/14NGiestas/safetensors-fortran", tag = "v0.1.1" }
 # NOTE: mfi (14NGiestas/mfi, branch mfi-fpm) was tried 2026-09-07 and
 # reverted the same day: its BLAS interfaces are LP64 (default integer)
 # but nixpkgs OpenBLAS is ILP64 (USE64BITINT) -> SIGFPE in gemm_driver.
