@@ -15573,9 +15573,9 @@
 <text x="395" y="398" fill="#8b949e" font-size="11" text-anchor="middle" font-family="sans-serif">imposto de composicao (bpb)  —  quanto o merge custa sobre a media dos shards</text>
 <text x="26" y="210" fill="#8b949e" font-size="11" transform="rotate(-90 26 210)" text-anchor="middle" font-family="sans-serif">alpha (quanto compute vale; log)</text>
 <rect x="80" y="291" width="630" height="4" fill="#ffb454" opacity="0.35"/>
-<text x="86" y="287" fill="#ffb454" font-size="10" font-family="sans-serif">alpha do eixo de DADOS na Chinchilla (0.28) — mesma composicao, ganho muito menor</text>
+<text x="395" y="287" fill="#ffb454" font-size="10" font-family="sans-serif">alpha do eixo de DADOS na Chinchilla (0.28) — mesma composicao, ganho muito menor</text>
 <rect x="80" y="195" width="630" height="4" fill="#ff5c5c" opacity="0.35"/>
-<text x="86" y="191" fill="#ff5c5c" font-size="10" font-family="sans-serif">idem em Kaplan (0.095) — mesma composicao, ganho muito menor</text>
+<text x="395" y="191" fill="#ff5c5c" font-size="10" font-family="sans-serif">idem em Kaplan (0.095) — mesma composicao, ganho muito menor</text>
 <circle cx="125.1" cy="336.2" r="5" fill="#e6edf3" stroke="#0b0e14" stroke-width="1.5"/>
 <circle cx="343.9" cy="336.2" r="5" fill="#e6edf3" stroke="#0b0e14" stroke-width="1.5"/>
 <circle cx="529.1" cy="336.2" r="5" fill="#e6edf3" stroke="#0b0e14" stroke-width="1.5"/>

@@ -107,7 +107,7 @@ def main():
                      (A_KAPLAN, "#ff5c5c", "idem em Kaplan (0.095)")):
         o.append(f'<rect x="{x0}" y="{Y(a)-2:.0f}" width="{pw}" height="4" '
                  f'fill="{c}" opacity="0.35"/>')
-        o.append(f'<text x="{x0+6}" y="{Y(a)-6:.0f}" fill="{c}" font-size="10" '
+        o.append(f'<text x="{X(0.40):.0f}" y="{Y(a)-6:.0f}" fill="{c}" font-size="10" '
                  f'font-family="sans-serif">{nm} — mesma composicao, ganho muito menor</text>')
     # nossos pontos
     for t, nm in MEAS:
