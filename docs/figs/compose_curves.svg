@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="340" style="background:#0b0e14">
+<g transform="translate(0,0)">
+<rect x="8" y="8" width="414" height="304" rx="6" fill="#0b0e14" stroke="#2a3140"/>
+<text x="20" y="28" fill="#e6edf3" font-size="13" font-family="sans-serif">A. Lei de escala propria (1 maquina)</text>
+<line x1="60" y1="290" x2="420" y2="290" stroke="#39404f"/>
+<line x1="60" y1="30" x2="60" y2="290" stroke="#39404f"/>
+<line x1="60" y1="290.0" x2="420" y2="290.0" stroke="#1d222c"/>
+<text x="56" y="294.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">1.95</text>
+<line x1="60" y1="225.0" x2="420" y2="225.0" stroke="#1d222c"/>
+<text x="56" y="229.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">2.12</text>
+<line x1="60" y1="160.0" x2="420" y2="160.0" stroke="#1d222c"/>
+<text x="56" y="164.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">2.30</text>
+<line x1="60" y1="95.0" x2="420" y2="95.0" stroke="#1d222c"/>
+<text x="56" y="99.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">2.47</text>
+<line x1="60" y1="30.0" x2="420" y2="30.0" stroke="#1d222c"/>
+<text x="56" y="34.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">2.65</text>
+<text x="240" y="312" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">tokens distintos (log)</text>
+<text x="14" y="160" fill="#8b949e" font-size="9" transform="rotate(-90 14 160)" text-anchor="middle" font-family="sans-serif">bpb holdout</text>
+<polyline points="60.0,104.2 65.0,107.6 70.1,111.0 75.1,114.3 80.2,117.5 85.2,120.8 90.3,123.9 95.3,127.1 100.4,130.2 105.4,133.2 110.5,136.2 115.5,139.2 120.6,142.2 125.6,145.1 130.6,147.9 135.7,150.7 140.7,153.5 145.8,156.3 150.8,159.0 155.9,161.6 160.9,164.3 166.0,166.9 171.0,169.5 176.1,172.0 181.1,174.5 186.1,177.0 191.2,179.4 196.2,181.8 201.3,184.2 206.3,186.5 211.4,188.8 216.4,191.1 221.5,193.3 226.5,195.6 231.6,197.7 236.6,199.9 241.7,202.0 246.7,204.1 251.7,206.2 256.8,208.3 261.8,210.3 266.9,212.3 271.9,214.2 277.0,216.2 282.0,218.1 287.1,220.0 292.1,221.8 297.2,223.7 302.2,225.5 307.3,227.3 312.3,229.1 317.3,230.8 322.4,232.5 327.4,234.2 332.5,235.9 337.5,237.5 342.6,239.2 347.6,240.8 352.7,242.4 357.7,243.9 362.8,245.5 367.8,247.0 372.8,248.5 377.9,250.0 382.9,251.5 388.0,252.9 393.0,254.3 398.1,255.8 403.1,257.1 408.2,258.5 413.2,259.9 418.3,261.2 423.3,262.5 428.4,263.8 433.4,265.1 438.4,266.4 443.5,267.6 448.5,268.9 453.6,270.1 458.6,271.3" fill="none" stroke="#3fb950" stroke-width="1.6"/>
+<circle cx="59.9" cy="106.2" r="3.5" fill="#3fb950"/>
+<circle cx="179.9" cy="174.2" r="3.5" fill="#3fb950"/>
+<circle cx="299.9" cy="226.9" r="3.5" fill="#3fb950"/>
+<circle cx="419.9" cy="262.1" r="3.5" fill="#3fb950"/>
+<text x="64.1" y="98.2" fill="#3fb950" font-size="9" text-anchor="start" font-family="sans-serif">4 runs unicos (dados completos)</text>
+<rect x="296.5" y="80.9" width="7.0" height="7.0" fill="#ff5c5c"/>
+<text x="306.0" y="87.4" fill="#ff5c5c" font-size="9" text-anchor="start" font-family="sans-serif">merge K=4, 1 ep (2.504)</text>
+<rect x="296.5" y="46.8" width="7.0" height="7.0" fill="#ff5c5c"/>
+<text x="306.0" y="53.3" fill="#ff5c5c" font-size="9" text-anchor="start" font-family="sans-serif">merge K=4, 2 ep (2.595)</text>
+<rect x="296.5" y="223.4" width="7.0" height="7.0" fill="#5ec8ff"/>
+<text x="306.0" y="229.9" fill="#5ec8ff" font-size="9" text-anchor="start" font-family="sans-serif">ideal 1 ep = f0 (2.120)</text>
+<rect x="296.5" y="276.8" width="7.0" height="7.0" fill="#5ec8ff"/>
+<text x="306.0" y="283.3" fill="#5ec8ff" font-size="9" text-anchor="start" font-family="sans-serif">ideal 2 ep (1.976)</text>
+</g>
+<g transform="translate(440,0)">
+<rect x="8" y="8" width="414" height="304" rx="6" fill="#0b0e14" stroke="#2a3140"/>
+<text x="20" y="28" fill="#e6edf3" font-size="13" font-family="sans-serif">B. Imposto cresce com o treino por worker</text>
+<line x1="60" y1="290" x2="420" y2="290" stroke="#39404f"/>
+<line x1="60" y1="30" x2="60" y2="290" stroke="#39404f"/>
+<line x1="60" y1="290.0" x2="420" y2="290.0" stroke="#1d222c"/>
+<text x="56" y="294.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.00</text>
+<line x1="60" y1="225.0" x2="420" y2="225.0" stroke="#1d222c"/>
+<text x="56" y="229.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.10</text>
+<line x1="60" y1="160.0" x2="420" y2="160.0" stroke="#1d222c"/>
+<text x="56" y="164.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.20</text>
+<line x1="60" y1="95.0" x2="420" y2="95.0" stroke="#1d222c"/>
+<text x="56" y="99.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.30</text>
+<line x1="60" y1="30.0" x2="420" y2="30.0" stroke="#1d222c"/>
+<text x="56" y="34.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.40</text>
+<text x="240" y="312" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">epocas da fatia</text>
+<text x="14" y="160" fill="#8b949e" font-size="9" transform="rotate(-90 14 160)" text-anchor="middle" font-family="sans-serif">imposto (bpb)</text>
+<circle cx="111.4" cy="252.8" r="4" fill="#ff5c5c"/>
+<circle cx="368.6" cy="72.2" r="4" fill="#ff5c5c"/>
+<polyline points="111.4,252.8 368.6,72.2" fill="none" stroke="#ff5c5c" stroke-width="1.6"/>
+<text x="107.4" y="244.8" fill="#ff5c5c" font-size="9" text-anchor="start" font-family="sans-serif">1 ep: +0.057 (merge melhor que os shards)</text>
+<text x="268.6" y="62.2" fill="#ff5c5c" font-size="9" text-anchor="start" font-family="sans-serif">2 ep: +0.335 (x5.9)</text>
+<text x="70.0" y="56.0" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">treinar mais melhora shard e run unico IGUAL (x0.19)</text>
+<text x="70.0" y="75.5" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">e so o merge piora: o imposto nao fecha com epocas</text>
+</g>
+<g transform="translate(880,0)">
+<rect x="8" y="8" width="414" height="304" rx="6" fill="#0b0e14" stroke="#2a3140"/>
+<text x="20" y="28" fill="#e6edf3" font-size="13" font-family="sans-serif">C. Imposto cai com K (degenerado)</text>
+<line x1="60" y1="290" x2="420" y2="290" stroke="#39404f"/>
+<line x1="60" y1="30" x2="60" y2="290" stroke="#39404f"/>
+<line x1="60" y1="290.0" x2="420" y2="290.0" stroke="#1d222c"/>
+<text x="56" y="294.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">-0.05</text>
+<line x1="60" y1="225.0" x2="420" y2="225.0" stroke="#1d222c"/>
+<text x="56" y="229.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.05</text>
+<line x1="60" y1="160.0" x2="420" y2="160.0" stroke="#1d222c"/>
+<text x="56" y="164.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.15</text>
+<line x1="60" y1="95.0" x2="420" y2="95.0" stroke="#1d222c"/>
+<text x="56" y="99.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.25</text>
+<line x1="60" y1="30.0" x2="420" y2="30.0" stroke="#1d222c"/>
+<text x="56" y="34.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.35</text>
+<text x="240" y="312" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">numero de shards K</text>
+<text x="14" y="160" fill="#8b949e" font-size="9" transform="rotate(-90 14 160)" text-anchor="middle" font-family="sans-serif">imposto (bpb)</text>
+<circle cx="81.2" cy="65.2" r="4" fill="#ffb454"/>
+<circle cx="187.1" cy="220.3" r="4" fill="#ffb454"/>
+<circle cx="398.8" cy="259.5" r="4" fill="#ffb454"/>
+<polyline points="81.2,65.2 187.1,220.3 398.8,259.5" fill="none" stroke="#ffb454" stroke-width="1.6"/>
+<text x="87.2" y="65.2" fill="#ffb454" font-size="9" text-anchor="start" font-family="sans-serif">K=2: +0.296</text>
+<text x="193.1" y="220.3" fill="#ffb454" font-size="9" text-anchor="start" font-family="sans-serif">K=4: +0.057</text>
+<text x="268.8" y="253.5" fill="#ffb454" font-size="9" text-anchor="start" font-family="sans-serif">K=8: -0.003 (workers mal andaram)</text>
+<text x="70.0" y="101.5" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">K grande parece bom porque cada worker</text>
+<text x="70.0" y="121.0" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">fica mais perto do init: degenerescencia</text>
+</g>
+<g transform="translate(1320,0)">
+<rect x="8" y="8" width="414" height="304" rx="6" fill="#0b0e14" stroke="#2a3140"/>
+<text x="20" y="28" fill="#e6edf3" font-size="13" font-family="sans-serif">D. Decisao: ganho liquido = K / 2^(imposto/alpha)</text>
+<line x1="60" y1="290" x2="420" y2="290" stroke="#39404f"/>
+<line x1="60" y1="30" x2="60" y2="290" stroke="#39404f"/>
+<line x1="60" y1="290.0" x2="420" y2="290.0" stroke="#1d222c"/>
+<text x="56" y="294.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.00</text>
+<line x1="60" y1="225.0" x2="420" y2="225.0" stroke="#1d222c"/>
+<text x="56" y="229.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">8.00</text>
+<line x1="60" y1="160.0" x2="420" y2="160.0" stroke="#1d222c"/>
+<text x="56" y="164.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">16.00</text>
+<line x1="60" y1="95.0" x2="420" y2="95.0" stroke="#1d222c"/>
+<text x="56" y="99.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">24.00</text>
+<line x1="60" y1="30.0" x2="420" y2="30.0" stroke="#1d222c"/>
+<text x="56" y="34.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">32.00</text>
+<text x="240" y="312" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">imposto de composicao (bpb)</text>
+<text x="14" y="160" fill="#8b949e" font-size="9" transform="rotate(-90 14 160)" text-anchor="middle" font-family="sans-serif">ganho liquido (x)</text>
+<polyline points="60.0,30.0 66.1,34.6 72.2,39.2 78.3,43.6 84.4,48.0 90.5,52.3 96.6,56.6 102.7,60.7 108.8,64.8 114.9,68.8 121.0,72.7 127.1,76.6 133.2,80.4 139.3,84.1 145.4,87.8 151.5,91.4 157.6,94.9 163.7,98.4 169.8,101.8 175.9,105.2 182.0,108.4 188.1,111.7 194.2,114.8 200.3,118.0 206.4,121.0 212.5,124.0 218.6,127.0 224.7,129.9 230.8,132.7 236.9,135.5 243.1,138.3 249.2,141.0 255.3,143.6 261.4,146.2 267.5,148.8 273.6,151.3 279.7,153.8 285.8,156.2 291.9,158.6 298.0,160.9 304.1,163.2 310.2,165.5 316.3,167.7 322.4,169.9 328.5,172.0 334.6,174.1 340.7,176.2 346.8,178.2 352.9,180.2 359.0,182.1 365.1,184.1 371.2,185.9 377.3,187.8 383.4,189.6 389.5,191.4 395.6,193.2 401.7,194.9 407.8,196.6 413.9,198.2 420.0,199.9" fill="none" stroke="#5ec8ff" stroke-width="1.6"/>
+<text x="378.9" y="182.3" fill="#5ec8ff" font-size="9" text-anchor="start" font-family="sans-serif">alpha=0.46 (medido aqui)</text>
+<polyline points="60.0,30.0 66.1,43.9 72.2,57.0 78.3,69.4 84.4,81.2 90.5,92.3 96.6,102.9 102.7,112.9 108.8,122.3 114.9,131.3 121.0,139.7 127.1,147.7 133.2,155.3 139.3,162.5 145.4,169.3 151.5,175.8 157.6,181.9 163.7,187.6 169.8,193.1 175.9,198.3 182.0,203.2 188.1,207.8 194.2,212.2 200.3,216.3 206.4,220.3 212.5,224.0 218.6,227.5 224.7,230.8 230.8,234.0 236.9,237.0 243.1,239.8 249.2,242.5 255.3,245.0 261.4,247.4 267.5,249.7 273.6,251.8 279.7,253.9 285.8,255.8 291.9,257.6 298.0,259.4 304.1,261.0 310.2,262.5 316.3,264.0 322.4,265.4 328.5,266.7 334.6,267.9 340.7,269.1 346.8,270.2 352.9,271.3 359.0,272.3 365.1,273.2 371.2,274.1 377.3,275.0 383.4,275.8 389.5,276.5 395.6,277.3 401.7,277.9 407.8,278.6 413.9,279.2 420.0,279.8" fill="none" stroke="#ffb454" stroke-width="1.6"/>
+<text x="378.9" y="269.2" fill="#ffb454" font-size="9" text-anchor="start" font-family="sans-serif">alpha=0.15 (escala media)</text>
+<polyline points="60.0,30.0 66.1,69.4 72.2,102.9 78.3,131.3 84.4,155.3 90.5,175.8 96.6,193.1 102.7,207.8 108.8,220.3 114.9,230.8 121.0,239.8 127.1,247.4 133.2,253.9 139.3,259.4 145.4,264.0 151.5,267.9 157.6,271.3 163.7,274.1 169.8,276.5 175.9,278.6 182.0,280.3 188.1,281.8 194.2,283.0 200.3,284.1 206.4,285.0 212.5,285.7 218.6,286.4 224.7,286.9 230.8,287.4 236.9,287.8 243.1,288.1 249.2,288.4 255.3,288.7 261.4,288.9 267.5,289.0 273.6,289.2 279.7,289.3 285.8,289.4 291.9,289.5 298.0,289.6 304.1,289.6 310.2,289.7 316.3,289.7 322.4,289.8 328.5,289.8 334.6,289.8 340.7,289.9 346.8,289.9 352.9,289.9 359.0,289.9 365.1,289.9 371.2,289.9 377.3,289.9 383.4,290.0 389.5,290.0 395.6,290.0 401.7,290.0 407.8,290.0 413.9,290.0 420.0,290.0" fill="none" stroke="#ff5c5c" stroke-width="1.6"/>
+<text x="378.9" y="284.0" fill="#ff5c5c" font-size="9" text-anchor="start" font-family="sans-serif">alpha=0.05 (fronteira)</text>
+<line x1="232.3" y1="290.0" x2="232.3" y2="30.0" stroke="#8b949e" stroke-dasharray="3,3"/>
+<text x="236.3" y="38.1" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">imposto medido (K=4, 2 ep)</text>
+<text x="70.3" y="259.8" fill="#5ec8ff" font-size="9" text-anchor="start" font-family="sans-serif">K=4</text>
+<text x="70.3" y="229.5" fill="#ffb454" font-size="9" text-anchor="start" font-family="sans-serif">K=8</text>
+<text x="70.3" y="48.2" fill="#3fb950" font-size="9" text-anchor="start" font-family="sans-serif">K=32</text>
+</g>
+<text x="8" y="332" fill="#8b949e" font-size="9" font-family="sans-serif">fonte: holdout 100 linhas (rows_f0[7900:8000]), d96, total compute fixo, byte-weighted bpb; ajuste A: L=1.760+530.7D^-0.458 (rmse 0.0022)</text>
+</svg>
