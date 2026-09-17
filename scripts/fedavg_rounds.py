@@ -123,7 +123,8 @@ def main():
     ap.add_argument("--holdout", default="/tmp/mix/rows_holdout.npy")
     ap.add_argument("--out", required=True)
     ap.add_argument("--anneal", action="store_true")
-    ap.add_argument("--regime", default="federated", choices=("federated", "parallel"),
+    ap.add_argument("--regime", default="federated",
+                    choices=("federated", "parallel", "rotating"),
                     help="federated = fatias disjuntas (FL); parallel = MESMA distribuicao "
                          "com fase/ordem diferente por worker (data-parallel emulado)")
     ap.add_argument("--phase", type=int, default=39,
@@ -145,7 +146,16 @@ def main():
         # start_row avanca a cada rodada (r*tau): sem isso o worker replaya as
         # MESMAS linhas em todas as rodadas, o que nao e data-parallel nem
         # federado -- e um terceiro experimento (mais epocas no mesmo subconjunto).
-        nt_k, st_k = NFULL, lambda k: k * a.phase
+        nt_k, st_k = NFULL, lambda k: k * a.phase   # janelas sobrepostas (nao e
+        # data-parallel de verdade: com phase pequeno os K workers veem quase as
+        # MESMAS linhas, entao o sistema cobre pouco do corpus -- mede cobertura,
+        # nao regime). Para o layout correto use --regime rotating.
+    elif a.regime == "rotating":
+        # DATA-PARALLEL de verdade: a cada rodada os K workers pegam K blocos
+        # CONSECUTIVOS de tau linhas e os blocos avancam K*tau por rodada, de modo
+        # que cada worker ve o pool inteiro ao longo do run (ninguem fica preso a
+        # uma fatia). Dentro de uma rodada, os K lotes sao disjuntos.
+        nt_k, st_k = NFULL, lambda k: k * a.tau
     else:
         nt_k, st_k = slice_sz, lambda k: k * slice_sz
     total = a.k * a.rounds * a.tau
@@ -170,7 +180,10 @@ def main():
             wdir = os.path.join(a.out, f"r{r}_w{k}")
             cmd = [train, "--weights", common if r == 0 else ck, "--rows", a.rows,
                    "--out", wdir, "--nsteps", str(a.tau), "--lr", str(a.lr),
-                   "--ntrain", str(nt_k), "--start_row", str(st_k(k) + r * a.tau),
+                   "--ntrain", str(nt_k),
+                   "--start_row", str((r * a.k * a.tau + st_k(k)) % NFULL
+                                      if a.regime == "rotating"
+                                      else st_k(k) + r * a.tau),
                    "--nval", "1", "--val_every", "9999999", "--trn_probe", "1",
                    "--save_every", str(a.tau), "--attn", "blas",
                    "--bytes", os.path.expanduser(
