@@ -15578,12 +15578,12 @@
 <circle cx="343.9" cy="336.2" r="5" fill="#e6edf3" stroke="#0b0e14" stroke-width="1.5"/>
 <circle cx="529.1" cy="336.2" r="5" fill="#e6edf3" stroke="#0b0e14" stroke-width="1.5"/>
 <line x1="96" y1="336" x2="710" y2="336" stroke="#e6edf3" stroke-width="0.8" opacity="0.5"/>
-<text x="102" y="326" fill="#e6edf3" font-size="10" font-family="sans-serif">alpha medido aqui = 0.46 (d96, 4 pontos: L=1.76+530.7*D^-0.458)</text>
-<text x="123" y="362" fill="#e6edf3" font-size="10" font-family="sans-serif">1 ep: +0.057 → ganho 3.7x de 4x (29x de 32x)</text>
-<text x="123" y="376" fill="#ffb454" font-size="10" font-family="sans-serif">2 ep: +0.335 → 2.4x de 4x (19x de 32x)</text>
-<text x="123" y="390" fill="#ff5c5c" font-size="10" font-family="sans-serif">vs alternativa sequencial: +0.570 (mesmo compute, 4x de parede)</text>
-<text x="104" y="312" fill="#93c5fd" font-size="13" font-family="sans-serif">COMPOR VALE</text>
+<text x="88" y="352" fill="#e6edf3" font-size="10" font-family="sans-serif">alpha medido aqui = 0.46 (d96, 4 pontos: L = 1.76 + 530.7 D^-0.458, rmse 0.0022)</text>
+<text x="139" y="290" fill="#e6edf3" font-size="10" font-family="sans-serif">1 ep (o ponto a esquerda): +0.057 → ganho 3.7x de 4x</text>
+<text x="139" y="304" fill="#ffb454" font-size="10" font-family="sans-serif">2 ep: +0.335 → 2.4x de 4x</text>
+<text x="139" y="318" fill="#ff5c5c" font-size="10" font-family="sans-serif">vs alternativa sequencial: +0.570 → 1.7x de 4x</text>
+<text x="600" y="299" fill="#93c5fd" font-size="13" font-family="sans-serif">COMPOR VALE</text>
 <text x="490" y="132" fill="#fca5a5" font-size="13" font-family="sans-serif">COMPOR CUSTA</text>
-<text x="92" y="214" fill="#e6edf3" font-size="11" font-family="sans-serif">fronteiras (tracejado): imposto = alpha * log2(K)</text>
-<text x="92" y="225" fill="#e6edf3" font-size="10" font-family="sans-serif">branco K=4, amarelo K=8, verde K=32</text>
+<text x="89" y="173" fill="#e6edf3" font-size="11" font-family="sans-serif">fronteiras (tracejado): imposto = alpha * log2(K)</text>
+<text x="89" y="189" fill="#c9d1d9" font-size="10" font-family="sans-serif">branco K=4, amarelo K=8, verde K=32 — acima da linha, o merge custa mais do que o compute compra</text>
 </svg>

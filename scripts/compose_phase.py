@@ -114,24 +114,25 @@ def main():
                  f'stroke="#0b0e14" stroke-width="1.5"/>')
     o.append(f'<line x1="{X(0.02):.0f}" y1="{Y(A_OURS):.0f}" x2="{X(0.80):.0f}" '
              f'y2="{Y(A_OURS):.0f}" stroke="#e6edf3" stroke-width="0.8" opacity="0.5"/>')
-    o.append(f'<text x="{X(0.02)+6:.0f}" y="{Y(A_OURS)-10:.0f}" fill="#e6edf3" '
+    o.append(f'<text x="{X(0.01):.0f}" y="{Y(A_OURS)+16:.0f}" fill="#e6edf3" '
              f'font-size="10" font-family="sans-serif">alpha medido aqui = 0.46 '
-             f'(d96, 4 pontos: L=1.76+530.7*D^-0.458)</text>')
-    o.append(f'<text x="{X(0.055):.0f}" y="{Y(A_OURS)+26:.0f}" fill="#e6edf3" font-size="10" '
-             f'font-family="sans-serif">1 ep: +0.057 → ganho 3.7x de 4x (29x de 32x)</text>')
-    o.append(f'<text x="{X(0.055):.0f}" y="{Y(A_OURS)+40:.0f}" fill="#ffb454" font-size="10" '
-             f'font-family="sans-serif">2 ep: +0.335 → 2.4x de 4x (19x de 32x)</text>')
-    o.append(f'<text x="{X(0.055):.0f}" y="{Y(A_OURS)+54:.0f}" fill="#ff5c5c" font-size="10" '
-             f'font-family="sans-serif">vs alternativa sequencial: +0.570 (mesmo compute, 4x de parede)</text>')
+             f'(d96, 4 pontos: L = 1.76 + 530.7 D^-0.458, rmse 0.0022)</text>')
+    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-46:.0f}" fill="#e6edf3" font-size="10" '
+             f'font-family="sans-serif">1 ep (o ponto a esquerda): +0.057 → ganho 3.7x de 4x</text>')
+    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-32:.0f}" fill="#ffb454" font-size="10" '
+             f'font-family="sans-serif">2 ep: +0.335 → 2.4x de 4x</text>')
+    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-18:.0f}" fill="#ff5c5c" font-size="10" '
+             f'font-family="sans-serif">vs alternativa sequencial: +0.570 → 1.7x de 4x</text>')
     # rotulos de regiao
-    o.append(f'<text x="{X(0.03):.0f}" y="{Y(0.35):.0f}" fill="#93c5fd" font-size="13" '
+    o.append(f'<text x="{X(0.66):.0f}" y="{Y(0.30):.0f}" fill="#93c5fd" font-size="13" '
              f'font-family="sans-serif">COMPOR VALE</text>')
     o.append(f'<text x="{X(0.52):.0f}" y="{Y(0.045):.0f}" fill="#fca5a5" font-size="13" '
              f'font-family="sans-serif">COMPOR CUSTA</text>')
-    o.append(f'<text x="{X(0.015):.0f}" y="{Y(0.115):.0f}" fill="#e6edf3" font-size="11" '
+    o.append(f'<text x="{X(0.012):.0f}" y="{Y(0.072):.0f}" fill="#e6edf3" font-size="11" '
              f'font-family="sans-serif">fronteiras (tracejado): imposto = alpha * log2(K)</text>')
-    o.append(f'<text x="{X(0.015):.0f}" y="{Y(0.13):.0f}" fill="#e6edf3" font-size="10" '
-             f'font-family="sans-serif">branco K=4, amarelo K=8, verde K=32</text>')
+    o.append(f'<text x="{X(0.012):.0f}" y="{Y(0.086):.0f}" fill="#c9d1d9" font-size="10" '
+             f'font-family="sans-serif">branco K=4, amarelo K=8, verde K=32 — acima da linha, '
+             f'o merge custa mais do que o compute compra</text>')
 
     # ---------------- painel 2: a lei do imposto (2 pontos) ----------------
     px, py, pww, phh = W - 40, 60, 44, 0
