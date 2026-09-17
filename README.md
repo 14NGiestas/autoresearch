@@ -53,7 +53,7 @@ train.py            — retired Python training record (needs torch; kept as
 prepare.py          — upstream data/tokenizer/metric reference (needs torch;
                       the fixed bpb metric is replicated in eval_driver.py).
 checkpoints/        — .pt files (gitignored, local only)
-hep/registry.jsonl  — hypothesis audit trail (use hep.py to query it)
+hep/registry.jsonl  — hypothesis audit trail (use bin/hep to query it)
 flake.nix           — nix dev shell: gfortran + fortran-fpm (torch-free)
 ```
 
@@ -97,7 +97,7 @@ Run the proofs: `cd src && fortran-fpm test` (kernels),
 - **Fortran is the implementation, not a port.** New math goes in
   `src/lib/` with a parity test; Python/Torch is retired, not maintained.
 - **Hypothesis-Evolution Protocol (HEP).** Every experiment is registered
-  (`python3 hep.py propose`), evidenced, and transitioned — 21 hypotheses,
+  (`bin/hep propose`), evidenced, and transitioned — 21 hypotheses,
   beliefs 0.15–0.96. The registry is the lab notebook; read it before
   starting anything.
 - **No-torch-chat protocol.** Never reinstall torch to "quickly check"

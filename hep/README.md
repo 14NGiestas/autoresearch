@@ -8,6 +8,28 @@ structured as an auditable **Hypothesis Evolution Protocol** per:
 > Protocol for LLM Agents"*, arXiv:2607.09195v1 (2026).
 > https://arxiv.org/html/2607.09195v1
 
+## Migração para o protocolo JS (2026-09-17)
+
+A registry era escrita pelo `hep.py` (Python), agora aposentado: a implementação
+de referência é `packages/hep-js` (npm `hep-protocol`, arXiv:2607.09195v1),
+invocada por `bin/hep` (build local, offline) com `npx hep-protocol` como reserva.
+
+A migração foi forçada por dois defeitos que o `hep.py` permitia e que o
+`verify` da referência detecta:
+
+1. **`seq` duplicado (96)**: dois processos leram o mesmo tail e anexaram, então a
+   cadeia tinha dois elos com o mesmo número (226 registros, 225 `seq` únicos).
+2. **`kind` fora do enum**: 101 registros usavam valores que o protocolo não
+   aceita (`test`, `empirical`, `measurement`, `note`, `external`, `supports`).
+
+`scripts/rechain_registry.mjs` fez a reparação: mapeou os `kind` inválidos para o
+enum (`test|empirical|measurement|supports|inconclusive` → `experiment`,
+`external` → `literature`, `note|refine` → `analysis`), renumerou `seq` na ordem
+real de append e recalculou `prev`/`hash` com a canonicalização da referência.
+**Nenhum payload foi removido, reordenado ou reescrito além do campo `kind`** —
+216 dos 226 elos mudaram apenas por causa da renumeração/cadeia. O original está
+no histórico do git; `bin/hep verify` agora responde *hash chain valid*.
+
 ## The mapping
 
 The paper's HEP is an agent harness for scientific discovery. We apply its
@@ -31,11 +53,11 @@ carries an unbroken, verifiable record from proposal to verdict.
 ## Usage
 
 ```bash
-python3 hep.py propose   --statement "..." --prior 0.5 --mechanism refine --parents hyp_XXX
-python3 hep.py evidence  --hyp hyp_XXX --kind simulation --direction supports \
+bin/hep propose   --statement "..." --prior 0.5 --mechanism refine --parents hyp_XXX
+bin/hep evidence  --hyp hyp_XXX --kind simulation --direction supports \
                          --prior 0.5 --updated 0.55 --bpb 1.23 --commit <sha> --rationale "..."
-python3 hep.py transition --hyp hyp_XXX --state supported     # or refuted / dormant
-python3 hep.py status
+bin/hep transition --hyp hyp_XXX --state supported     # or refuted / dormant
+bin/hep status
 ```
 
 ## Training data

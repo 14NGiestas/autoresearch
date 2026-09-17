@@ -10,7 +10,7 @@ follows it autonomously (do not ask the user — operate, then report).
 1. **Shell:** `nix develop` from the repo root (provides `gfortran`,
    `fortran-fpm`; torch-free by design — never create a torch venv).
    Python work uses `.venv-numpy/bin/python3` (numpy/tiktoken/pyarrow only).
-2. **Read state:** `python3 hep.py status` (21 hypotheses; `hyp_34ea7c`
+2. **Read state:** `bin/hep status` (21 hypotheses; `hyp_34ea7c`
    is the main line at 0.96), then `git log --oneline -3` and `git status`.
 3. **Verify artifacts:** `~/.cache/autoresearch/` holds `data/` shards,
    `tokenizer/tokenizer.pkl`, `weights_depth12/` (74 `.npy`), `tok_tables/`.
@@ -23,10 +23,10 @@ follows it autonomously (do not ask the user — operate, then report).
 Work is registered before it starts:
 
 ```bash
-python3 hep.py propose --statement "..." --prior 0.5
-python3 hep.py evidence --hyp hyp_X --kind test --direction supports \
+bin/hep propose --statement "..." --prior 0.5
+bin/hep evidence --hyp hyp_X --kind test --direction supports \
   --prior 0.5 --updated 0.7 --rationale "..." --source "path:line"
-python3 hep.py transition --hyp hyp_X --state under_test  # proposed|under_test|supported|refuted|dormant
+bin/hep transition --hyp hyp_X --state under_test  # proposed|under_test|supported|refuted|dormant
 ```
 
 **What you CAN do:**
@@ -59,7 +59,7 @@ measure → keep or discard → repeat until morning. HEP replaces
    `tokdiff_driver.py --n 200` (exact), depth-12 reference points
    (torch tag 0.375, Fortran interim 0.58). If any baseline is red, fix
    it before experimenting — a broken baseline poisons every verdict.
-2. **Pick one hypothesis** (`hep.py status`; lowest-hanging belief first).
+2. **Pick one hypothesis** (`bin/hep status`; lowest-hanging belief first).
    State the falsifiable prediction up front (e.g. "KV-cache keeps bpb
    within 1e-6 while cutting 30-token latency 5×").
 3. **Implement small.** One module or one app change, <300 lines/file,
@@ -70,7 +70,7 @@ measure → keep or discard → repeat until morning. HEP replaces
    incomparable. Approx costs: test ~1 min, parity ~1 min, tokdiff-200
    ~2 min, eval Row ~95 s.
 5. **Keep or discard (simplicity criterion applies).** Improvement kept
-   only with evidence recorded (`hep.py evidence` + `transition`); a
+   only with evidence recorded (`bin/hep evidence` + `transition`); a
    0.01 gain from 200 lines of hacks is discarded, a 0.0 with deleted
    code is kept. Discards get one evidence line too (why it failed).
 6. **Commit green states only** (`git add src scripts ...`, never

@@ -1,7 +1,7 @@
 # ckpt/ — model registry (genealogia auditável, como o HEP)
 
 Checkpoints moram fora do git (grandes); aqui mora SÓ o registro:
-`ckpt/registry.jsonl`, com hash-chain idêntico ao do `hep.py`
+`ckpt/registry.jsonl`, com hash-chain idêntico ao do `hep-protocol` (JS)
 (`hash = sha256(prev + json(payload, sort_keys=True))`).
 
 Cada `register` identifica um checkpoint pelo CONTEÚDO
