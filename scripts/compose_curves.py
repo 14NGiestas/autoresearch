@@ -84,7 +84,7 @@ def panel_a(ox):
     Linf, A, al = fit
     pts = []
     for i in range(80):
-        lg = math.log10(2.0e6) + (math.log10(2.0e7) - math.log10(2.0e6)) * i / 79
+        lg = math.log10(2.0e6) + (math.log10(1.6e7) - math.log10(2.0e6)) * i / 79
         D = 10 ** lg
         pts.append(f"{X(D):.1f},{Y(Linf + A * D ** (-al)):.1f}")
     o.append(f'<polyline points="{" ".join(pts)}" fill="none" stroke="#3fb950" '
@@ -109,11 +109,10 @@ def panel_b(ox):
         dot(o, X(e), Y(t), "#ff5c5c", r=4)
     o.append(f'<polyline points="{X(1):.1f},{Y(0.05728):.1f} {X(2):.1f},{Y(0.33510):.1f}" '
              f'fill="none" stroke="#ff5c5c" stroke-width="1.6"/>')
-    label(o, X(1) - 4, Y(0.05728) - 8, "1 ep: +0.057 (merge melhor que os shards)",
-          "#ff5c5c", anchor="start")
-    label(o, X(2) - 100, Y(0.33510) - 10, "2 ep: +0.335 (x5.9)", "#ff5c5c")
-    label(o, 70, Y(0.36), "treinar mais melhora shard e run unico IGUAL (x0.19)", "#8b949e")
-    label(o, 70, Y(0.33), "e so o merge piora: o imposto nao fecha com epocas", "#8b949e")
+    label(o, X(1) + 6, Y(0.05728) + 12, "1 ep: +0.057", "#ff5c5c")
+    label(o, X(2) - 4, Y(0.33510) + 14, "2 ep: +0.335 (x5.9)", "#ff5c5c", anchor="end")
+    label(o, 70, Y(0.115), "treinar mais melhora shard e run unico IGUAL (x0.19 cada);", "#8b949e")
+    label(o, 70, Y(0.075), "so o merge piora -- o imposto nao fecha com epocas", "#8b949e")
     return o
 
 
@@ -124,11 +123,11 @@ def panel_c(ox):
         dot(o, X(k), Y(t), "#ffb454", r=4)
     o.append('<polyline points="' + " ".join(f"{X(k):.1f},{Y(t):.1f}" for k, t in tax_k) +
              '" fill="none" stroke="#ffb454" stroke-width="1.6"/>')
-    label(o, X(2) + 6, Y(0.2959), "K=2: +0.296", "#ffb454")
-    label(o, X(4) + 6, Y(0.05728), "K=4: +0.057", "#ffb454")
-    label(o, X(8) - 130, Y(-0.0031) - 6, "K=8: -0.003 (workers mal andaram)", "#ffb454")
-    label(o, 70, Y(0.24), "K grande parece bom porque cada worker", "#8b949e")
-    label(o, 70, Y(0.21), "fica mais perto do init: degenerescencia", "#8b949e")
+    label(o, X(2) + 6, Y(0.2959) - 6, "K=2: +0.296", "#ffb454")
+    label(o, X(4) + 8, Y(0.05728) + 4, "K=4: +0.057", "#ffb454")
+    label(o, X(8) - 4, Y(-0.0031) + 14, "K=8: -0.003 (mal andaram)", "#ffb454", anchor="end")
+    label(o, 70, Y(0.235), "K grande parece bom porque cada worker fica", "#8b949e")
+    label(o, 70, Y(0.203), "mais perto do init: degenerescencia, nao merito", "#8b949e")
     return o
 
 
@@ -142,10 +141,10 @@ def panel_d(ox):
             pts.append(f"{X(t):.1f},{Y(32 / 2 ** (t / al)):.1f}")
         o.append(f'<polyline points="{" ".join(pts)}" fill="none" stroke="{c}" '
                  f'stroke-width="1.6"/>')
-        label(o, X(0.62), Y(32 / 2 ** (0.62 / al)) - 6, nm, c)
+        label(o, X(0.012), Y(28 - 4.0 * ALPHAS.index((al, c, nm))), nm, c)
     o.append(f'<line x1="{X(0.3351):.1f}" y1="{Y(0):.1f}" x2="{X(0.3351):.1f}" '
              f'y2="{Y(32):.1f}" stroke="#8b949e" stroke-dasharray="3,3"/>')
-    label(o, X(0.3351) + 4, Y(31), "imposto medido (K=4, 2 ep)", "#8b949e")
+    label(o, X(0.3351) + 4, Y(2.2), "imposto medido (K=4, 2 ep)", "#8b949e")
     for K, c in [(4, "#5ec8ff"), (8, "#ffb454"), (32, "#3fb950")]:
         label(o, X(0.02), Y(K * 0.93), f"K={K}", c)
     return o
