@@ -30,12 +30,31 @@ import sys
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LEDGER = os.path.join(REPO, "energy", "ledger.jsonl")
+LEDGER = os.environ.get("ENERGY_LEDGER",
+                        os.path.join(REPO, "energy", "ledger.jsonl"))
 PREF = ("amdgpu", "zenpower", "amd_energy", "k10temp", "coretemp", "rapl")
 
 
-def find_sensor():
-    """(kind, path) do melhor sensor disponivel, ou (None, None)."""
+def find_sensors():
+    """Lista de (label, kind, path) legiveis.
+
+    kind='rapl'  -> energia acumulada em uJ (delta por amostra)
+    kind='hwmon' -> potencia instantanea em uW (integracao trapezoidal)
+    No halfbeast (i9-7900X) o RAPL expoe package-0 E dram: o segundo e o que
+    interessa, porque nosso regime (batch=1, matrizes pequenas) e memory-bound.
+    """
+    out = []
+    for d in sorted(glob.glob("/sys/class/powercap/*/energy_uj")):
+        if not os.access(d, os.R_OK):
+            continue
+        lab = d.split("/")[-2]
+        try:
+            nm = open(os.path.join(os.path.dirname(d), "name")).read().strip()
+            if nm:
+                lab = f"{lab}:{nm}"
+        except OSError:
+            pass
+        out.append((lab, "rapl", d))
     for h in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
         try:
             name = open(os.path.join(h, "name")).read().strip().lower()
@@ -45,12 +64,27 @@ def find_sensor():
             for f in ("power1_input", "power1_average"):
                 p = os.path.join(h, f)
                 if os.access(p, os.R_OK):
-                    return "hwmon", p
-    for h in sorted(glob.glob("/sys/class/powercap/intel-rapl:*/energy_uj")) + \
-            sorted(glob.glob("/sys/class/powercap/amd_energy/*/energy_uj")):
-        if os.access(h, os.R_OK):
-            return "rapl", h
-    return None, None
+                    out.append((name, "hwmon", p))
+                    break
+    return out
+
+
+def find_sensor():
+    """Compat: primeiro sensor (kind, path), ou (None, None)."""
+    s = find_sensors()
+    return (s[0][1], s[0][2]) if s else (None, None)
+
+
+def sample(sensors):
+    """label -> W (hwmon) ou J acumulado (rapl)."""
+    r = {}
+    for lab, kind, path in sensors:
+        try:
+            v = float(open(path).read().strip())
+        except (OSError, ValueError):
+            continue
+        r[lab] = v / 1e6
+    return r
 
 
 def read_w(path):
@@ -80,14 +114,32 @@ def cmd_idle(a):
     kind, path = find_sensor()
     if not kind:
         sys.exit("nenhum sensor de potencia disponivel nesta maquina")
+    rapl = kind == "rapl"
+    e0 = float(open(path).read().strip()) if rapl else 0.0
     ws = []
     t0 = time.time()
     while time.time() - t0 < a.seconds:
-        w = read_w(path)
-        if w is not None:
-            ws.append(w)
+        if rapl:
+            e = float(open(path).read().strip())
+            ws.append(e)
+        else:
+            w = read_w(path)
+            if w is not None:
+                ws.append(w)
         time.sleep(1.0)
-    rec = base("idle", kind, f"sensor={path}")
+    if rapl:
+        d = (ws[-1] - e0)
+        if d < 0:
+            d = ws[-1]
+        wall = time.time() - t0
+        rec = base(a.tag, kind, a.note or f"sensor={path}")
+        rec.update({"wall_s": round(wall, 2), "n": len(ws),
+                    "J": round(d / 1e6, 1),
+                    "W_mean": round(d / 1e6 / wall, 3)})
+        append(rec)
+        print(json.dumps(rec, indent=1))
+        return
+    rec = base(a.tag, kind, a.note or f"sensor={path}")
     rec.update({"wall_s": round(time.time() - t0, 2), "n": len(ws),
                 "W_mean": round(sum(ws) / len(ws), 3),
                 "W_min": round(min(ws), 3), "W_max": round(max(ws), 3)})
@@ -96,41 +148,53 @@ def cmd_idle(a):
 
 
 def cmd_run(a):
-    kind, path = find_sensor()
-    e0 = None
-    if kind == "rapl":
-        e0 = float(open(path).read().strip())
+    sensors = find_sensors()
+    if not sensors:
+        print("energy: nenhum sensor legivel -> mode=cpu_only", flush=True)
+    jdom = {lab: 0.0 for lab, k, _ in sensors if k == "rapl"}
     ws, ts = [], []
     t0 = time.time()
     proc = subprocess.Popen(a.cmd)
-    last = t0
+    prev = sample(sensors)
     while proc.poll() is None:
-        if kind == "hwmon":
-            w = read_w(path)
-            if w is not None:
-                ws.append(w)
-                ts.append(time.time() - t0)
         time.sleep(a.interval)
+        cur = sample(sensors)
+        t = time.time() - t0
+        for lab, kind, _ in sensors:
+            if lab not in cur or lab not in prev:
+                continue
+            if kind == "rapl":                      # contador cumulativo
+                d = cur[lab] - prev[lab]
+                if d < 0:                            # wrap do contador
+                    d = cur[lab]
+                jdom[lab] = jdom.get(lab, 0.0) + d
+            elif lab == sensors[0][0]:
+                ws.append(cur[lab])                  # hwmon: potencia
+                ts.append(t)
+        prev = cur
     rc = proc.returncode
     t1 = time.time()
     wall = t1 - t0
     cpus = cpu_seconds()
-    rec = base(a.tag, kind or "cpu_only", a.note)
+    mode = sensors[0][1] if sensors else "cpu_only"
+    rec = base(a.tag, mode, a.note)
     rec.update({"rc": rc, "wall_s": round(wall, 2),
                 "cpu_s": round(cpus, 2), "cmd": " ".join(a.cmd),
                 "cmd_id": a.cmd_id})
-    if kind == "rapl":
-        e1 = float(open(path).read().strip())
-        span = 65532610987.0 if "intel" in path else 262143328850.0
-        d = (e1 - e0) % span
-        rec.update({"sensor": path, "J": round(d / 1e6, 1)})
+    if sensors:
+        rec["sensor"] = sensors[0][2]
+    if jdom:
+        # dominio primario: package se existir, senao o primeiro
+        prim = next((l for l in jdom if "package" in l), sorted(jdom)[0])
+        rec["J"] = round(jdom[prim], 1)
+        rec["J_domains"] = {k: round(v, 1) for k, v in sorted(jdom.items())}
+        rec["W_mean"] = round(jdom[prim] / wall, 3) if wall else 0.0
     if ws:
-        # trapezoidal em (t, W)
         j = 0.0
         for i in range(1, len(ws)):
             j += 0.5 * (ws[i] + ws[i - 1]) * (ts[i] - ts[i - 1])
         j += ws[-1] * max(0.0, wall - ts[-1]) + ws[0] * max(0.0, ts[0])
-        rec.update({"sensor": path, "J": round(j, 1), "n": len(ws),
+        rec.update({"J": round(j, 1), "n": len(ws),
                     "W_mean": round(sum(ws) / len(ws), 3),
                     "W_max": round(max(ws), 3)})
     if a.idle_w and "J" in rec:
@@ -150,8 +214,9 @@ def cmd_run(a):
 
 def cmd_report(a):
     rows = []
-    if os.path.exists(LEDGER):
-        for line in open(LEDGER):
+    for lg in sorted(glob.glob(os.path.join(os.path.dirname(LEDGER),
+                                            "ledger*.jsonl"))):
+        for line in open(lg):
             line = line.strip()
             if not line:
                 continue
@@ -199,6 +264,8 @@ def main():
 
     p = sub.add_parser("idle")
     p.add_argument("--seconds", type=float, default=60)
+    p.add_argument("--tag", default="idle")
+    p.add_argument("--note", default="")
     p.set_defaults(fn=cmd_idle)
 
     p = sub.add_parser("report")

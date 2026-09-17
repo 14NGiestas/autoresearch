@@ -54,3 +54,6 @@ ai_chat_hoarder/hoard/
 # third-party PDF->md conversions (not ours to redistribute)
 src/docs/
 tools/
+
+# biblioteca extraida para repo proprio (github.com/14NGiestas/safetensors-fortran)
+safetensors-fortran/
