@@ -78,17 +78,33 @@ class Lab:
         self.rows = a.rows
         self.holdout_file = a.holdout
         self.hold = np.load(a.holdout, mmap_mode="r")
-        self.train_bin = self._pick("train_run")
-        self.eval_bin = self._pick("eval_bpb")
+        self.train_bin = self._pick("train_run", a.init)
+        self.eval_bin = self._pick("eval_bpb", a.init)
         self.init = a.init
         os.makedirs(self.out, exist_ok=True)
         self.res = []
 
-    def _pick(self, app):
-        pat = os.path.join(REPO, "src/build/arch_*", "*", "app", app)
+    def _pick(self, app, ref):
+        """Binario do build cuja arch casa com o arch.txt da referencia.
+
+        O build mais recente pode ser de OUTRA arch (d360 etc): o guard
+        check_shape aborta -- e deve mesmo. Aqui escolhemos pelo arch.txt.
+        """
+        tag = ""
+        ap = os.path.join(ref, "arch.txt")
+        if os.path.exists(ap):
+            kv = {}
+            for line in open(ap):
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    kv[k.strip()] = v.strip().split()[0]
+            tag = ("arch_d{}_h{}_kv{}_l{}_v{}_c{}".format(
+                kv.get("d_model"), kv.get("n_head"), kv.get("n_kv"),
+                kv.get("n_layer"), kv.get("vocab"), kv.get("ctx")))
+        pat = os.path.join(REPO, "src/build", tag or "arch_*", "*", "app", app)
         c = sorted(glob.glob(pat), key=os.path.getmtime)
         if not c:
-            sys.exit(f"binario {app} nao buildado")
+            sys.exit(f"binario {app} nao buildado para {tag or 'arch desconhecida'}")
         return c[-1]
 
     def train(self, tag, init, ntrain, start_row, nsteps, lr, anneal=False):
