@@ -10,7 +10,7 @@ set -u
 cd /home/pauli/autoresearch
 EV=$(ls -t src/build/arch_d96_h6_kv2_l12_v8192_c1024/*/app/eval_bpb | head -1)
 echo "lrtax job=${SLURM_JOB_ID} $(date '+%F %H:%M:%S')"
-for arm in lr00002 lr64447; do
+for arm in lr00002 lr6e05; do
   for k in 0 1 2 3; do
     D=$(ls -d /tmp/compose/${arm}_s$k/step_* 2>/dev/null | head -1)
     [ -z "$D" ] && { echo "  $arm s$k ausente"; continue; }
