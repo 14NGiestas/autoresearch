@@ -22,7 +22,7 @@ OUT = "/tmp/compose_phase.svg"
 K_BG = 32
 TAX_MAX, A_LO, A_HI = 0.80, 0.02, 0.60
 MEAS = [(0.05728, "K=4, 1 ep"), (0.33510, "K=4, 2 ep"), (0.57023, "K=4 2ep vs sequencial")]
-A_OURS, A_FRONTIER = 0.458, 0.05
+A_OURS, A_CHINCHILLA, A_KAPLAN = 0.458, 0.28, 0.095
 TAX_PTS = [(1952, 0.05728), (3904, 0.33510)]
 
 
@@ -103,11 +103,12 @@ def main():
              f'transform="rotate(-90 26 {y0+ph/2:.0f})" text-anchor="middle" '
              f'font-family="sans-serif">alpha (quanto compute vale; log)</text>')
     # faixa alpha da fronteira
-    o.append(f'<rect x="{x0}" y="{Y(A_FRONTIER)-3:.0f}" width="{pw}" height="6" '
-             f'fill="#ff5c5c" opacity="0.35"/>')
-    o.append(f'<text x="{x0+6}" y="{Y(A_FRONTIER)-8:.0f}" fill="#ff5c5c" font-size="10" '
-             f'font-family="sans-serif">alpha tipico da fronteira (~0.05): aqui o mesmo '
-             f'imposto AFUNDA o ganho</text>')
+    for a, c, nm in ((A_CHINCHILLA, "#ffb454", "alpha do eixo de DADOS na Chinchilla (0.28)"),
+                     (A_KAPLAN, "#ff5c5c", "idem em Kaplan (0.095)")):
+        o.append(f'<rect x="{x0}" y="{Y(a)-2:.0f}" width="{pw}" height="4" '
+                 f'fill="{c}" opacity="0.35"/>')
+        o.append(f'<text x="{x0+6}" y="{Y(a)-6:.0f}" fill="{c}" font-size="10" '
+                 f'font-family="sans-serif">{nm} — mesma composicao, ganho muito menor</text>')
     # nossos pontos
     for t, nm in MEAS:
         o.append(f'<circle cx="{X(t):.1f}" cy="{Y(A_OURS):.1f}" r="5" fill="#e6edf3" '
