@@ -10,10 +10,11 @@ cd /home/pauli/autoresearch
 EPY=.venv-numpy/bin/python3
 echo "ecal job=${SLURM_JOB_ID} host=$(hostname) $(date '+%F %H:%M:%S')"
 # repouso: espera o job comecar a contar e mede antes de qualquer carga
-$EPY scripts/energy_run.py idle --seconds 60
+IDLE=$($EPY scripts/energy_run.py idle --seconds 60 | grep -o '"W_mean": [0-9.]*' | cut -d' ' -f2)
+echo "W de repouso: $IDLE"
 BIN=$(ls -t src/build/arch_d96_h6_kv2_l12_v8192_c1024/*/app/train_run | head -1)
 rm -rf /tmp/ecal
-$EPY scripts/energy_run.py run --tag cal/d96_8t --tokens 440000 \
+$EPY scripts/energy_run.py run --tag cal/d96_8t --tokens 440320 --idle-w "$IDLE" \
   --cmd-id "d96 blas 8t" -- \
   env OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FALSE \
   "$BIN" --weights /tmp/mix/init3m --rows /tmp/mix/rows_f0.npy --out /tmp/ecal \
