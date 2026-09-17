@@ -29,6 +29,8 @@ def main():
     only = [x for x in a.only.split(",") if x]
     os.makedirs(a.dst, exist_ok=True)
     n_t = 0
+    import ckio
+    ckio.require_weights(a.src, "rescale_ckpt")
     for f in sorted(os.listdir(a.src)):
         p = os.path.join(a.src, f)
         if f.endswith((".txt", ".json")):

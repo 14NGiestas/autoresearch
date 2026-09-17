@@ -59,7 +59,8 @@ def main():
     ap.add_argument("--json-out", default="")
     a = ap.parse_args()
 
-    files = tensors(a.merge)
+    import ckio
+    files = ckio.require_weights(a.merge, "compose_metrics")
     per = {}
     sq_mean = sq_shard = 0.0
     for f in files:

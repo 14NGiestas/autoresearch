@@ -68,7 +68,10 @@ def avg_dirs(dirs, out, include_opt=True):
     dinamica do otimizador (sem isso cada rodada comeca com passos grandes).
     """
     os.makedirs(out, exist_ok=True)
-    names = [f for f in sorted(os.listdir(dirs[0])) if f.endswith(".npy")]
+    import ckio
+    names = ckio.require_weights(dirs[0], "fedavg/avg_dirs")
+    names = names + [f for f in sorted(os.listdir(dirs[0]))
+                     if f.startswith(("adam_", "muon_")) and f.endswith(".npy")]
     if not include_opt:
         names = [f for f in names if not f.startswith("adam_")]
     for f in names:

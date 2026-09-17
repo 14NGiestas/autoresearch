@@ -48,8 +48,8 @@ if aa and ab and aa != ab:
     print("FALHA: arch.txt dos dois checkpoints não são idênticos -- não misturo.")
     sys.exit(1)
 
-names = sorted(f for f in os.listdir(A)
-               if f.endswith(".npy") and not f.startswith("adam_"))
+import ckio  # guarda de formato (st-only aborta em vez de virar lixo)
+names = ckio.require_weights(A, "merge_checkpoints")
 missing = [f for f in names if not os.path.exists(os.path.join(B, f))]
 if missing:
     print(f"FALHA: {len(missing)} arquivos faltando em {B}: {missing[:3]}")
