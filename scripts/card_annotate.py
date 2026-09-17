@@ -9,6 +9,12 @@ energia, recebe as metricas na linha de comando, e REESCREVE o header do
 model.safetensors com os campos `energy.*`, `eval.*` e `lineage.*` — o card
 passa a viajar dentro do arquivo de pesos, que era o motivo de existir.
 
+Precedencia de energia: se o card JA tem energy.self_measured=1 (o train_run
+mediu a propria energia com o pacote fortran_energy e gravou o delta exato do
+checkpoint), este script NAO sobrescreve NENHUM campo energy.* -- so preenche os
+que faltam (source/attribution/J_per_Mtok). O rateio linear abaixo e o caminho
+para checkpoints antigos, medidos de fora.
+
 Atribuicao de energia (explicita, porque e uma escolha): a energia e medida por
 JOB. O checkpoint recebe J * (passos_do_checkpoint / passos_totais_do_job).
 A potencia e ~constante durante o job (medido: W_mean 40.9 W, pico 62 W no
@@ -93,10 +99,54 @@ def main():
     before = payload_hashes(tensors)
 
     new = dict(meta or {})
+    card = {}
+    try:
+        card = json.loads(new.get("card", "{}"))
+    except (ValueError, TypeError):
+        card = {}
+    card_energy = card.get("energy") or {}
+    # AUTOMEDICAO: o train_run mede a propria energia (pacote fortran_energy) e
+    # grava no card o delta EXATO entre o save anterior e este. Quando o card diz
+    # energy.self_measured=1 essa medida tem precedencia sobre tudo que este script
+    # faria (ledger ou --joules): o rateio linear por job e uma APROXIMACAO, e
+    # sobrescrever o exato pelo aproximado seria andar para tras. Nesse caso NAO
+    # sobrescrevemos NENHUM campo energy.* -- so preenchemos o que estiver faltando.
+    self_measured = (str(new.get("energy.self_measured", "")) == "1" or
+                     str(card_energy.get("self_measured", "")) == "1")
     energy = {}
     j = a.joules
     src = "cli"
-    if j is None and a.tag:
+    if self_measured:
+        if a.joules is not None or a.tag:
+            print("  aviso: card tem energy.self_measured=1 — ignorando --joules/--tag "
+                  "(a medida do processo tem precedencia)", flush=True)
+        filled = []
+
+        def fill_missing(key, value):
+            # Valores do __metadata__ sao SEMPRE string no safetensors (o writer
+            # faz json_escape em cada um): numero tem que virar texto aqui, senao
+            # o write morre no meio com 'float object is not iterable'.
+            if f"energy.{key}" not in new:
+                new[f"energy.{key}"] = value if isinstance(value, str) else json.dumps(value)
+                filled.append(key)
+
+        fill_missing("source", "self")
+        fill_missing("attribution", "auto-medida pelo processo (delta exato desde o "
+                                    "save anterior)")
+        # J/Mtok do checkpoint, dos numeros do PROPRIO card (nunca do ledger)
+        try:
+            jj = float(new.get("energy.J", card_energy.get("J", "nan")))
+            tok = float(card.get("tokens") or 0)
+            if tok > 0 and jj == jj:
+                fill_missing("J_per_Mtok", round(jj / (tok / 1e6), 1))
+        except (ValueError, TypeError):
+            pass
+        n_kept = len([k for k in new if k.startswith("energy.")]) - len(filled)
+        print(f"  energia AUTO-MEDIDA (energy.self_measured=1): {n_kept} campos "
+              f"energy.* preservados, {len(filled)} preenchidos "
+              f"({', '.join(filled) if filled else 'nenhum'}) — nada sobrescrito",
+              flush=True)
+    elif j is None and a.tag:
         row = ledger_row(a.ledger, a.tag)
         if row is None:
             print(f"  aviso: tag '{a.tag}' nao esta em {a.ledger} (energia fica vazia)",
@@ -110,7 +160,7 @@ def main():
             energy["job"] = a.tag
             if row.get("J_domains"):
                 energy["J_domains"] = row["J_domains"]
-    if j is not None:
+    if not self_measured and j is not None:
         frac = 1.0
         if a.steps and a.total_steps:
             frac = a.steps / a.total_steps
@@ -123,7 +173,6 @@ def main():
         energy["source"] = src
         # J/token do checkpoint, usando os tokens que o propio card declara
         try:
-            card = json.loads(new.get("card", "{}"))
             tok = float(card.get("tokens") or 0)
             if tok > 0:
                 energy["J_per_Mtok"] = round(energy["J"] / (tok / 1e6), 1)
@@ -155,7 +204,9 @@ def main():
           f"{len([k for k in new if k.startswith(('energy.', 'eval.', 'lineage.'))])} "
           f"campos de card")
     if "energy.J" in new:
-        print(f"  energia: J={new['energy.J']} J_per_Mtok={new.get('energy.J_per_Mtok','-')} "
+        who = "auto-medida" if self_measured else f"externa ({new.get('energy.source', '?')})"
+        print(f"  energia ({who}): J={new['energy.J']} "
+              f"J_per_Mtok={new.get('energy.J_per_Mtok','-')} "
               f"({new.get('energy.attribution','')})")
     if a.sidecar:
         sc = os.path.join(a.ckpt, "card.json")

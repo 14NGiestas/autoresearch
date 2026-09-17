@@ -142,6 +142,9 @@ def main():
         # Data-parallel: todos veem o MESMO pool (7812 linhas, mesma distribuicao),
         # cada worker com fase diferente -> dentro de uma rodada os K lotes sao
         # partes distintas do mesmo stream, que e o que sincronizar sabe agregar.
+        # start_row avanca a cada rodada (r*tau): sem isso o worker replaya as
+        # MESMAS linhas em todas as rodadas, o que nao e data-parallel nem
+        # federado -- e um terceiro experimento (mais epocas no mesmo subconjunto).
         nt_k, st_k = NFULL, lambda k: k * a.phase
     else:
         nt_k, st_k = slice_sz, lambda k: k * slice_sz
@@ -167,7 +170,7 @@ def main():
             wdir = os.path.join(a.out, f"r{r}_w{k}")
             cmd = [train, "--weights", common if r == 0 else ck, "--rows", a.rows,
                    "--out", wdir, "--nsteps", str(a.tau), "--lr", str(a.lr),
-                   "--ntrain", str(nt_k), "--start_row", str(st_k(k)),
+                   "--ntrain", str(nt_k), "--start_row", str(st_k(k) + r * a.tau),
                    "--nval", "1", "--val_every", "9999999", "--trn_probe", "1",
                    "--save_every", str(a.tau), "--attn", "blas",
                    "--bytes", os.path.expanduser(
