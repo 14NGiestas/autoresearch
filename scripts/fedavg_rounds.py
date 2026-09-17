@@ -123,6 +123,11 @@ def main():
     ap.add_argument("--holdout", default="/tmp/mix/rows_holdout.npy")
     ap.add_argument("--out", required=True)
     ap.add_argument("--anneal", action="store_true")
+    ap.add_argument("--regime", default="federated", choices=("federated", "parallel"),
+                    help="federated = fatias disjuntas (FL); parallel = MESMA distribuicao "
+                         "com fase/ordem diferente por worker (data-parallel emulado)")
+    ap.add_argument("--phase", type=int, default=39,
+                    help="deslocamento de start_row entre workers no regime parallel")
     ap.add_argument("--no-eval", action="store_true")
     a = ap.parse_args()
 
@@ -133,8 +138,16 @@ def main():
     env = dict(os.environ, OMP_NUM_THREADS="8", OPENBLAS_NUM_THREADS="8",
                OMP_DYNAMIC="FALSE")
     slice_sz = NFULL // a.k
+    if a.regime == "parallel":
+        # Data-parallel: todos veem o MESMO pool (7812 linhas, mesma distribuicao),
+        # cada worker com fase diferente -> dentro de uma rodada os K lotes sao
+        # partes distintas do mesmo stream, que e o que sincronizar sabe agregar.
+        nt_k, st_k = NFULL, lambda k: k * a.phase
+    else:
+        nt_k, st_k = slice_sz, lambda k: k * slice_sz
     total = a.k * a.rounds * a.tau
-    print(f"K={a.k} tau={a.tau} R={a.rounds} lr={a.lr:g} anneal={a.anneal}")
+    print(f"K={a.k} tau={a.tau} R={a.rounds} lr={a.lr:g} anneal={a.anneal} "
+          f"regime={a.regime}")
     print(f"  passos/worker={a.rounds*a.tau} (wall-clock)  compute={total} passos")
     print(f"  baseline justo: run unico de {total} passos")
 
@@ -154,7 +167,7 @@ def main():
             wdir = os.path.join(a.out, f"r{r}_w{k}")
             cmd = [train, "--weights", common if r == 0 else ck, "--rows", a.rows,
                    "--out", wdir, "--nsteps", str(a.tau), "--lr", str(a.lr),
-                   "--ntrain", str(slice_sz), "--start_row", str(k * slice_sz),
+                   "--ntrain", str(nt_k), "--start_row", str(st_k(k)),
                    "--nval", "1", "--val_every", "9999999", "--trn_probe", "1",
                    "--save_every", str(a.tau), "--attn", "blas",
                    "--bytes", os.path.expanduser(
