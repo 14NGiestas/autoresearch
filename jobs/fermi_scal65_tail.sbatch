@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH -J scal65tail
 #SBATCH -c 8
-#SBATCH --mem 8G
 #SBATCH -t 01:00:00
 #SBATCH -o /home/pauli/autoresearch/logs/scal65tail_%j.log
 # Repoe os DOIS ultimos pontos da curva do job 103, que morreram em OOM quando o
