@@ -140,11 +140,11 @@ def main():
         segs.append((xb * 0.75, sl))
     p3 = []
     for t, sl in segs:
-        x, y = X3(t), Y3(sl)
+        x, y = X3(t * 1e6), Y3(sl)
         p3.append(f"{x:.1f},{y:.1f}")
     o3.append(f'<polyline points="{" ".join(p3)}" fill="none" stroke="#5ec8ff" stroke-width="1.6"/>')
     for t, sl in segs:
-        x, y = X3(t), Y3(sl)
+        x, y = X3(t * 1e6), Y3(sl)
         o3.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="#5ec8ff"/>')
         o3.append(f'<text x="{x:.1f}" y="{y-9:.1f}" fill="#8b949e" font-size="9" '
                   f'text-anchor="middle" font-family="sans-serif">{sl:.3f}</text>')
