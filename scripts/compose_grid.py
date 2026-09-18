@@ -129,7 +129,15 @@ class Lab:
         return os.path.join(d, f"step_{nsteps}")
 
     def merge(self, dirs, tag, alpha=None):
-        """Media exata: encadeado com peso 1/k (nao 0.5 fixo)."""
+        """Media UNIFORME exata.
+
+        ATENCAO a convencao do merge_checkpoints: m = ALPHA*A + (1-ALPHA)*B, ou
+        seja ALPHA pondera o PRIMEIRO argumento. Para a cadeia dar pesos iguais, o
+        peso do acumulador tem de ser k/(k+1) -- com 1/k (o que este arquivo fazia)
+        o resultado vira [1/24,1/24,4/24,18/24] em K=4 e 0.875 no ultimo shard em
+        K=8: quase um shard so. Corrigido em 2026-09-18; os merges ja gravados
+        foram recomputados por scripts/exact_mean.py.
+        """
         d = os.path.join(self.out, tag)
         if os.path.exists(os.path.join(d, "arch.txt")):
             return d
@@ -146,7 +154,7 @@ class Lab:
             shutil.rmtree(tmp, ignore_errors=True)
             subprocess.run([sys.executable,
                             os.path.join(REPO, "scripts/merge_checkpoints.py"),
-                            acc, nxt, tmp, "--alpha", str(1.0 / k)],
+                            acc, nxt, tmp, "--alpha", str(k / (k + 1.0))],
                            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
                            check=True)
             acc = tmp
