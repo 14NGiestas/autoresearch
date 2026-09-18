@@ -13,6 +13,9 @@ source-dir = "lib"
 openmp = "*"
 stdlib = "*"
 safetensors = { git = "https://github.com/14NGiestas/safetensors-fortran", tag = "v0.1.1" }
+# Energia/CPU/IO medidos pelo PROPRIO processo (fortran_energy, pacote separado
+# em energy-fortran/). path por enquanto: vira `git = ...` quando for publicado.
+fortran_energy = { path = "../energy-fortran" }
 # NOTE: mfi (14NGiestas/mfi, branch mfi-fpm) was tried 2026-09-07 and
 # reverted the same day: its BLAS interfaces are LP64 (default integer)
 # but nixpkgs OpenBLAS is ILP64 (USE64BITINT) -> SIGFPE in gemm_driver.

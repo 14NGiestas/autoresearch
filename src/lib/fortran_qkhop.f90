@@ -458,13 +458,16 @@ contains
 
 
 
-  subroutine qkhop_ph_bwd(dy, q, k, x, S, dx, dq, dk, w1, w2, w3, &
+  ! Sem workspace do caller: os tres scratches antigos (w1/w2/w3) eram
+  ! intent(out) e SO' zerados -- vestigio de uma versao anterior. O corpo usa
+  ! alocaveis locais. Removidos em 2026-09-18 (o buffer sdsm sozinho custava
+  ! 4,29 GB de RSS em T=1024 por causa de um G%T a mais na dimensao).
+  subroutine qkhop_ph_bwd(dy, q, k, x, S, dx, dq, dk, &
       B, T, H, K_H, D)
     use iso_c_binding, only: c_int64_t, c_int
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in) :: dy(:), q(:), k(:), x(:), S(:)
     real(wp), intent(out) :: dx(:), dq(:), dk(:)
-    real(wp), intent(out) :: w1(:), w2(:), w3(:)
     integer :: aa, bb, kb, rep, cc, ss, ii, jj
     integer(c_int64_t) :: m, n, kk
     real(wp) :: scale, sdot, dlx
@@ -478,7 +481,6 @@ contains
     allocate (DYc(T,D), dH1(T,D), dSm(T,T), dLb(T,T), KBc(T,D), Qb(T,D))
     allocate (SbT(T,T))
     dx = 0.0_wp; dq = 0.0_wp; dk = 0.0_wp
-    w1 = 0.0_wp; w2 = 0.0_wp; w3 = 0.0_wp
     do aa = 1, B
       do jj = 1, T
         do ii = 1, D

@@ -130,7 +130,14 @@ contains
     ! qualquer tamanho de modelo (medido: d96 4,4 GB e d216 5,3 GB, e o job 110
     ! mostrou que o RSS e' plano, nao vazamento). Corrigido em 2026-09-18:
     ! d96 4,4 GB -> ~0,15 GB. O sqk ao lado ja' usa B*nh*T*T.
-    allocate(tmp%sqk(G%B*G%nh*G%T*G%T), tmp%sh1(BT*DD), tmp%sdh1(BT*DD), tmp%sdsm(G%B*G%T*G%T))
+    ! sqk: scores por cabeca (B*nh*T*T, --attn qkhop).
+    ! sh1/sdh1/sdsm: workspace do caminho MEAN (qkhop_bwd* exige dimensao
+    ! explicita: h1w/dh1w = B*T*D, dSmw = B*T*T). O sdsm estava dimensionado
+    ! como BT*G%T*G%T = 1.073.741.824 floats = 4,29 GB em T=1024 por um G%T a
+    ! mais -- era ele o custo FIXO de ~4 GB de RSS medido nos jobs 110/120
+    ! (d96 4,4 GB, d216 5,3 GB, RSS plano no tempo, logo nao era vazamento).
+    allocate(tmp%sqk(G%B*G%nh*G%T*G%T), tmp%sh1(BT*DD), tmp%sdh1(BT*DD))
+    allocate(tmp%sdsm(BT*G%T))          ! = B*T*T = 4,2 MB em T=1024
     tmp%sqk = 0.0_wp; tmp%sh1 = 0.0_wp; tmp%sdh1 = 0.0_wp; tmp%sdsm = 0.0_wp
     tmp%satt = 0.0_wp; tmp%dPbuf = 0.0_wp; tmp%dSbuf = 0.0_wp; tmp%dkv = 0.0_wp
     tmp%emd  = 0.0_wp; tmp%xn  = 0.0_wp; tmp%sub = 0.0_wp
@@ -383,7 +390,7 @@ contains
             G%nh, G%nkv, G%hd)
         call qkhop_ph_bwd(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
             C%xa(ll*BT*DD+1:), tmp%sqk, tmp%dr(1:BT*DD), tmp%dq, tmp%dk, &
-            tmp%sh1, tmp%sdh1, tmp%sdsm, G%B, G%T, G%nh, G%nkv, G%hd)
+            G%B, G%T, G%nh, G%nkv, G%hd)
       else if (useqk) then
         call qkhop_sgemm(C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
             C%xa(ll*BT*DD+1:), tmp%ao, tmp%sqk, tmp%sh1, G%B, G%T, &

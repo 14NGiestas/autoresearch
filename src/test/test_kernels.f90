@@ -976,7 +976,7 @@ contains
     print '(A,E10.3)', "  y err = ", worst
     call check(worst < 2.0e-5_sp, "qkhop_ph_fwd")
     dy = y
-    call qkhop_ph_bwd(dy, q, k, x, S, dx, dq, dk, w1, w2, w3, &
+    call qkhop_ph_bwd(dy, q, k, x, S, dx, dq, dk, &
         QB, QT, QH, QK, QD)
     worst = 0.0_sp
     do i = 1, QB*QT*QD

@@ -57,3 +57,8 @@ tools/
 
 # biblioteca extraida para repo proprio (github.com/14NGiestas/safetensors-fortran)
 safetensors-fortran/
+
+# Projeto fpm MPI (mpi/): build proprio (mpif90) e scratch dos testes
+# (mpi/tests_ddp.sh). O fonte (mpi/fpm.toml, mpi/app/, mpi/tests_*.sh) e' versionado.
+mpi/build/
+mpi/scratch_*/

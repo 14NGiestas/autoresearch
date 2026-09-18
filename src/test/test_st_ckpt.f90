@@ -30,7 +30,7 @@
 ! a falha e `call exit(1)` por desenho, entao nao da para chama-la in-process.
 
 program test_st_ckpt
-  use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32
+  use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32, real64
   use fortran_kinds_mod, only: wp
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
@@ -541,6 +541,15 @@ contains
     call execute_command_line(trim(cmd), exitstat=stat, cmdstat=ios)
     call check(ios == 0 .and. stat /= 0, '--ckpt-format invalido: aborta (exit != 0)')
 
+    ! (g) o card do checkpoint leva a energia AUTO-MEDIDA pelo processo
+    call check_card_energy(evdir//'/step_1')
+
+    ! (h) a trilha de energia (deriva de potencia/cores ao longo do run)
+    call check_energy_trace(evdir//'/energy_trace.csv')
+
+    ! (i) card_annotate.py NAO sobrescreve energia auto-medida
+    call check_annotate_guard(evdir//'/step_1', ROOT//'/annot_self', py)
+
     deallocate (wte, lm, q, k, v, p, fc, p2)
   end subroutine test_train_run_default_path
 
@@ -643,6 +652,190 @@ contains
         ' payloads byte a byte iguais ('//trim(i2s(nbad2))//' diferentes)')
     call r%close()
   end subroutine cmp_st_vs_npy
+
+  ! (g) O card escrito pelo train_run leva a energia medida pelo PROPRIO processo:
+  ! as chaves planas energy.* (convencao que os jobs/card_annotate leem) E o
+  ! objeto "energy" dentro do JSON do card -- as duas com os MESMOS numeros.
+  subroutine check_card_energy(dir)
+    character(*), intent(in) :: dir
+    type(st_reader) :: r
+    character(len=:), allocatable :: msg, v, vj, card
+    logical :: found
+    integer :: stat, nl
+    real(real64) :: j, jtot, tok, jpt, wm, wall, cpu
+
+    call r%open(trim(dir)//'/'//ST_CKPT, stat, msg)
+    if (stat /= st_ok) then
+      call check(.false., 'card de energia: abre '//trim(dir)//'/'//ST_CKPT)
+      return
+    end if
+    call r%meta('energy.self_measured', v, found)
+    call check(found .and. trim(v) == '1', 'card: energy.self_measured = 1')
+    j = -1.0_real64
+    call r%meta('energy.J', vj, found)
+    if (found) read (vj, *, iostat=stat) j
+    call check(found .and. stat == 0 .and. j > 0.0_real64, &
+        'card: energy.J > 0 ('//trim(vj)//' J)')
+    jtot = 0.0_real64
+    call r%meta('energy.J_total', v, found)
+    if (found) read (v, *, iostat=stat) jtot
+    call check(found .and. jtot >= j, 'card: energy.J_total >= energy.J')
+    tok = 0.0_real64
+    call r%meta('energy.tokens', v, found)
+    if (found) read (v, *, iostat=stat) tok
+    call check(found .and. tok > 0.0_real64, 'card: energy.tokens > 0 (tokens do intervalo)')
+    jpt = -1.0_real64
+    call r%meta('energy.J_per_tok', v, found)
+    if (found) read (v, *, iostat=stat) jpt
+    call check(found .and. abs(jpt - j/tok) < 1.0e-6_real64*jpt, &
+        'card: energy.J_per_tok = J/tokens')
+    wall = 0.0_real64
+    wm = -1.0_real64
+    call r%meta('energy.wall_s', v, found)
+    if (found) read (v, *, iostat=stat) wall
+    call r%meta('energy.W_mean', v, found)
+    if (found) read (v, *, iostat=stat) wm
+    call check(wall > 0.0_real64 .and. abs(wm*wall - j) < 1.0e-3_real64*j, &
+        'card: energy.W_mean = J/wall_s')
+    cpu = -1.0_real64
+    call r%meta('energy.cpu_s', v, found)
+    if (found) read (v, *, iostat=stat) cpu
+    call check(cpu >= 0.0_real64, 'card: energy.cpu_s >= 0')
+    call r%meta('energy.kind', v, found)
+    call check(found .and. (trim(v) == 'counter' .or. trim(v) == 'power' .or. &
+               trim(v) == 'none'), 'card: energy.kind em {counter,power,none}')
+    call r%meta('energy.sensor', v, found)
+    nl = len_trim(v)
+    call check(found .and. nl > 0, 'card: energy.sensor preenchido ('//trim(v)//')')
+    call r%meta('card', card, found)
+    call check(found .and. index(card, '"energy":{') > 0 .and. &
+               index(card, '"self_measured":"1"') > 0, &
+        'card: objeto "energy" dentro do JSON do card')
+    call check(found .and. index(card, '"J":'//trim(vj)) > 0, &
+        'card: energy.J identico no card e no energy.J plano (nao divergem)')
+    call r%close()
+  end subroutine check_card_energy
+
+  ! (h) Trilha de energia: cabecalho + uma linha por log_every, com watts
+  ! plausivel. E o que permite ver deriva termica/throttling ao longo do run.
+  subroutine check_energy_trace(path)
+    character(*), intent(in) :: path
+    character(len=:), allocatable :: txt, first
+    integer :: nl, i, i0, i1, ios
+    integer :: itstep, itok
+    real(real64) :: jp, w, cb
+
+    call check(file_exists(path), 'trilha de energia: arquivo existe')
+    if (.not. file_exists(path)) return
+    txt = slurp(path)
+    call check(index(txt, 'tstep,tokens,J_phase,watts,cores_busy') == 1, &
+        'trilha: cabecalho tstep,tokens,J_phase,watts,cores_busy')
+    nl = 0
+    do i = 1, len(txt)
+      if (txt(i:i) == achar(10)) nl = nl + 1
+    end do
+    call check(nl >= 2, 'trilha: cabecalho + >=1 linha (1 step, log_every=1)')
+    i0 = index(txt, achar(10)) + 1
+    i1 = index(txt(i0:), achar(10))
+    if (i1 > 0) then
+      first = txt(i0:i0 + i1 - 2)
+      itstep = -1
+      itok = -1
+      jp = -1.0_real64
+      w = -1.0_real64
+      cb = -1.0_real64
+      read (first, *, iostat=ios) itstep, itok, jp, w, cb
+      call check(ios == 0 .and. itstep == 1 .and. itok > 0 .and. jp > 0.0_real64 &
+                 .and. w >= 0.0_real64 .and. w <= 500.0_real64 .and. cb >= 0.0_real64, &
+          'trilha: 1a linha plausivel (tstep=1, J>0, 0<=W<=500) — '//trim(first))
+    else
+      call check(.false., 'trilha: linha de dados ausente')
+    end if
+  end subroutine check_energy_trace
+
+  ! (i) card_annotate.py com um card AUTO-MEDIDO: energia externa (--joules) e
+  ! rateio linear NAO entram; eval.*/lineage.* entram; so o que falta e'criado.
+  subroutine check_annotate_guard(src_dir, dst_dir, py)
+    character(*), intent(in) :: src_dir, dst_dir, py
+    type(st_reader) :: r
+    character(len=:), allocatable :: msg, v, vj, cmd, script
+    logical :: found
+    integer :: stat, ios
+
+    ! O script e achado AQUI (nao vem de fora): na secao 8 a variavel `script` ja
+    ! aponta para test_ckio.py depois da bateria de ferramentas.
+    script = find_script([character(len=48) :: '../scripts/card_annotate.py', &
+                          'scripts/card_annotate.py', &
+                          '../../scripts/card_annotate.py'])
+    if (len(script) == 0) then
+      print '(A)', '  skip  scripts/card_annotate.py nao encontrado'
+      return
+    end if
+    call wipe(dst_dir)
+    call check(mkdir_p(dst_dir) == 0, 'guard: mkdir do checkpoint anotado')
+    call execute_command_line('cp '//trim(src_dir)//'/'//ST_CKPT//' '// &
+        trim(dst_dir)//'/'//ST_CKPT, exitstat=stat, cmdstat=ios)
+    call r%open(trim(src_dir)//'/'//ST_CKPT, stat, msg)
+    if (stat /= st_ok) then
+      call check(.false., 'guard: abre o checkpoint de origem')
+      return
+    end if
+    call r%meta('energy.J', vj, found)
+    call r%close()
+    if (.not. found) then
+      call check(.false., 'guard: origem sem energy.J (nao da para testar)')
+      return
+    end if
+    ! --joules 999999 e o rateio linear: se o guard nao existisse, energy.J
+    ! viraria o numero do job e energy.J_job apareceria no card.
+    cmd = trim(py)//' '//trim(script)//' --ckpt '//abs_path(dst_dir)// &
+          ' --joules 999999 --steps 1 --total-steps 1 --eval bpb=2.147'// &
+          ' --lineage parent=ckpt_xyz --note "guard self_measured"'// &
+          ' >'//ROOT//'/annot.log 2>&1'
+    call execute_command_line(trim(cmd), exitstat=stat, cmdstat=ios)
+    call check(ios == 0 .and. stat == 0, 'guard: card_annotate roda (exit 0)')
+    if (ios /= 0 .or. stat /= 0) return
+    call r%open(trim(dst_dir)//'/'//ST_CKPT, stat, msg)
+    if (stat /= st_ok) then
+      call check(.false., 'guard: abre o checkpoint anotado')
+      return
+    end if
+    call r%meta('energy.J', v, found)
+    call check(found .and. trim(v) == trim(vj), &
+        'guard: energy.J preservado ('//trim(v)//' == '//trim(vj)//')')
+    call r%meta('energy.self_measured', v, found)
+    call check(found .and. trim(v) == '1', 'guard: energy.self_measured continua 1')
+    call r%meta('energy.J_job', v, found)
+    call check(.not. found, 'guard: energy.J_job NAO foi criado (rateio nao entrou)')
+    call r%meta('energy.source', v, found)
+    call check(found .and. trim(v) == 'self', 'guard: energy.source = self')
+    call r%meta('energy.attribution', v, found)
+    call check(found .and. index(v, 'auto-medida') > 0, &
+        'guard: energy.attribution diz que a medida e do processo')
+    call r%meta('energy.J_per_Mtok', v, found)
+    call check(found .and. len_trim(v) > 0, 'guard: energy.J_per_Mtok preenchido (faltava)')
+    call r%meta('eval.bpb', v, found)
+    call check(found .and. trim(v) == '2.147', 'guard: eval.bpb anotado')
+    call r%meta('lineage.parent', v, found)
+    call check(found .and. trim(v) == 'ckpt_xyz', 'guard: lineage.parent anotado')
+    call r%close()
+  end subroutine check_annotate_guard
+
+  ! Arquivo inteiro como string (a trilha de energia e texto pequeno). Usa o
+  ! read_file em bytes que o resto do teste ja usa: ler linha a linha com buffer
+  ! de 1 caractere perderia o resto de cada linha.
+  function slurp(path) result(txt)
+    character(*), intent(in) :: path
+    character(len=:), allocatable :: txt
+    integer(int8), allocatable :: b(:)
+    integer(int64) :: n
+    integer :: i
+    call read_file(path, b, n)
+    allocate (character(len=int(n)) :: txt)
+    do i = 1, int(n)
+      txt(i:i) = achar(iand(int(b(i), int32), 255))
+    end do
+  end function slurp
 
   ! Um par (tensor canonico no .st, payload do .npy) -- incrementa os contadores.
   subroutine cmp_one(r, name, npypath, nbad, ncmp)

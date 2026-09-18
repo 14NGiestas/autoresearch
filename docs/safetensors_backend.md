@@ -420,3 +420,227 @@ checkpoint real (cobertos no sintético) justamente para não inflar a suíte.
 * Os jobs `compose`/`fedavg` de ponta a ponta (não executei nenhum job).
 * `merge_checkpoints.py`: consumidores do `manifest.json` (nada mudou no formato
   do manifest, mas não há teste deles).
+
+---
+
+# Fase 3 — energia auto-medida dentro do checkpoint (pacote `fortran-energy`)
+
+Escopo: **ligar** o pacote fpm `fortran-energy` (diretório `energy-fortran/`, pacote
+próprio — não código solto no trainer) ao trainer, para que cada checkpoint carregue
+a energia que o **próprio processo** mediu, em vez de o `card_annotate.py` ratear
+depois a energia do job. É o entregável 2 da primeira mensagem de energia.
+
+Regras respeitadas: só arch default (d216), `set_arch.sh` não rodado, d96 não
+reconstruída (job 89 rodando), nada escrito sob `/tmp`, nenhum treino longo (dois
+passos de 1 step em scratch + os 1-step da própria suíte), nenhum commit.
+
+## 1. O que foi ligado
+
+| Arquivo | Mudança |
+|---|---|
+| `src/fpm.toml` | `fortran_energy = { path = "../energy-fortran" }` (vira `git = ...` quando o pacote for publicado) |
+| `src/app/train_run.f90` | `energy_init()` depois do parse; `energy_mark('setup')` antes do loop; `energy_mark('ate_save', tokens=...)` + `energy_mark('ckpt')` em **cada** save (`step_*` e `best/`); `energy_peek` + `energy_watts()` em cada `log_every` para a trilha; `energy_report()`/`energy_report_json()` no fim |
+| `src/lib/load_weights.f90` | `save_gpt_weights_st(..., energy=)`: escreve o objeto `energy` **dentro do card** e as **mesmas** quantidades como chaves planas `energy.*` do `__metadata__` |
+| `scripts/card_annotate.py` | com `energy.self_measured=1` **não sobrescreve nenhum** `energy.*`; só preenche o que falta e continua anotando `eval.*`/`lineage.*` |
+| `energy-fortran/` | ganhou `energy_peek(iv)` (leitura **não destrutiva** do intervalo) e o contexto do run (`j_total`, `sensor`, `scope`, `kind`, `self_measured`) dentro do próprio `energy_interval_t` |
+| `src/test/test_st_ckpt.f90` | seção 8 ganhou 24 checagens: card de energia, trilha e guarda do annotate |
+
+### 1.1 Por que `energy_peek` (decisão)
+
+A trilha quer "quanto desde o último save" a cada `log_every`, **sem** mexer no delta
+que o checkpoint vai reportar. `energy_interval()` avança a base (é destrutivo, de
+propósito), então o pacote ganhou o gêmeo somente-leitura: `energy_peek()` devolve o
+mesmo `energy_interval_t` sem consumir o intervalo. Sem isso a trilha teria que
+subtrair à mão, e o delta do checkpoint viraria o intervalo do último log.
+
+### 1.2 O que exatamente vai para o card
+
+Treze chaves planas (`energy.J`, `energy.J_total`, `energy.J_per_tok`,
+`energy.W_mean`, `energy.cpu_s`, `energy.cpu_pct`, `energy.cores_busy`,
+`energy.wall_s`, `energy.tokens`, `energy.sensor`, `energy.scope`, `energy.kind`,
+`energy.self_measured`) **e** o mesmo conteúdo como objeto `energy` dentro do JSON do
+`card`. Um único formatador (`rnum`, `ES15.8E2`) alimenta os dois: o teste confere que
+a string de `energy.J` é idêntica nos dois lugares (não podem divergir).
+
+Semântica: `energy.J` é o delta **exato** entre o save anterior e este (não o total do
+job), `energy.J_total` é o run até aqui, `energy.tokens` são os tokens **do
+intervalo** (`B*TT*passos desde o save anterior`) e `energy.J_per_tok = J/tokens`. No
+`best/` que cai no mesmo `tstep` de um `step_*`, `tokens=0` e `J_per_tok=0` — que é o
+honesto: aquele save não treinou nada de novo (ver §4.3).
+
+## 2. Evidência
+
+### 2.1 Suítes
+
+```
+$ fortran-fpm test            (em src/, arch d216)
+  test_kernels   ... ===0 failures ===
+  test_st_ckpt   ... ===0 failures ===        (18,6 s, inclui 2 passos reais de 1 step)
+  # 24 checagens novas na seção 8: card 12, trilha 3, guarda 9
+
+$ fortran-fpm test            (em energy-fortran/)
+  ===0 failures ===           (58 checagens, 0,4 s, roda sem sensor)
+```
+
+Compilação estrita dos dois arquivos tocados
+(`-Wall -Wextra -Wcharacter-truncation -Wsurprising`): **zero** avisos vindos do código
+novo (os avisos que aparecem são pré-existentes, em `check_declared_arch` e
+`rotate_ckpts`).
+
+### 2.2 Card de um checkpoint real escrito pelo trainer
+
+Checkpoint `step_1` do run de 1 step que a própria suíte faz (pesos/rows sintéticos,
+mesma arquitetura compilada, `--attn blas`):
+
+```
+energy.J          = 4.84195889E+01      (delta desde o save anterior = desde o setup)
+energy.J_total    = 7.86317819E+01      (run)
+energy.J_per_tok  = 4.72847548E-02
+energy.W_mean     = 3.21077557E+01      (= J/wall_s do intervalo)
+energy.cpu_s      = 5.57000000E+00
+energy.cpu_pct    = 9.23387639E+01
+energy.cores_busy = 3.69355056E+00
+energy.wall_s     = 1.50803405E+00
+energy.tokens     = 1.02400000E+03
+energy.sensor     = /sys/class/hwmon/hwmon7/power1_input [amdgpu]
+energy.scope      = amdgpu (instantaneous power in uW, integrated by trapezoid)
+energy.kind       = power
+energy.self_measured = 1
+```
+
+e, no `card` (o JSON do `__metadata__`, truncado no fim):
+
+```json
+{"steps":1,"lr":1.50000007E-04,"tokens":1024,"rows_file":"...","metrics":{},
+ "energy":{"J":4.84195889E+01,"J_total":7.86317819E+01,"J_per_tok":4.72847548E-02,
+           "W_mean":3.21077557E+01,"cpu_s":5.57000000E+00,"cpu_pct":9.23387639E+01,
+           "cores_busy":3.69355056E+00,"wall_s":1.50803405E+00,"tokens":1.02400000E+03,
+           "sensor":"/sys/class/hwmon/hwmon7/power1_input [amdgpu]",
+           "scope":"amdgpu (instantaneous power in uW, integrated by trapezoid)",
+           "kind":"power","self_measured":"1"}}
+```
+
+Custo: 13 chaves = **412 bytes** de metadata (+361 no card) num arquivo de
+**38.050.512 bytes** — 0,001 %. Os payloads não mudam: a checagem "st x npy: 74
+payloads byte a byte iguais" continua verde.
+
+### 2.3 Trilha de energia (`/outdir/energy_trace.csv`)
+
+Run de 1 step da suíte:
+
+```
+tstep,tokens,J_phase,watts,cores_busy
+1,1024,48.4144,25.4159,3.6938
+```
+
+Run de 2 passos em scratch (`--save_every 1 --val_every 1 --ntrain 1 --nval 1`,
+`--attn naive` de propósito, para exercitar `step_*` e `best/` no mesmo run):
+
+```
+tstep,tokens,J_phase,watts,cores_busy
+1,1024,786.7465,28.8271,3.3762
+2,1024,790.9698,32.1832,3.2339
+
+step_1/  energy.J=786.7521  J_total=809.8126  tokens=1024  J_per_tok=0.7683   W_mean=29.68
+step_2/  energy.J=790.9758  J_total=1713.0249 tokens=1024  J_per_tok=0.7724   W_mean=32.56
+best/    energy.J=106.6582  J_total=919.2360  tokens=0     J_per_tok=0        W_mean=29.70
+```
+
+`J_phase` da trilha e `energy.J` do card batem (48,41 vs 48,41; 786,7 vs 786,8) — a
+diferença é o instante da medida (peek no log vs mark no save). O `best/` só fecha o
+intervalo da validação + snapshot: `tokens=0`.
+
+Relatório final do mesmo run (`energy_report()` no log do job):
+
+```
+energy total J=1859.7319 wall_s=59.8734 cpu_s=191.6800 cpu_pct=80.04 cores_busy=3.2014 rd_mb=0.0000 wr_mb=342.5976 kind=power sensor="/sys/class/hwmon/hwmon7/power1_input [amdgpu]" ...
+energy phase=setup    n=1 J=23.0605 wall_s=1.5787 cpu_s=1.5800 J_per_tok=0
+energy phase=ate_save n=3 J=1684.3861 wall_s=54.3964 cpu_s=178.8100 J_per_tok=0.8225
+energy phase=ckpt     n=3 J=8.6206 wall_s=0.2700 cpu_s=0.3200 wr_mb=342.5894
+energy phase=final    n=1 J=143.6563 wall_s=3.6272 cpu_s=10.9700
+```
+
+O que os números dizem: com attention naive, dois passos custam 1,86 kJ e **80 % da
+energia vai para `ate_save`** (treino), com o checkpoint custando 8,6 J para escrever
+342 MB (page cache; `ckpt` é 0,5 % do run). O `final` (limpeza/dealocação depois do
+último save) custa 143 J — é exatamente o tipo de número que só existe quando a
+medida é interna.
+
+### 2.4 `card_annotate.py` respeita a medida do processo
+
+Sobre uma **cópia** do `step_1` real, passando energia externa errada de propósito
+(`--joules 999999 --steps 1 --total-steps 1`, que sem guarda viraria
+`energy.J = 999999` e criaria `energy.J_job`):
+
+```
+  aviso: card tem energy.self_measured=1 — ignorando --joules/--tag (a medida do processo tem precedencia)
+  energia AUTO-MEDIDA (energy.self_measured=1): 13 campos energy.* preservados,
+          3 preenchidos (source, attribution, J_per_Mtok) — nada sobrescrito
+card_annotate: model.safetensors — 74 tensores intactos, 19 campos de card
+  energia (auto-medida): J=7.86752100E+02 J_per_Mtok=768312.6 (auto-medida pelo processo ...)
+```
+
+Antes → depois: `energy.J`, `J_total`, `J_per_tok`, `W_mean`, `cpu_s`, `cpu_pct`,
+`cores_busy`, `wall_s`, `tokens`, `sensor`, `scope`, `kind`, `self_measured` **todos
+byte a byte iguais**; `energy.J_job` **não** aparece; e `eval.bpb=2.147`,
+`eval.H2=0.11`, `lineage.parent=ckpt_xyz` entram normalmente. Tudo isso é checado pela
+suíte (guarda: 9 checagens).
+
+O caminho antigo continua igual (checkpoint sem `self_measured`, medido de fora):
+
+```
+$ card_annotate.py --ckpt <st sem energia> --joules 1000 --steps 1 --total-steps 2
+  energia (externa (cli)): J=500.0 J_per_Mtok=69754.5 (J_job x 1/2 (rateio linear por passo))
+  energy.J = 500.0   energy.J_job = 1000.0   energy.source = cli
+```
+
+### 2.5 Auto-relato puro, sem trainer (`energy-fortran`, `fpm run --example measure_run`)
+
+```
+scope : amdgpu (instantaneous power in uW, integrated by trapezoid)
+work: J=1.2047 J/token=.001177 W_mean=24.2060 cpu_s=.0500 cores_busy=1.0046
+energy total J=1.4687 wall_s=0.0634 cpu_s=0.0600 cpu_pct=94.63 cores_busy=0.9463 rd_mb=0.0000 wr_mb=16.0031 kind=power ...
+energy phase=setup n=1 J=0.1912 wall_s=0.0072 cpu_s=0.0000
+energy phase=work  n=1 J=1.2047 wall_s=0.0498 cpu_s=0.0500 cores_busy=1.0046 J_per_tok=0.0012
+energy phase=io    n=1 J=0.0709 wall_s=0.0048 cpu_s=0.0100 wr_mb=16.0031
+```
+
+(Aqui `cpu_pct` passa de 100 % na fase `io`: o denominador é o número de threads
+**agora**, e o processo teve mais threads num instante da fase. `cores_busy` é a
+medida absoluta e está documentado no README do pacote.)
+
+## 3. Bug encontrado no caminho (pré-existente, latente)
+
+O `__metadata__` do safetensors só aceita **string** (o writer aplica `json_escape`
+em cada valor). O `card_annotate.py` já fazia `json.dumps(v)` para números, mas o
+caminho novo (preencher só o que falta) escrevia `float` cru:
+
+```
+File "safetensors-fortran/tools/reference_writer.py", line 76, in json_escape
+TypeError: 'float' object is not iterable
+```
+
+Era inofensivo porque o caminho antigo sempre passava string; o guard expôs. Corrigido
+no próprio `fill_missing` (numero vira texto com `json.dumps`), e o teste agora
+exercita exatamente esse preenchimento (`energy.J_per_Mtok` nasce ali).
+
+## 4. O que NÃO foi verificado
+
+* **Paridade com instrumento externo** (auto-relato × `scripts/energy_run.py`): é o
+  job 92, submetido pelo usuário — não refiz aqui.
+* **Sensor de contador RAPL de verdade**: nesta máquina
+  `/sys/class/powercap/intel-rapl:0/energy_uj` é `0400 root`, então o caminho ao vivo
+  é o hwmon `amdgpu` (`kind=power`, trapézio). O caminho contador (`kind=counter`,
+  wrap por `max_energy_range_uj`) está coberto só pelo sensor falso do pacote.
+* **d96**: nada foi compilado/rodado na d96 (jobs 86–89 usam aqueles binários).
+* **`--ckpt-format npy`**: sem `model.safetensors` não existe card; a energia desses
+  runs fica só no log (`energy_report`) e na trilha. Não há sidecar de energia para o
+  modo npy (não foi pedido; o card é o lugar).
+* **`--opt muon`**: o caminho `best/` + `muon_state` não foi exercitado com energia
+  (o `save_muon_state` cai dentro da fase `ckpt` e não muda a contabilidade, mas não
+  foi medido).
+* **W_mean como *média* do processo**: com `kind=power` (hwmon) o J é integral por
+  trapézio das amostras; em fases curtas (ms) o erro do trapézio é o do sensor, não
+  do método. Com `kind=counter` (RAPL) é o contador de hardware.
+* **Multi-socket / outro pid / wrap de 32 bits real**: seguem no roadmap do pacote
+  (`energy-fortran/README.md`), não testados aqui.

@@ -21,7 +21,8 @@
 
 program train_run
   use iso_c_binding
-  use, intrinsic :: iso_fortran_env, only: int64
+  use, intrinsic :: iso_fortran_env, only: int64, real64
+  use fortran_energy_mod
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights, &
       save_gpt_weights_st, verify_ckpt_dir
@@ -67,6 +68,13 @@ program train_run
   logical :: attn_blas, attn_qk, attn_qkph, anneal
   character(len=8) :: ckfmt
   integer(int64) :: ck_tokens
+  ! Energia auto-medida (fortran_energy): o card de cada save leva o delta exato
+  ! desde o save anterior; a trilha leva a deriva de potencia/cores.
+  type(energy_interval_t) :: epre, ecard
+  integer(int64) :: e_dtok, e_ptok
+  integer :: last_save, etrace_u, eios
+  logical :: etrace_ok
+  real(real64) :: e_w
   real(sp) :: theta, ang
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
@@ -139,6 +147,13 @@ program train_run
   if (bytesfile == 'BYTES') &
       bytesfile = trim(wdir) // '/../tok_tables/token_bytes.txt'
 
+  ! Auto-medicao (depois do parse: os argumentos acima ja decidiram o run). Sem
+  ! sensor nada quebra: a energia fica 0.0 e cpu_s/cores_busy/IO continuam sendo
+  ! medidos -- ver energy-fortran/README.md.
+  call energy_init()
+  print '(2A)', 'energy sensor: ', energy_sensor()
+  print '(2A)', 'energy scope : ', energy_scope()
+
   ! Pre-create every checkpoint dir NOW (pools cold -> fork-safe).
   ! Mid-run mkdir_p then only ever hits dir_exists -> no fork, no bind(C).
   if (mkdir_p(trim(outdir)) /= 0) then
@@ -148,6 +163,22 @@ program train_run
   if (mkdir_p(trim(outdir) // '/best') /= 0) then
     print '(2A)', 'cannot create best dir: ', trim(outdir)
     call exit(1)
+  end if
+  ! Trilha de energia (tstep,tokens,J_phase,watts,cores_busy) a cada log_every:
+  ! potencia e cores ao longo do run, para ver deriva termica/throttling. O
+  ! J_phase e o acumulado DESDE O ULTIMO SAVE (energy_peek nao consome o
+  ! intervalo), entao a trilha nao mexe no delta que o checkpoint reporta.
+  etrace_u = -1
+  etrace_ok = .false.
+  open (newunit=etrace_u, file=trim(outdir) // '/energy_trace.csv', &
+      status='replace', action='write', iostat=eios)
+  if (eios == 0) then
+    etrace_ok = .true.
+    write (etrace_u, '(A)') 'tstep,tokens,J_phase,watts,cores_busy'
+    flush (etrace_u)
+  else
+    print '(2A)', 'warning: cannot write the energy trace: ', &
+        trim(outdir) // '/energy_trace.csv'
   end if
   do k = 1, nsteps
     if (mod(k, save_every) == 0 .or. k == nsteps) then
@@ -213,6 +244,10 @@ program train_run
   end do
 
   best = huge(1.0_sp)
+  ! Fecha a fase de setup (load de pesos/estado + tabelas): daqui para frente o
+  ! intervalo aberto e o treino que ainda nao foi salvo.
+  call energy_mark('setup')
+  last_save = t0 - 1
   do k = 1, nsteps
     tstep = t0 + k - 1
     ! 2-step linear warmup on run-relative k (overfit-run lesson)
@@ -235,6 +270,16 @@ program train_run
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &
         " lr ", lr_eff
       flush (6)
+      if (etrace_ok) then
+        ! watts = potencia media DESDE A LINHA ANTERIOR (energy_watts mantem o
+        ! proprio estado e nao toca no intervalo do checkpoint).
+        e_w = energy_watts()
+        e_ptok = int(tstep - last_save, int64)*int(B*TT, int64)
+        call energy_peek(epre, e_ptok)
+        write (etrace_u, '(I0,A,I0,A,F0.4,A,F0.4,A,F0.4)') tstep, ',', e_ptok, &
+            ',', epre%j, ',', e_w, ',', epre%cores_busy
+        flush (etrace_u)
+      end if
     end if
     if (mod(k, save_every) == 0 .or. k == nsteps) then
       write (ckdir, '(A,I0)') trim(outdir) // "/step_", tstep
@@ -243,6 +288,14 @@ program train_run
         call exit(1)
       end if
       ck_tokens = int(tstep, int64)*int(B*TT, int64)
+      ! O delta de energia DESTE checkpoint sai da propria API: o mark fecha o
+      ! intervalo aberto no save anterior (tokens do intervalo = B*TT*passos).
+      e_dtok = int(tstep - last_save, int64)*int(B*TT, int64)
+      call energy_mark('ate_save', tokens=e_dtok, iv=ecard)
+      print '(A,I0,A,F0.4,A,F0.4,A,F0.5,A,F0.4)', 'energy ckpt ', tstep, &
+          ' J ', ecard%j, ' J/tok ', ecard%j_per_token, ' W_mean ', ecard%w_mean, &
+          ' cpu_s ', ecard%cpu_s
+      flush (6)
       if (ckfmt == 'npy' .or. ckfmt == 'both') then
         call save_gpt_weights(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
             M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
@@ -250,7 +303,7 @@ program train_run
       if (ckfmt == 'st' .or. ckfmt == 'both') then
         call save_gpt_weights_st(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
             TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
-            M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
+            M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard)
       end if
       call save_adam_state(trim(ckdir), S)
       if (use_muon) call save_muon_state(trim(ckdir), S)
@@ -263,6 +316,10 @@ program train_run
         call exit(1)
       end if
       call rotate_ckpts(trim(outdir), tstep, save_every, keep_last)
+      ! Custo do proprio checkpoint (estado do otimizador + verify + rotate) fica
+      ! numa fase separada: e ele que responde "quanto custa salvar".
+      call energy_mark('ckpt')
+      last_save = tstep
     end if
     if (mod(k, val_every) == 0 .or. k == nsteps) then
       vnll = val_bpb(trim(rowsfile), start_row + ntrain, nval)
@@ -285,6 +342,12 @@ program train_run
           print '(A)', "cannot create best/"
           call exit(1)
         end if
+        ! Delta proprio do best/ (nao reusa o do save do passo): quando os dois
+        ! caem no MESMO tstep o intervalo ja foi fechado pelo mark do step, entao
+        ! aqui sobram a validacao e o snapshot com tokens=0 e J_per_tok=0 -- que e
+        ! o honesto, este save nao treinou nada de novo.
+        e_dtok = int(tstep - last_save, int64)*int(B*TT, int64)
+        call energy_mark('ate_save', tokens=e_dtok, iv=ecard)
         if (ckfmt == 'npy' .or. ckfmt == 'both') then
           call save_gpt_weights(trim(outdir) // "/best", N_LAYER, D, &
               N_HEAD, N_KV, HD, VV, M%wte, M%lm, M%q, M%k, M%v, M%p, &
@@ -293,7 +356,7 @@ program train_run
         if (ckfmt == 'st' .or. ckfmt == 'both') then
           call save_gpt_weights_st(trim(outdir) // "/best", N_LAYER, D, N_HEAD, &
               N_KV, HD, VV, TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
-              M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
+              M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard)
         end if
         call save_adam_state(trim(outdir) // "/best", S)
         if (use_muon) call save_muon_state(trim(outdir) // "/best", S)
@@ -305,11 +368,22 @@ program train_run
           print '(2A)', "best verify failed (disk full?): ", trim(badpath)
           call exit(1)
         end if
+        call energy_mark('ckpt')
+        last_save = tstep
         print '(A)', "new best snapshot"
       end if
       flush (6)
     end if
   end do
+
+  ! Energia do run: as mesmas fases que foram para os cards, mais o total. Sem
+  ! sensor a linha sai com J=0 e os campos de CPU/IO/threads preenchidos.
+  call energy_mark('final')
+  if (etrace_ok) close (etrace_u)
+  print '(A)', ''
+  call energy_report()
+  print '(2A)', 'energy_json ', energy_report_json()
+  flush (6)
 contains
   ! exact val-bpb over nval rows (byte-masked NLL, train.py metric)
   real(sp) function val_bpb(rowsfile, first, nval)

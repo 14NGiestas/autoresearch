@@ -1,0 +1,33 @@
+name = "fortran_gpt_mpi"
+version = "0.1.0"
+license = "MIT"
+author = "autoresearch"
+maintainer = "autoresearch"
+copyright = "Copyright 2026, autoresearch"
+description = "Data-parallel (MPI) driver for the pure-Fortran GPT trainer: all-reduce of gradients (sync grad) or of weight deltas (sync delta), tau = sync_every."
+
+[dependencies]
+# Projeto fpm SEPARADO de proposito: o build MPI nao pode encostar em
+# src/build/arch_* (jobs na fila resolvem o binario na hora da execucao).
+# NOTE: o manifesto do fortran_gpt vive em src/fpm.toml, nao na raiz do repo --
+# por isso o path e "../src" e nao ".." (que apontaria para /home/pauli/autoresearch,
+# sem manifesto). Este projeto fica na raiz (mpi/) para nao entrar no source-scan
+# do fortran_gpt (src/ e app/ do projeto principal).
+fortran_gpt = { path = "../src" }
+
+[build]
+# openblas: o link do manifesto de src/ NAO propaga para o pacote dependente,
+# entao a lib externa e repetida aqui (custa nada, evita undefined reference).
+# mpi: sem o wrapper mpif90, -lmpi e o que liga os simbolos do MPI.
+link = ["openblas", "mpi"]
+# external-modules: o modulo `mpi` vem do MPI instalado, nao do projeto -- sem
+# isto o fpm aborta com "Unable to find source for module dependency: mpi".
+external-modules = ["mpi"]
+
+# [[executable]] explicito: o auto-scan de app/ do fpm 0.13 nao dispara num
+# pacote SEM [library] ("Neither library nor executable found"). Declarar o
+# executavel e' mais chato de digitar e menos magico de depurar.
+[[executable]]
+name = "train_ddp"
+source-dir = "app"
+main = "train_ddp.f90"

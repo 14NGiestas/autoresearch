@@ -21,14 +21,19 @@
 ! (mesma politica do arch.txt, ver check_declared_arch).
 
 module load_weights_mod
-  use, intrinsic :: iso_fortran_env, only: int64, real32
+  use, intrinsic :: iso_fortran_env, only: int64, real32, real64
   use fortran_kinds_mod, only: wp
   use stdlib_io_npy, only: load_npy, save_npy
+  ! O tipo MEDIDO que viaja para o card. Nao existe um tipo espelho aqui: o
+  ! consumidor (train_run) passa o mesmo energy_interval_t que o energy_mark
+  ! devolveu, ja com total/sensor/escopo/kind preenchidos pela API do pacote.
+  use fortran_energy_mod, only: energy_interval_t
   use safetensors, only: st_writer, st_reader, st_ok
   implicit none
 
   ! Nome do arquivo unico e convencao de nomes dos tensores.
   character(*), parameter :: ST_CKPT = 'model.safetensors'
+
 contains
 
   ! Falha alta e unica do modulo (o resto do arquivo ja fazia isso com print+exit).
@@ -47,6 +52,67 @@ contains
     write (buf, '(ES15.8E2)') x
     s = trim(adjustl(buf))
   end function json_real
+
+  ! Um real64 como numero JSON/texto de metadata. UM formatador para os dois
+  ! lugares (o objeto `energy` dentro do card e as chaves planas energy.*): assim
+  ! as duas representacoes do mesmo numero NAO podem divergir.
+  function rnum(x) result(s)
+    real(real64), intent(in) :: x
+    character(len=:), allocatable :: s
+    character(len=40) :: b
+    write (b, '(ES15.8E2)') x
+    s = trim(adjustl(b))
+  end function rnum
+
+  ! `,"energy":{...}` do card (string vazia quando ninguem mediu). Os textos vem do
+  ! fortran_energy (paths de /sys e descricao do escopo), sem aspas nem quebra de
+  ! linha, entao nao precisam de escape.
+  function energy_card_json(energy) result(s)
+    type(energy_interval_t), intent(in), optional :: energy
+    character(len=:), allocatable :: s
+    if (.not. present(energy)) then
+      s = ''
+      return
+    end if
+    s = ',"energy":{"J":'//rnum(energy%j)//',"J_total":'//rnum(energy%j_total)// &
+        ',"J_per_tok":'//rnum(energy%j_per_token)//',"W_mean":'//rnum(energy%w_mean)// &
+        ',"cpu_s":'//rnum(energy%cpu_s)//',"cpu_pct":'//rnum(energy%cpu_pct)// &
+        ',"cores_busy":'//rnum(energy%cores_busy)//',"wall_s":'//rnum(energy%wall_s)// &
+        ',"tokens":'//rnum(energy%tokens)//',"sensor":"'//trim(energy%sensor)// &
+        '","scope":"'//trim(energy%scope)//'","kind":"'//trim(energy%kind)// &
+        '","self_measured":"'//self_flag(energy)//'"}'
+  end function energy_card_json
+
+  ! '1'/'0' -- string porque no __metadata__ do safetensors tudo e string, e o
+  ! card_annotate.py (e qualquer leitor) compara com '1' dos dois lados.
+  function self_flag(energy) result(s)
+    type(energy_interval_t), intent(in) :: energy
+    character(len=1) :: s
+    s = '0'
+    if (energy%self_measured) s = '1'
+  end function self_flag
+
+  ! As MESMAS quantidades como chaves planas do __metadata__ (a convencao que o
+  ! card_annotate.py e os jobs ja leem) + a flag que diz que a energia foi medida
+  ! pelo processo: com energy.self_measured=1 o card_annotate NAO sobrescreve nada.
+  subroutine set_meta_energy(w, energy)
+    type(st_writer), intent(inout) :: w
+    type(energy_interval_t), intent(in), optional :: energy
+    if (.not. present(energy)) return
+    call w%set_meta('energy.self_measured', self_flag(energy))
+    call w%set_meta('energy.J', trim(rnum(energy%j)))
+    call w%set_meta('energy.J_total', trim(rnum(energy%j_total)))
+    call w%set_meta('energy.J_per_tok', trim(rnum(energy%j_per_token)))
+    call w%set_meta('energy.W_mean', trim(rnum(energy%w_mean)))
+    call w%set_meta('energy.cpu_s', trim(rnum(energy%cpu_s)))
+    call w%set_meta('energy.cpu_pct', trim(rnum(energy%cpu_pct)))
+    call w%set_meta('energy.cores_busy', trim(rnum(energy%cores_busy)))
+    call w%set_meta('energy.wall_s', trim(rnum(energy%wall_s)))
+    call w%set_meta('energy.tokens', trim(rnum(energy%tokens)))
+    call w%set_meta('energy.sensor', trim(energy%sensor))
+    call w%set_meta('energy.scope', trim(energy%scope))
+    call w%set_meta('energy.kind', trim(energy%kind))
+  end subroutine set_meta_energy
 
   ! Chave de metadata com valor inteiro (arch.* etc).
   subroutine set_meta_i(w, key, v)
@@ -243,7 +309,7 @@ contains
   ! treina preenche depois; um numero inventado aqui viraria verdade no experimento.
   subroutine save_gpt_weights_st(wdir, n_layer, d_model, n_head, n_kv_head, &
       head_dim, vocab_size, ctx, bos, step, lr, tokens, rowsfile, &
-      wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2)
+      wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2, energy)
     character(*), intent(in) :: wdir, rowsfile
     integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim
     integer, intent(in) :: vocab_size, ctx, bos, step
@@ -252,6 +318,7 @@ contains
     real(wp), intent(in) :: wte(:), lm_head(:)
     real(wp), intent(in) :: c_q(:), c_k(:), c_v(:)
     real(wp), intent(in) :: c_pr(:), c_fc(:), c_pr2(:)
+    type(energy_interval_t), intent(in), optional :: energy
     type(st_writer) :: w
     character(len=:), allocatable :: msg, card, tname
     character(len=16) :: lstr
@@ -287,8 +354,9 @@ contains
     call set_meta_i(w, 'n_tensors', 2 + 6*n_layer)
     card = '{"steps":'//i2c(step)//',"lr":'//json_real(lr)// &
            ',"tokens":'//i8c(tokens)//',"rows_file":"'//trim(rowsfile)// &
-           '","metrics":{}}'
+           '","metrics":{}'//energy_card_json(energy)//'}'
     call w%set_meta('card', card)
+    call set_meta_energy(w, energy)
 
     call w%set('wte', wte)
     call w%set('lm', lm_head)

@@ -55,6 +55,22 @@ bin/hb.sh logs [N]                    # últimos logs dos jobs
   você mata seu shell (aconteceu 3x). Use `pgrep -f '[p]adrao'` e mate por PID.
 - **`du`/mtime de saída do wikiextractor**: ele bufferiza; "arquivo parado" não
   significa processo morto. Confira com `ps`, não pelo mtime.
+- **Loop de shell sobre checkpoints é LEXICOGRÁFICO**: `for d in /tmp/x/step_*`
+  visita 1024, 10240, 11264, … e deixa 4096, 40960 para o fim. Se o job for
+  truncado pelo teto de tempo, o que falta **não é uma cauda contígua — é uma
+  classe lexicográfica** (na reavaliação da curva de 65M isso poria dois pontos
+  fora de qualquer corte por tempo). **Convenção: ordem numérica explícita** —
+  `… | sort -V` (ou `sort -n` sobre os números dos passos). Junto: guardar o
+  diretório contra checkpoint meio-salvo com `[ -f "$d/model.safetensors" ] ||
+  continue` (um diretório de job morto passa no glob, existe, e não tem
+  checkpoint dentro).
+- **Idempotência se mede por COMPLETUDE, não por existência**: `[ -s saida ]`
+  (existe e não-vazio) **aceita arquivo meio-escrito** — um eval interrompido no
+  meio deixa o ponto ruim permanente na curva, e o re-run o pula para sempre.
+  Convenção: o skip exige o conteúdo completo (ex.: `[ "$(wc -l < ev_$s.txt)"
+  -ge 1000 ]`, o número de linhas do holdout), e a escrita é atômica (grava em
+  `saida.tmp` e só então `mv` para o nome final), para que um job morto não
+  deixe parcial com nome definitivo.
 
 ## Nix na halfbeast (instalado 11/set, 22h)
 
