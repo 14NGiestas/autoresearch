@@ -63,6 +63,7 @@ def pick(app, ref):
 
 RESET_MOMENTS = False      # --reset-moments: descarta o estado do Adam na media
 CARRY_OUTER_STATE = False  # --carry-outer-state: leva o estado medio para o passo do outer
+CARRY_PER_WORKER = False   # --carry-per-worker: cada worker guarda os SEUS momentos (sem mediar)
 
 
 def avg_dirs(dirs, out, include_opt=True):
@@ -95,6 +96,28 @@ def avg_dirs(dirs, out, include_opt=True):
                        extra_meta={"op": "fedavg", "K": n,
                                    "dirs": ",".join(os.path.basename(d) for d in dirs)})
     return len(W) + len(S)
+
+
+def per_worker_seeds(avg_dir, workers, prefix):
+    """Pesos MEDIADOS + os momentos do PROPRIO worker k (sem media).
+
+    Isola 'mediar os momentos' (armadilha A/C) de 'carregar os momentos' (armadilha D):
+    os pesos continuam sendo a media, mas o estado do Adam nunca passa pelo
+    servidor. Cada rank recebe de volta o estado com que ele terminou a rodada.
+    """
+    import ckio
+    W = {f: np.asarray(v) for f, v in ckio.load_ckpt_dir(avg_dir).items()}
+    outs = []
+    for k, wsrc in enumerate(workers):
+        st = ckio.load_state(wsrc)
+        if not st:
+            sys.exit(f"carry-per-worker: {wsrc} sem estado de otimizador")
+        od = f"{prefix}{k}"
+        shutil.rmtree(od, ignore_errors=True)
+        ckio.save_ckpt_dir(od, W, state=st, like=avg_dir, op="carry-per-worker",
+                           extra_meta={"op": "per-worker-moments", "rank": k})
+        outs.append(od)
+    return outs
 
 
 def outer_step(prev, avg, u, lr, mu):
@@ -146,6 +169,8 @@ def main():
                     help="descarta o estado do Adam na media (isola warm-restart do efeito do outer)")
     ap.add_argument("--carry-outer-state", action="store_true",
                     help="no caminho --outer, leva o estado MEDIO do Adam para a proxima rodada")
+    ap.add_argument("--carry-per-worker", action="store_true",
+                    help="cada worker carrega os SEUS momentos (pesos mediados, estado nao)")
     ap.add_argument("--outer", default="none", choices=("none", "nesterov"),
                     help="otimizador EXTERNO sobre os parametros sincronizados (DiLoCo): "
                          "g = theta_outer_prev - theta_avg_inner; u = mu*u + g; "
@@ -161,9 +186,10 @@ def main():
     ap.add_argument("--no-eval", action="store_true")
     a = ap.parse_args()
 
-    global RESET_MOMENTS, CARRY_OUTER_STATE
+    global RESET_MOMENTS, CARRY_OUTER_STATE, CARRY_PER_WORKER
     RESET_MOMENTS = a.reset_moments
     CARRY_OUTER_STATE = a.carry_outer_state
+    CARRY_PER_WORKER = a.carry_per_worker
     train = pick("train_run", a.init)
     evb = pick("eval_bpb", a.init)
     hold = np.load(a.holdout, mmap_mode="r")
@@ -210,7 +236,11 @@ def main():
         workers = []
         for k in range(a.k):
             wdir = os.path.join(a.out, f"r{r}_w{k}")
-            cmd = [train, "--weights", common if r == 0 else ck, "--rows", a.rows,
+            if r == 0 or not CARRY_PER_WORKER:
+                wsrc = common if r == 0 else ck
+            else:
+                wsrc = wseed[k]
+            cmd = [train, "--weights", wsrc, "--rows", a.rows,
                    "--out", wdir, "--nsteps", str(a.tau), "--lr", str(a.lr),
                    "--ntrain", str(nt_k),
                    "--start_row", str((r * a.k * a.tau + st_k(k)) % NFULL
@@ -258,6 +288,8 @@ def main():
                                   extra_meta=extra)
             json.dump({k: v.tolist() for k, v in ukeys.items()}, open(ufile, "w"))
             print(f"    outer nesterov: lr={a.outer_lr} mu={a.outer_mom}")
+        if CARRY_PER_WORKER:
+            wseed = per_worker_seeds(nxt, workers, os.path.join(a.out, f"r{r+1}_wseed"))
         common = nxt
         print(f"  rodada {r+1}/{a.rounds}: {n} tensores mediados (com momentos)", flush=True)
         if not a.no_eval:
