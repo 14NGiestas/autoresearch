@@ -180,7 +180,7 @@ def main():
         nt_k, st_k = slice_sz, lambda k: k * slice_sz
     total = a.k * a.rounds * a.tau
     print(f"K={a.k} tau={a.tau} R={a.rounds} lr={a.lr:g} anneal={a.anneal} "
-          f"regime={a.regime}")
+          f"regime={a.regime}", flush=True)
     print(f"  passos/worker={a.rounds*a.tau} (wall-clock)  compute={total} passos")
     print(f"  baseline justo: run unico de {total} passos")
 
@@ -230,7 +230,7 @@ def main():
             json.dump({k: v.tolist() for k, v in ukeys.items()}, open(ufile, "w"))
             print(f"    outer nesterov: lr={a.outer_lr} mu={a.outer_mom}")
         common = nxt
-        print(f"  rodada {r+1}/{a.rounds}: {n} tensores mediados (com momentos)")
+        print(f"  rodada {r+1}/{a.rounds}: {n} tensores mediados (com momentos)", flush=True)
         if not a.no_eval:
             ev = os.path.join(a.out, f"ev_round{r+1}.txt")
             sh([evb, "--weights", nxt, "--rows", a.holdout, "--attn", "blas",
@@ -238,7 +238,7 @@ def main():
             b = bpb_of(ev, hold)
             history.append({"round": r + 1, "steps_per_worker": (r + 1) * a.tau,
                             "bpb": float(b)})
-            print(f"    bpb (holdout) = {b:.5f}")
+            print(f"    bpb (holdout) = {b:.5f}", flush=True)
     if history:
         with open(os.path.join(a.out, "history.json"), "w") as f:
             json.dump({"config": vars(a), "history": history}, f, indent=1)
