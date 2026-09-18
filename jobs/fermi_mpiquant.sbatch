@@ -8,10 +8,10 @@
 # (bpb no mesmo holdout de 300 linhas) e o invariante entre ranks com quantizacao.
 # Default do app continua --sync-fp16 none (bit-exato); aqui e' que se mede o preco.
 #
-# MEMORIA: --mem e' impossivel nesta fermi (slurm.conf reporta RealMemory=1 MB e
-# o sbatch recusa qualquer pedido) -> teto via escopo systemd do usuario, que faz
-# o kernel matar dentro do NOSSO cgroup (CONSTRAINT_MEMCG) em vez de escolher o
-# maior processo do no (o global_oom de 2026-09-18 07:18).
+# MEMORIA: --mem e' impossivel nesta fermi (RealMemory=1 MB no slurm.conf) ->
+# teto via mpi/guard.sh (escopo systemd do usuario), que tambem RELATA peak e
+# memory.events do cgroup e GRITA em morte por memoria (o job 114 morreu mudo com
+# um teto de 4G abaixo da pegada fixa de ~4,4 GB do trainer). Teto aqui: 6G.
 # CONCORRENCIA: nunca em paralelo com run longo -- o portao RE-ENFILEIRA.
 set -u
 cd /home/pauli/autoresearch
@@ -23,11 +23,10 @@ if [ -n "$OTHERS" ]; then
   scontrol requeue "$SLURM_JOB_ID"
   exit 0
 fi
-echo "portao ok: nenhum outro job RUNNING; -c ${SLURM_CPUS_PER_TASK:-?}; teto = escopo systemd 4G"
+echo "portao ok: nenhum outro job RUNNING; -c ${SLURM_CPUS_PER_TASK:-?}"
 
 chmod +x mpi/tests_quant.sh
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-exec systemd-run --user --scope --unit "mpiquant-${SLURM_JOB_ID}" \
-  -p MemoryMax=4G -p MemorySwapMax=0 \
+chmod +x mpi/guard.sh
+exec bash mpi/guard.sh 6G \
   nix develop . --command nix shell nixpkgs#mpich.dev nixpkgs#mpich \
   -c bash mpi/tests_quant.sh

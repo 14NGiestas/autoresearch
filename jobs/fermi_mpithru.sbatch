@@ -6,16 +6,12 @@
 # Throughput do train_ddp com --attn blas (default novo), 4 threads/rank,
 # lotes disjuntos: -n 1 x -n 2 em tau=1 e tau=100 + estatistica do Allreduce.
 #
-# MEMORIA (por que NAO ha --mem aqui): nesta fermi o slurm.conf reporta
-# RealMemory=1 MB (sinfo: RealMemory=1), entao QUALQUER pedido de memoria e'
-# recusado por `sbatch` ("Memory specification can not be satisfied") -- testado
-# com --mem=4G e com --mem-per-cpu=512M. O proprio job 110 do supervisor roda com
-# ReqTRES=mem=1M. E por isso que o OOM de 2026-09-18 07:18 foi global_oom com
-# CONSTRAINT_NONE: nao existe cgroup de memoria para o Slurm cobrar.
-# O substituto, que da' a mesma protecao, e' um escopo systemd do usuario:
-#   systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0 ...
-# Com isso o kernel mata DENTRO do nosso cgroup (CONSTRAINT_MEMCG) em vez de
-# escolher o maior processo do no (que era o train_run alheio).
+# MEMORIA: nesta fermi o slurm.conf reporta RealMemory=1 MB, entao QUALQUER
+# pedido de --mem/--mem-per-cpu e' recusado pelo sbatch (o proprio job 110 do
+# supervisor roda com ReqTRES=mem=1M) e o OOM de 07:18 foi global_oom sem cgroup.
+# O substituto e' mpi/guard.sh (escopo systemd do usuario) que, alem do teto,
+# RELATA peak/eventos do cgroup e GRITA em morte por memoria. Teto 6G: o job 114
+# morreu MUDO com 4G porque a pegada fixa do trainer e' ~4,4 GB.
 #
 # CONCORRENCIA: nunca em paralelo com um run longo. O portao abaixo RE-ENFILEIRA
 # o job enquanto houver outro job RUNNING do usuario -- o teste MPI espera a
@@ -30,10 +26,10 @@ if [ -n "$OTHERS" ]; then
   scontrol requeue "$SLURM_JOB_ID"
   exit 0
 fi
-echo "portao ok: nenhum outro job RUNNING; -c ${SLURM_CPUS_PER_TASK:-?}; teto de memoria = escopo systemd 4G"
+echo "portao ok: nenhum outro job RUNNING; -c ${SLURM_CPUS_PER_TASK:-?}"
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-exec systemd-run --user --scope --unit "mpithru-${SLURM_JOB_ID}" \
-  -p MemoryMax=4G -p MemorySwapMax=0 \
+chmod +x mpi/guard.sh
+exec bash mpi/guard.sh 6G \
   nix develop . --command nix shell nixpkgs#mpich.dev nixpkgs#mpich \
   -c bash mpi/tests_throughput.sh
