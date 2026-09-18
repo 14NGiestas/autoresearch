@@ -47,10 +47,10 @@ while [ $done_ -lt $N ]; do
     esac
   done
   echo "[chunk] passo $((T0+done_))..$((T0+done_+take-1)) start_row=$sr"
-  ( ulimit -v $((VLIM*1024*1024)) 2>/dev/null || true
-    OMP_NUM_THREADS=${OMP_NUM_THREADS:-8} OMP_DYNAMIC=FALSE "$BIN" \
+  OMP_NUM_THREADS=${OMP_NUM_THREADS:-8} OMP_DYNAMIC=FALSE \
+    "$(dirname "$0")/memguard.sh" ${VLIM}G "$BIN" \
       "${seg[@]}" --out "$OUT" --nsteps "$take" --start_row "$sr" \
-      --ntrain "$NTRAIN" --t0 $((T0+done_)) ) || {
+      --ntrain "$NTRAIN" --t0 $((T0+done_)) || {
         echo "[chunk] segmento falhou (vlimit ${VLIM}G) em $((T0+done_)) — abortando"; exit 1; }
   done_=$((done_+take))
 done
