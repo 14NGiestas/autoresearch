@@ -28,6 +28,7 @@ module fortran_train_mod
   real(wp), parameter :: MUON_BETA = 0.95_wp
   public :: dims_t, params_t, state_t, cache_t, temp_t
   public :: forward_save, compute_grads, train_step, init_state, init_temp, free_temp
+  public :: apply_update
   public :: wp
 
   type :: dims_t
@@ -123,7 +124,13 @@ contains
     ! T=2048 that is ~50 MB, allocated once and reused every step)
     allocate(tmp%satt(G%T*G%T), tmp%dPbuf(G%T*G%T), tmp%dSbuf(G%T*G%T))
     allocate(tmp%dkv(2*G%T*kvd))
-    allocate(tmp%sqk(G%B*G%nh*G%T*G%T), tmp%sh1(BT*DD), tmp%sdh1(BT*DD), tmp%sdsm(BT*G%T*G%T))
+    ! sdsm e' o buffer do softmax do caminho qkhop/ph: B*T*T floats, NAO
+    ! B*T*T*T. Estava dimensionado com um fator G%T a mais (1.073.741.824
+    ! floats = 4,29 GB em T=1024), o que respondia por ~4 GB FIXOS de RSS em
+    ! qualquer tamanho de modelo (medido: d96 4,4 GB e d216 5,3 GB, e o job 110
+    ! mostrou que o RSS e' plano, nao vazamento). Corrigido em 2026-09-18:
+    ! d96 4,4 GB -> ~0,15 GB. O sqk ao lado ja' usa B*nh*T*T.
+    allocate(tmp%sqk(G%B*G%nh*G%T*G%T), tmp%sh1(BT*DD), tmp%sdh1(BT*DD), tmp%sdsm(G%B*G%T*G%T))
     tmp%sqk = 0.0_wp; tmp%sh1 = 0.0_wp; tmp%sdh1 = 0.0_wp; tmp%sdsm = 0.0_wp
     tmp%satt = 0.0_wp; tmp%dPbuf = 0.0_wp; tmp%dSbuf = 0.0_wp; tmp%dkv = 0.0_wp
     tmp%emd  = 0.0_wp; tmp%xn  = 0.0_wp; tmp%sub = 0.0_wp
@@ -488,6 +495,51 @@ contains
     end if
   end subroutine apply_opt
 
+  ! The optimizer half of a training step, on its own so a driver can touch GR
+  ! between compute_grads and the update -- the MPI data-parallel app does
+  ! exactly that (Allreduce(GR), divide by size, THEN this call), so every rank
+  ! applies the same update and stays bit-identical. Pure refactor of the 8
+  ! calls that used to be inlined at the end of train_step: same kernels, same
+  ! arguments, same order, no math changed.
+  !
+  ! G carries the per-group (rows,cols) geometry that ONLY Muon reads (AdamW
+  ! strides the flat buffers itself), hence optional: an AdamW-only caller can
+  ! omit it, train_step and the MPI driver always pass it.
+  subroutine apply_update(M, S, GR, tstep, lr, b1, b2, beps, wd, use_muon, lr_muon, G)
+    type(params_t), intent(inout) :: M
+    type(state_t), intent(inout) :: S
+    type(params_t), intent(in) :: GR
+    integer, intent(in) :: tstep
+    real(wp), intent(in) :: lr, b1, b2, beps, wd
+    logical, intent(in) :: use_muon
+    real(wp), intent(in) :: lr_muon
+    type(dims_t), intent(in), optional :: G
+    integer :: gq, gkv, gd, gmlp
+    if (present(G)) then
+      gq = G%nh*G%hd; gkv = G%nkv*G%hd; gd = G%D; gmlp = 4*G%D
+    else
+      gq = 0; gkv = 0; gd = 0; gmlp = 0   ! unused on the AdamW path
+      if (use_muon) then
+        print '(A)', "apply_update: use_muon needs G (Muon geometry)"
+        stop 1
+      end if
+    end if
+    call apply_group(M%wte, GR%wte, S%wte, S%vwte, lr, b1, b2, beps, wd, tstep)
+    call apply_group(M%lm, GR%lm, S%lm, S%vlm, lr, b1, b2, beps, wd, tstep)
+    call apply_opt(M%q, GR%q, S%q, S%vq, S%mq, lr, lr_muon, b1, b2, beps, wd, &
+        tstep, gq, gd, use_muon)
+    call apply_opt(M%k, GR%k, S%k, S%vk, S%mk, lr, lr_muon, b1, b2, beps, wd, &
+        tstep, gkv, gd, use_muon)
+    call apply_opt(M%v, GR%v, S%v, S%vv, S%mv, lr, lr_muon, b1, b2, beps, wd, &
+        tstep, gkv, gd, use_muon)
+    call apply_opt(M%p, GR%p, S%p, S%vp, S%mp, lr, lr_muon, b1, b2, beps, wd, &
+        tstep, gd, gq, use_muon)
+    call apply_opt(M%fc, GR%fc, S%fc, S%vfc, S%mfc, lr, lr_muon, b1, b2, beps, wd, &
+        tstep, gmlp, gd, use_muon)
+    call apply_opt(M%p2, GR%p2, S%p2, S%vp2, S%mp2, lr, lr_muon, b1, b2, beps, wd, &
+        tstep, gd, gmlp, use_muon)
+  end subroutine apply_update
+
   ! One full training step: forward + backward + optimizer update.
   ! Default AdamW (all groups): previous behavior, bit-identical.
   ! use_muon=.true.: Muon on 2D matrices (q,k,v,p,fc,p2), AdamW stays on
@@ -523,20 +575,7 @@ contains
     if (present(lr_muon)) lr_mu = lr_muon
     call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas, useqk, useqkph)
     call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas, useqk, useqkph)
-    call apply_group(M%wte, GR%wte, S%wte, S%vwte, lr, b1, b2, beps, wd, tstep)
-    call apply_group(M%lm, GR%lm, S%lm, S%vlm, lr, b1, b2, beps, wd, tstep)
-    call apply_opt(M%q, GR%q, S%q, S%vq, S%mq, lr, lr_mu, b1, b2, beps, wd, &
-        tstep, G%nh*G%hd, G%D, m_opt)
-    call apply_opt(M%k, GR%k, S%k, S%vk, S%mk, lr, lr_mu, b1, b2, beps, wd, &
-        tstep, G%nkv*G%hd, G%D, m_opt)
-    call apply_opt(M%v, GR%v, S%v, S%vv, S%mv, lr, lr_mu, b1, b2, beps, wd, &
-        tstep, G%nkv*G%hd, G%D, m_opt)
-    call apply_opt(M%p, GR%p, S%p, S%vp, S%mp, lr, lr_mu, b1, b2, beps, wd, &
-        tstep, G%D, G%nh*G%hd, m_opt)
-    call apply_opt(M%fc, GR%fc, S%fc, S%vfc, S%mfc, lr, lr_mu, b1, b2, beps, wd, &
-        tstep, 4*G%D, G%D, m_opt)
-    call apply_opt(M%p2, GR%p2, S%p2, S%vp2, S%mp2, lr, lr_mu, b1, b2, beps, wd, &
-        tstep, G%D, 4*G%D, m_opt)
+    call apply_update(M, S, GR, tstep, lr, b1, b2, beps, wd, m_opt, lr_mu, G)
   end subroutine train_step
 
 end module fortran_train_mod
