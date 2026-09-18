@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J reval
 #SBATCH -c 8
-#SBATCH -t 02:00:00
+#SBATCH -t 06:00:00
 #SBATCH -o /home/pauli/autoresearch/logs/reval_%j.log
 # A curva do pool limpo (32 pontos) ficou com ruido de +-0,04 bpb entre
 # checkpoints vizinhos -- o holdout de 300 linhas nao resolve diferencas de 0,01.
@@ -16,6 +16,7 @@ n=0
 for d in /tmp/scal65/step_* /tmp/scal65_tail/step_*; do
   s=$(basename $d | sed 's/step_//')
   [ -f "$d/model.safetensors" ] || continue
+  [ -s "/tmp/scal65_1k/ev_$s.txt" ] && continue   # idempotente: pula o que ja' foi avaliado
   OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FALSE "$EV" \
     --weights "$d" --rows /tmp/prose65/rows_val1k.npy --attn blas --batch 16 \
     > /tmp/scal65_1k/ev_$s.txt 2>&1
