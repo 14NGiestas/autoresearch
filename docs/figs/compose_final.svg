@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2040" height="470" style="background:#0b0e14">
+<g>
+<rect x="8" y="8" width="664" height="424" rx="6" fill="#0b0e14" stroke="#2a3140"/>
+<text x="22" y="28" fill="#e6edf3" font-size="13" font-family="sans-serif">A. Imposto de composicao vs LR (K=4)</text>
+<line x1="64" y1="324" x2="584" y2="324" stroke="#39404f"/>
+<line x1="64" y1="54" x2="64" y2="324" stroke="#39404f"/>
+<text x="324" y="358" fill="#8b949e" font-size="10" text-anchor="middle" font-family="sans-serif">learning rate (log)</text>
+<text x="18" y="189" fill="#8b949e" font-size="10" transform="rotate(-90 18 189)" text-anchor="middle" font-family="sans-serif">imposto (bpb, log)</text>
+<circle cx="534.1" cy="180.0" r="4.5" fill="#5ec8ff"/>
+<text x="541" y="183" fill="#5ec8ff" font-size="9" text-anchor="start" font-family="sans-serif">0.0006: +0.169</text>
+<circle cx="343.4" cy="302.3" r="4.5" fill="#5ec8ff"/>
+<text x="350" y="305" fill="#5ec8ff" font-size="9" text-anchor="start" font-family="sans-serif">0.0002: +0.015</text>
+<circle cx="134.4" cy="299.7" r="4.5" fill="#5ec8ff"/>
+<text x="141" y="303" fill="#5ec8ff" font-size="9" text-anchor="start" font-family="sans-serif">6e-05: +0.016</text>
+<polyline points="64.0,456.0 77.3,448.2 90.7,440.4 104.0,432.6 117.3,424.7 130.7,416.9 144.0,409.1 157.3,401.2 170.7,393.4 184.0,385.6 197.3,377.8 210.7,369.9 224.0,362.1 237.3,354.3 250.7,346.4 264.0,338.6 277.3,330.8 290.7,323.0 304.0,315.1 317.3,307.3 330.7,299.5 344.0,291.6 357.3,283.8 370.7,276.0 384.0,268.2 397.3,260.3 410.7,252.5 424.0,244.7 437.3,236.8 450.7,229.0 464.0,221.2 477.3,213.4 490.7,205.5 504.0,197.7 517.3,189.9 530.7,182.0 544.0,174.2 557.3,166.4 570.7,158.6 584.0,150.7" fill="none" stroke="#3fb950" stroke-dasharray="4,3"/>
+<text x="134" y="431" fill="#3fb950" font-size="9" text-anchor="start" font-family="sans-serif">reta = lr^2 (o que o deslocamento preve)</text>
+<circle cx="534.1" cy="145.0" r="4.5" fill="#ffb454"/>
+<text x="528" y="137" fill="#ffb454" font-size="9" text-anchor="end" font-family="sans-serif">6e-4 com 2 epocas: +0.335</text>
+<circle cx="534.1" cy="236.7" r="4.5" fill="#c9d1d9"/>
+<text x="528" y="249" fill="#c9d1d9" font-size="9" text-anchor="end" font-family="sans-serif">K=8 (1 epoca): +0.056</text>
+<text x="72" y="69" fill="#ff5c5c" font-size="9" text-anchor="start" font-family="sans-serif">inits independentes (seed): +1.24</text>
+<text x="72" y="84" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">cair o LR reduz o imposto MAS</text>
+<text x="72" y="101" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">piora os shards (6e-5 => 3.25 bpb)</text>
+</g>
+<g>
+<rect x="688" y="8" width="664" height="424" rx="6" fill="#0b0e14" stroke="#2a3140"/>
+<text x="702" y="28" fill="#e6edf3" font-size="13" font-family="sans-serif">B. Selecao vence agregacao (K=4, 1 epoca)</text>
+<line x1="744" y1="324" x2="1264" y2="324" stroke="#39404f"/>
+<line x1="744" y1="54" x2="744" y2="324" stroke="#39404f"/>
+<text x="1004" y="358" fill="#8b949e" font-size="10" text-anchor="middle" font-family="sans-serif">estrategia</text>
+<text x="698" y="189" fill="#8b949e" font-size="10" transform="rotate(-90 698 189)" text-anchor="middle" font-family="sans-serif">bpb holdout</text>
+<rect x="754" y="282.7" width="104" height="41.3" fill="#3fb950"/>
+<text x="796" y="277" fill="#3fb950" font-size="10" text-anchor="middle" font-family="sans-serif">2.4398</text>
+<text x="796" y="336" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">melhor shard</text>
+<text x="796" y="346" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">(oraculo)</text>
+<rect x="884" y="264.4" width="104" height="59.6" fill="#5ec8ff"/>
+<text x="926" y="258" fill="#5ec8ff" font-size="10" text-anchor="middle" font-family="sans-serif">2.4574</text>
+<text x="926" y="336" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">escolhido no dev</text>
+<text x="926" y="346" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">(= 1 shard)</text>
+<rect x="1014" y="100.8" width="104" height="223.2" fill="#ff5c5c"/>
+<text x="1056" y="95" fill="#ff5c5c" font-size="10" text-anchor="middle" font-family="sans-serif">2.6149</text>
+<text x="1056" y="336" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">media uniforme</text>
+<text x="1056" y="346" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">dos 4</text>
+<rect x="1144" y="277.5" width="104" height="46.5" fill="#ffb454"/>
+<text x="1186" y="272" fill="#ffb454" font-size="10" text-anchor="middle" font-family="sans-serif">2.4447</text>
+<text x="1186" y="336" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">1 maquina, mesmo</text>
+<text x="1186" y="346" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">wall-clock</text>
+<text x="750" y="70" fill="#e6edf3" font-size="9" text-anchor="start" font-family="sans-serif">escolher UM shard (dev) = greedy; media uniforme custa +0.157</text>
+</g>
+<g>
+<rect x="1368" y="8" width="664" height="424" rx="6" fill="#0b0e14" stroke="#2a3140"/>
+<text x="1382" y="28" fill="#e6edf3" font-size="13" font-family="sans-serif">C. MPI: invariante exato e ~2x throughput</text>
+<line x1="1424" y1="324" x2="1944" y2="324" stroke="#39404f"/>
+<line x1="1424" y1="54" x2="1424" y2="324" stroke="#39404f"/>
+<text x="1684" y="358" fill="#8b949e" font-size="10" text-anchor="middle" font-family="sans-serif">ranks (lotes disjuntos)</text>
+<text x="1378" y="189" fill="#8b949e" font-size="10" transform="rotate(-90 1378 189)" text-anchor="middle" font-family="sans-serif">tokens/s</text>
+<circle cx="1510.7" cy="206.2" r="5" fill="#ffb454"/>
+<text x="1519" y="210" fill="#ffb454" font-size="9" text-anchor="start" font-family="sans-serif">1 rank: 96 tok/s</text>
+<circle cx="1684.0" cy="93.3" r="5" fill="#3fb950"/>
+<text x="1692" y="97" fill="#3fb950" font-size="9" text-anchor="start" font-family="sans-serif">2 ranks: 179-196 tok/s</text>
+<line x1="1510.7" y1="206.2" x2="1684.0" y2="88.4" stroke="#3fb950" stroke-width="1.4"/>
+<text x="1445" y="72" fill="#e6edf3" font-size="10" text-anchor="start" font-family="sans-serif">invariante: -n 2 == -n 1</text>
+<text x="1445" y="103" fill="#3fb950" font-size="10" text-anchor="start" font-family="sans-serif">90/90 arquivos identicos</text>
+<text x="1445" y="134" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">(byte a byte, 3 passos)</text>
+<text x="1445" y="171" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">Allreduce 38 MB = 15 ms</text>
+<text x="1445" y="207" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">tau=1 custa 68.6s vs 62.8s</text>
+<text x="1445" y="244" fill="#8b949e" font-size="9" text-anchor="start" font-family="sans-serif">com 1 sync a cada 6 passos</text>
+</g>
+<text x="10" y="450" fill="#8b949e" font-size="9" font-family="sans-serif">fontes: job 104 (medias exatas), 101 (shards dos bracos de lr), 105 (greedy com dev), relatorio MPI do midev. Todos os numeros usam medias UNIFORMES EXATAS (o bug do alpha invertido estah corrigido); holdout de 100 linhas em A/B.</text>
+</svg>
