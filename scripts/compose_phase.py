@@ -21,8 +21,9 @@ W, H = 760, 430
 OUT = "/tmp/compose_phase.svg"
 K_BG = 32
 TAX_MAX, A_LO, A_HI = 0.80, 0.02, 0.60
-MEAS = [(0.05728, "K=4, 1 ep"), (0.33510, "K=4, 2 ep"), (0.57023, "K=4 2ep vs sequencial")]
-A_OURS, A_CHINCHILLA, A_KAPLAN = 0.458, 0.28, 0.095
+MEAS = [(0.16860, "K=4, 1 ep (media exata)"), (0.33510, "K=4, 2 ep"),
+        (0.57023, "K=4 2ep vs sequencial")]
+A_OURS, A_LO, A_HI, A_CHINCHILLA, A_KAPLAN = 0.458, 0.315, 0.482, 0.28, 0.095
 TAX_PTS = [(1952, 0.05728), (3904, 0.33510)]
 
 
@@ -113,6 +114,10 @@ def main():
     for t, nm in MEAS:
         o.append(f'<circle cx="{X(t):.1f}" cy="{Y(A_OURS):.1f}" r="5" fill="#e6edf3" '
                  f'stroke="#0b0e14" stroke-width="1.5"/>')
+    o.append(f'<rect x="{X(0.008):.0f}" y="{Y(A_HI):.0f}" width="{X(0.80)-X(0.008):.0f}" '
+             f'height="{abs(Y(A_LO)-Y(A_HI)):.0f}" fill="#e6edf3" opacity="0.10"/>')
+    o.append(f'<text x="{X(0.60):.0f}" y="{Y(A_LO)+14:.0f}" fill="#e6edf3" font-size="9" '
+             f'font-family="sans-serif">faixa da alpha medida (0.32-0.48: o ajuste depende da janela)</text>')
     o.append(f'<line x1="{X(0.02):.0f}" y1="{Y(A_OURS):.0f}" x2="{X(0.80):.0f}" '
              f'y2="{Y(A_OURS):.0f}" stroke="#e6edf3" stroke-width="0.8" opacity="0.5"/>')
     o.append(f'<text x="{X(0.01):.0f}" y="{Y(A_OURS)+16:.0f}" fill="#e6edf3" '
