@@ -123,14 +123,19 @@ def main():
     o.append(f'<text x="{X(0.01):.0f}" y="{Y(A_OURS)+16:.0f}" fill="#e6edf3" '
              f'font-size="10" font-family="sans-serif">alpha medido aqui = 0.46 '
              f'(d96, 4 pontos: L = 1.76 + 530.7 D^-0.458, rmse 0.0022)</text>')
-    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-46:.0f}" fill="#e6edf3" font-size="10" '
-             f'font-family="sans-serif">1 ep (o ponto a esquerda): +0.057 → ganho 3.7x de 4x</text>')
-    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-32:.0f}" fill="#ffb454" font-size="10" '
-             f'font-family="sans-serif">2 ep: +0.335 → 2.4x de 4x</text>')
-    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-18:.0f}" fill="#ff5c5c" font-size="10" '
-             f'font-family="sans-serif">vs alternativa sequencial: +0.570 → 1.7x de 4x</text>')
+    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-40:.0f}" fill="#e6edf3" font-size="10" '
+             f'font-family="sans-serif">K=4, 1 epoca (imposto EXATO): +0.169</text>')
+    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-26:.0f}" fill="#ffb454" font-size="10" '
+             f'font-family="sans-serif">K=4, 2 epocas: +0.335</text>')
+    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-12:.0f}" fill="#ff5c5c" font-size="10" '
+             f'font-family="sans-serif">vs alternativa sequencial: +0.570</text>')
+    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)+22:.0f}" fill="#c9d1d9" font-size="10" '
+             f'font-family="sans-serif">com alpha na faixa medida: K=4 rende 2.7-3.1x de 4x | '
+             f'K=32 rende 22-25x de 32x</text>')
+    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)+36:.0f}" fill="#c9d1d9" font-size="10" '
+             f'font-family="sans-serif">com o alpha da fronteira (~0.1): K=32 rende ~10x de 32x</text>')
     # rotulos de regiao
-    o.append(f'<text x="{X(0.66):.0f}" y="{Y(0.30):.0f}" fill="#93c5fd" font-size="13" '
+    o.append(f'<text x="{X(0.60):.0f}" y="{Y(0.22):.0f}" fill="#93c5fd" font-size="13" '
              f'font-family="sans-serif">COMPOR VALE</text>')
     o.append(f'<text x="{X(0.52):.0f}" y="{Y(0.045):.0f}" fill="#fca5a5" font-size="13" '
              f'font-family="sans-serif">COMPOR CUSTA</text>')
