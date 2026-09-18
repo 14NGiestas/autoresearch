@@ -61,6 +61,10 @@ def pick(app, ref):
     return c[-1]
 
 
+RESET_MOMENTS = False      # --reset-moments: descarta o estado do Adam na media
+CARRY_OUTER_STATE = False  # --carry-outer-state: leva o estado medio para o passo do outer
+
+
 def avg_dirs(dirs, out, include_opt=True):
     """Media elemento a elemento, incluindo os momentos do Adam.
 
@@ -86,7 +90,8 @@ def avg_dirs(dirs, out, include_opt=True):
     n = len(dirs)
     W = {f: (v / n).astype(np.float32) for f, v in W.items()}
     S = {f: (v / n).astype(np.float32) for f, v in S.items()}
-    ckio.save_ckpt_dir(out, W, state=S, like=dirs[0], op="fedavg/avg_dirs",
+    ckio.save_ckpt_dir(out, W, state=None if RESET_MOMENTS else S, like=dirs[0],
+                       op="fedavg/avg_dirs",
                        extra_meta={"op": "fedavg", "K": n,
                                    "dirs": ",".join(os.path.basename(d) for d in dirs)})
     return len(W) + len(S)
@@ -137,6 +142,10 @@ def main():
     ap.add_argument("--holdout", default="/tmp/mix/rows_holdout.npy")
     ap.add_argument("--out", required=True)
     ap.add_argument("--anneal", action="store_true")
+    ap.add_argument("--reset-moments", action="store_true",
+                    help="descarta o estado do Adam na media (isola warm-restart do efeito do outer)")
+    ap.add_argument("--carry-outer-state", action="store_true",
+                    help="no caminho --outer, leva o estado MEDIO do Adam para a proxima rodada")
     ap.add_argument("--outer", default="none", choices=("none", "nesterov"),
                     help="otimizador EXTERNO sobre os parametros sincronizados (DiLoCo): "
                          "g = theta_outer_prev - theta_avg_inner; u = mu*u + g; "
@@ -152,6 +161,9 @@ def main():
     ap.add_argument("--no-eval", action="store_true")
     a = ap.parse_args()
 
+    global RESET_MOMENTS, CARRY_OUTER_STATE
+    RESET_MOMENTS = a.reset_moments
+    CARRY_OUTER_STATE = a.carry_outer_state
     train = pick("train_run", a.init)
     evb = pick("eval_bpb", a.init)
     hold = np.load(a.holdout, mmap_mode="r")
@@ -225,8 +237,25 @@ def main():
                 ukeys = {k: np.array(v) for k, v in json.load(open(ufile)).items()}
             new_w, ukeys = outer_step(prev_w, avg_w, ukeys, a.outer_lr, a.outer_mom)
             shutil.rmtree(nxt, ignore_errors=True)
-            _ck.save_ckpt_dir(nxt, new_w, like=common, op="outer_nesterov",
-                              extra_meta={"outer_lr": a.outer_lr, "outer_mom": a.outer_mom})
+            extra = {"outer_lr": a.outer_lr, "outer_mom": a.outer_mom}
+            if CARRY_OUTER_STATE:
+                # o estado medio dos momentos: media dos adam_* dos workers desta rodada
+                st = {}
+                for f, v in _ck.load_state(workers[0]).items():
+                    acc = None
+                    for wdir in workers:
+                        x = _ck.load_state(wdir).get(f)
+                        if x is None:
+                            acc = None; break
+                        acc = x.astype("float64") if acc is None else acc + x.astype("float64")
+                    if acc is not None:
+                        st[f] = (acc / len(workers)).astype("float32")
+                extra["carried_state"] = str(len(st))
+                _ck.save_ckpt_dir(nxt, new_w, state=st, like=common, op="outer_nesterov",
+                                  extra_meta=extra)
+            else:
+                _ck.save_ckpt_dir(nxt, new_w, like=common, op="outer_nesterov",
+                                  extra_meta=extra)
             json.dump({k: v.tolist() for k, v in ukeys.items()}, open(ufile, "w"))
             print(f"    outer nesterov: lr={a.outer_lr} mu={a.outer_mom}")
         common = nxt
