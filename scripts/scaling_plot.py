@@ -98,34 +98,54 @@ def main():
     o.append(f'<text x="{X(1.1e6):.0f}" y="{Y(2.38):.0f}" fill="#ffb454" font-size="9" '
              f'font-family="sans-serif">ajuste todos os 32: L={Lall:.2f}+{A_all:.0f}D^-{a_all:.3f} (rmse {r_all:.4f})</text>')
 
-    # ---------- B: log-log do excesso ----------
-    o2, X2, Y2 = frame("B. O mesmo em log-log do excesso sobre o piso (janela limpa)",
-                       0.35, 1.05, "log10(excesso / bpb)")
-    ex = (L[m] - Lcl)
-    ylo, yhi = math.log10(0.4), math.log10(1.0)
-    eY = lambda v: y0 + ph * (yhi - math.log10(v)) / (yhi - ylo)
-    for al, c, nm in ((0.28, "#ffb454", "alpha=0.28 (Chinchilla, eixo dados)"),
-                      (0.095, "#ff5c5c", "alpha=0.095 (Kaplan, eixo dados)"),
-                      (a_cl, "#3fb950", f"medido: alpha={a_cl:.3f}")):
-        p = []
-        for i in range(60):
-            d = 10 ** (xlo + (xhi - xlo) * i / 59)
-            e = (Lcl + A_cl * (1e6) ** (-al) * (d / 1e6) ** (-al)) - Lcl
-            if e <= 0:
-                continue
-            p.append(f"{X2(d):.1f},{eY(max(min(e,1.0),0.4)):.1f}")
-        o2.append(f'<polyline points="{" ".join(p)}" fill="none" stroke="{c}" '
-                  f'stroke-width="1.6" {"stroke-dasharray=\"4,3\"" if al != a_cl else ""}/>')
-        o2.append(f'<text x="{X2(1.05e6):.0f}" y="{eY(min(1.0,0.9))**1:.0f}" fill="{c}" '
-                  f'font-size="0"></text>')
-    for d, e in zip(D[m], ex):
-        o2.append(f'<circle cx="{X2(d):.1f}" cy="{eY(e):.1f}" r="3" fill="#5ec8ff"/>')
-    o2.append(f'<text x="{X2(1.05e6):.0f}" y="{eY(0.95):.0f}" fill="#3fb950" font-size="9" '
-              f'font-family="sans-serif">verde = medido ({a_cl:.3f})</text>')
-    o2.append(f'<text x="{X2(1.05e6):.0f}" y="{eY(0.80):.0f}" fill="#ffb454" font-size="9" '
-              f'font-family="sans-serif">amarelo = Chinchilla (0.28)</text>')
-    o2.append(f'<text x="{X2(1.05e6):.0f}" y="{eY(0.68):.0f}" fill="#ff5c5c" font-size="9" '
-              f'font-family="sans-serif">vermelho = Kaplan (0.095)</text>')
+    # ---------- B: log-log do excesso (eixo y de verdade em log) ----------
+    lo, hi = 1.25, 0.40          # faixa do excesso em bpb (log)
+    o2 = [f'<rect x="8" y="8" width="{W+24}" height="{H+24}" rx="6" fill="#0b0e14" '
+          f'stroke="#2a3140"/>',
+          f'<text x="22" y="28" fill="#e6edf3" font-size="14" font-family="sans-serif">'
+          f'B. Excesso sobre o piso, em log-log (reta = lei de potencia)</text>']
+    eY = lambda v: y0 + ph * (math.log10(hi) - math.log10(max(v, 1e-6))) / (math.log10(hi) - math.log10(lo))
+    o2.append(f'<line x1="{x0}" y1="{y0+ph}" x2="{x0+pw}" y2="{y0+ph}" stroke="#39404f"/>')
+    o2.append(f'<line x1="{x0}" y1="{y0}" x2="{x0}" y2="{y0+ph}" stroke="#39404f"/>')
+    for v in (1.2, 1.0, 0.8, 0.6, 0.5, 0.4):
+        o2.append(f'<line x1="{x0}" y1="{eY(v):.1f}" x2="{x0+pw}" y2="{eY(v):.1f}" '
+                  f'stroke="#1d222c"/>')
+        o2.append(f'<text x="{x0-6}" y="{eY(v)+3:.1f}" fill="#8b949e" font-size="9" '
+                  f'text-anchor="end" font-family="sans-serif">{v:g}</text>')
+    for v in (1e6, 2e6, 4e6, 8e6, 16e6, 32e6):
+        o2.append(f'<line x1="{X(v):.1f}" y1="{y0}" x2="{X(v):.1f}" y2="{y0+ph}" stroke="#141922"/>')
+        o2.append(f'<text x="{X(v):.1f}" y="{y0+ph+15}" fill="#8b949e" font-size="9" '
+                  f'text-anchor="middle" font-family="sans-serif">{v/1e6:g}M</text>')
+    o2.append(f'<text x="{x0+pw/2:.0f}" y="{y0+ph+34}" fill="#8b949e" font-size="10" '
+              f'text-anchor="middle" font-family="sans-serif">tokens vistos (log)</text>')
+    o2.append(f'<text x="16" y="{y0+ph/2:.0f}" fill="#8b949e" font-size="10" '
+              f'transform="rotate(-90 16 {y0+ph/2:.0f})" text-anchor="middle" '
+              f'font-family="sans-serif">excesso sobre o piso (bpb, log)</text>')
+    # retas de referencia ancoradas no PRIMEIRO ponto medido
+    d0, l0 = D[0], L[0]
+    e0 = l0 - Lcl
+    for al, c, nm in ((a_cl, "#3fb950", f"medido: {a_cl:.3f}"),
+                      (0.28, "#ffb454", "Chinchilla 0.28"),
+                      (0.095, "#ff5c5c", "Kaplan 0.095")):
+        q = []
+        for i2 in range(60):
+            d = 10 ** (xlo + (xhi - xlo) * i2 / 59)
+            e = e0 * (d / d0) ** (-al)
+            q.append(f"{X(d):.1f},{eY(e):.1f}")
+        o2.append(f'<polyline points="{" ".join(q)}" fill="none" stroke="{c}" stroke-width="1.6"'
+                  f'{" stroke-dasharray=\"4,3\"" if al != a_cl else ""}/>')
+    for d, l in zip(D, L):
+        o2.append(f'<circle cx="{X(d):.1f}" cy="{eY(l - Lcl):.1f}" r="3" fill="#5ec8ff"/>')
+    for t, c, nm in ((0.95, "#3fb950", f"medido {a_cl:.3f}"), (0.72, "#ffb454", "Chinchilla 0.28"),
+                     (0.58, "#ff5c5c", "Kaplan 0.095")):
+        o2.append(f'<text x="{X(1.1e6):.0f}" y="{eY(t):.0f}" fill="{c}" font-size="9" '
+                  f'font-family="sans-serif">{nm}</text>')
+    o2.append(f'<line x1="{X(POOL_END):.1f}" y1="{y0}" x2="{X(POOL_END):.1f}" y2="{y0+ph}" '
+              f'stroke="#ff5c5c" stroke-dasharray="4,3"/>')
+    o2.append(f'<text x="{X(POOL_END)+5:.0f}" y="{y0+14}" fill="#ff5c5c" font-size="9" '
+              f'font-family="sans-serif">a partir daqui os dados se repetem</text>')
+    o2.append(f'<text x="{X(1.1e6):.0f}" y="{eY(0.44):.0f}" fill="#8b949e" font-size="9" '
+              f'font-family="sans-serif">reta = expoente constante; encurvar = muda de regime</text>')
     # ---------- C: inclinacao local do excesso (o painel que responde "cade o joelho?") ----------
     sp = sorted(zip(D / 1e6, L))
     def at(t):

@@ -75,19 +75,21 @@
 </g>
 <g transform="translate(820,0)">
 <rect x="8" y="8" width="724" height="454" rx="6" fill="#0b0e14" stroke="#2a3140"/>
-<text x="22" y="28" fill="#e6edf3" font-size="14" font-family="sans-serif">B. O mesmo em log-log do excesso sobre o piso (janela limpa)</text>
+<text x="22" y="28" fill="#e6edf3" font-size="14" font-family="sans-serif">B. Excesso sobre o piso, em log-log (reta = lei de potencia)</text>
 <line x1="70" y1="354" x2="660" y2="354" stroke="#39404f"/>
 <line x1="70" y1="54" x2="70" y2="354" stroke="#39404f"/>
-<line x1="70" y1="354.0" x2="660" y2="354.0" stroke="#1d222c"/>
-<text x="64" y="357.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.35</text>
-<line x1="70" y1="279.0" x2="660" y2="279.0" stroke="#1d222c"/>
-<text x="64" y="282.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.53</text>
-<line x1="70" y1="204.0" x2="660" y2="204.0" stroke="#1d222c"/>
-<text x="64" y="207.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.70</text>
-<line x1="70" y1="129.0" x2="660" y2="129.0" stroke="#1d222c"/>
-<text x="64" y="132.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.88</text>
+<line x1="70" y1="343.3" x2="660" y2="343.3" stroke="#1d222c"/>
+<text x="64" y="346.3" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">1.2</text>
+<line x1="70" y1="295.2" x2="660" y2="295.2" stroke="#1d222c"/>
+<text x="64" y="298.2" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">1</text>
+<line x1="70" y1="236.5" x2="660" y2="236.5" stroke="#1d222c"/>
+<text x="64" y="239.5" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.8</text>
+<line x1="70" y1="160.8" x2="660" y2="160.8" stroke="#1d222c"/>
+<text x="64" y="163.8" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.6</text>
+<line x1="70" y1="112.8" x2="660" y2="112.8" stroke="#1d222c"/>
+<text x="64" y="115.8" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.5</text>
 <line x1="70" y1="54.0" x2="660" y2="54.0" stroke="#1d222c"/>
-<text x="64" y="57.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">1.05</text>
+<text x="64" y="57.0" fill="#8b949e" font-size="9" text-anchor="end" font-family="sans-serif">0.4</text>
 <line x1="86.9" y1="54" x2="86.9" y2="354" stroke="#141922"/>
 <text x="86.9" y="369" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">1M</text>
 <line x1="197.7" y1="54" x2="197.7" y2="354" stroke="#141922"/>
@@ -101,23 +103,48 @@
 <line x1="641.2" y1="54" x2="641.2" y2="354" stroke="#141922"/>
 <text x="641.2" y="369" fill="#8b949e" font-size="9" text-anchor="middle" font-family="sans-serif">32M</text>
 <text x="365" y="388" fill="#8b949e" font-size="10" text-anchor="middle" font-family="sans-serif">tokens vistos (log)</text>
-<text x="16" y="204" fill="#8b949e" font-size="10" transform="rotate(-90 16 204)" text-anchor="middle" font-family="sans-serif">log10(excesso / bpb)</text>
-<polyline points="70.0,54.0 80.0,54.0 90.0,54.0 100.0,54.0 110.0,54.0 120.0,54.0 130.0,54.0 140.0,54.0 150.0,54.0 160.0,54.0 170.0,54.0 180.0,54.0 190.0,54.0 200.0,54.0 210.0,54.0 220.0,54.0 230.0,54.0 240.0,54.0 250.0,54.0 260.0,54.0 270.0,54.0 280.0,54.0 290.0,54.0 300.0,54.0 310.0,54.0 320.0,54.0 330.0,54.0 340.0,54.0 350.0,54.0 360.0,54.0 370.0,54.0 380.0,54.0 390.0,54.0 400.0,54.0 410.0,54.0 420.0,54.0 430.0,54.0 440.0,54.0 450.0,54.4 460.0,60.2 470.0,65.9 480.0,71.6 490.0,77.4 500.0,83.1 510.0,88.8 520.0,94.6 530.0,100.3 540.0,106.0 550.0,111.8 560.0,117.5 570.0,123.2 580.0,129.0 590.0,134.7 600.0,140.4 610.0,146.1 620.0,151.9 630.0,157.6 640.0,163.3 650.0,169.1 660.0,174.8" fill="none" stroke="#ffb454" stroke-width="1.6" stroke-dasharray="4,3"/>
-<text x="95" y="88" fill="#ffb454" font-size="0"></text>
-<polyline points="70.0,54.0 80.0,54.0 90.0,54.0 100.0,54.0 110.0,54.0 120.0,54.0 130.0,54.0 140.0,54.0 150.0,54.0 160.0,54.0 170.0,54.0 180.0,54.0 190.0,54.0 200.0,54.0 210.0,54.0 220.0,54.0 230.0,54.0 240.0,54.0 250.0,54.0 260.0,54.0 270.0,54.0 280.0,54.0 290.0,54.0 300.0,54.0 310.0,54.0 320.0,54.0 330.0,54.0 340.0,54.0 350.0,54.0 360.0,54.0 370.0,54.0 380.0,54.0 390.0,54.0 400.0,54.0 410.0,54.0 420.0,54.0 430.0,54.0 440.0,54.0 450.0,54.0 460.0,54.0 470.0,54.0 480.0,54.0 490.0,54.0 500.0,54.0 510.0,54.0 520.0,54.0 530.0,54.0 540.0,54.0 550.0,54.0 560.0,54.0 570.0,54.0 580.0,54.0 590.0,54.0 600.0,54.0 610.0,54.0 620.0,54.0 630.0,54.0 640.0,54.0 650.0,54.0 660.0,54.0" fill="none" stroke="#ff5c5c" stroke-width="1.6" stroke-dasharray="4,3"/>
-<text x="95" y="88" fill="#ff5c5c" font-size="0"></text>
-<polyline points="70.0,54.0 80.0,54.0 90.0,54.0 100.0,54.0 110.0,54.0 120.0,54.0 130.0,54.0 140.0,54.0 150.0,54.0 160.0,54.0 170.0,56.7 180.0,63.2 190.0,69.6 200.0,76.1 210.0,82.5 220.0,88.9 230.0,95.4 240.0,101.8 250.0,108.3 260.0,114.7 270.0,121.2 280.0,127.6 290.0,134.0 300.0,140.5 310.0,146.9 320.0,153.4 330.0,159.8 340.0,166.2 350.0,172.7 360.0,179.1 370.0,185.6 380.0,192.0 390.0,198.5 400.0,204.9 410.0,211.3 420.0,217.8 430.0,224.2 440.0,230.7 450.0,237.1 460.0,243.5 470.0,250.0 480.0,256.4 490.0,262.9 500.0,269.3 510.0,275.8 520.0,282.2 530.0,288.6 540.0,295.1 550.0,301.5 560.0,308.0 570.0,314.4 580.0,320.8 590.0,327.3 600.0,333.7 610.0,340.2 620.0,346.6 630.0,353.1 640.0,354.0 650.0,354.0 660.0,354.0" fill="none" stroke="#3fb950" stroke-width="1.6" />
-<text x="95" y="88" fill="#3fb950" font-size="0"></text>
-<circle cx="94.4" cy="8.2" r="3" fill="#5ec8ff"/>
-<circle cx="205.3" cy="78.4" r="3" fill="#5ec8ff"/>
-<circle cx="270.2" cy="122.7" r="3" fill="#5ec8ff"/>
-<circle cx="316.2" cy="149.8" r="3" fill="#5ec8ff"/>
-<circle cx="351.9" cy="176.5" r="3" fill="#5ec8ff"/>
-<circle cx="381.0" cy="190.1" r="3" fill="#5ec8ff"/>
-<circle cx="405.7" cy="209.1" r="3" fill="#5ec8ff"/>
-<text x="95" y="71" fill="#3fb950" font-size="9" font-family="sans-serif">verde = medido (0.315)</text>
-<text x="95" y="127" fill="#ffb454" font-size="9" font-family="sans-serif">amarelo = Chinchilla (0.28)</text>
-<text x="95" y="180" fill="#ff5c5c" font-size="9" font-family="sans-serif">vermelho = Kaplan (0.095)</text>
+<text x="16" y="204" fill="#8b949e" font-size="10" transform="rotate(-90 16 204)" text-anchor="middle" font-family="sans-serif">excesso sobre o piso (bpb, log)</text>
+<polyline points="70.0,344.7 80.0,339.6 90.0,334.4 100.0,329.2 110.0,324.0 120.0,318.8 130.0,313.7 140.0,308.5 150.0,303.3 160.0,298.1 170.0,292.9 180.0,287.8 190.0,282.6 200.0,277.4 210.0,272.2 220.0,267.0 230.0,261.9 240.0,256.7 250.0,251.5 260.0,246.3 270.0,241.1 280.0,236.0 290.0,230.8 300.0,225.6 310.0,220.4 320.0,215.2 330.0,210.1 340.0,204.9 350.0,199.7 360.0,194.5 370.0,189.3 380.0,184.2 390.0,179.0 400.0,173.8 410.0,168.6 420.0,163.4 430.0,158.3 440.0,153.1 450.0,147.9 460.0,142.7 470.0,137.5 480.0,132.3 490.0,127.2 500.0,122.0 510.0,116.8 520.0,111.6 530.0,106.4 540.0,101.3 550.0,96.1 560.0,90.9 570.0,85.7 580.0,80.5 590.0,75.4 600.0,70.2 610.0,65.0 620.0,59.8 630.0,54.6 640.0,49.5 650.0,44.3 660.0,39.1" fill="none" stroke="#3fb950" stroke-width="1.6"/>
+<polyline points="70.0,343.3 80.0,338.7 90.0,334.1 100.0,329.5 110.0,324.9 120.0,320.3 130.0,315.7 140.0,311.1 150.0,306.5 160.0,301.9 170.0,297.3 180.0,292.6 190.0,288.0 200.0,283.4 210.0,278.8 220.0,274.2 230.0,269.6 240.0,265.0 250.0,260.4 260.0,255.8 270.0,251.2 280.0,246.5 290.0,241.9 300.0,237.3 310.0,232.7 320.0,228.1 330.0,223.5 340.0,218.9 350.0,214.3 360.0,209.7 370.0,205.1 380.0,200.5 390.0,195.8 400.0,191.2 410.0,186.6 420.0,182.0 430.0,177.4 440.0,172.8 450.0,168.2 460.0,163.6 470.0,159.0 480.0,154.4 490.0,149.8 500.0,145.1 510.0,140.5 520.0,135.9 530.0,131.3 540.0,126.7 550.0,122.1 560.0,117.5 570.0,112.9 580.0,108.3 590.0,103.7 600.0,99.1 610.0,94.4 620.0,89.8 630.0,85.2 640.0,80.6 650.0,76.0 660.0,71.4" fill="none" stroke="#ffb454" stroke-width="1.6" stroke-dasharray="4,3"/>
+<polyline points="70.0,335.9 80.0,334.3 90.0,332.8 100.0,331.2 110.0,329.6 120.0,328.1 130.0,326.5 140.0,325.0 150.0,323.4 160.0,321.8 170.0,320.3 180.0,318.7 190.0,317.1 200.0,315.6 210.0,314.0 220.0,312.4 230.0,310.9 240.0,309.3 250.0,307.8 260.0,306.2 270.0,304.6 280.0,303.1 290.0,301.5 300.0,299.9 310.0,298.4 320.0,296.8 330.0,295.2 340.0,293.7 350.0,292.1 360.0,290.5 370.0,289.0 380.0,287.4 390.0,285.9 400.0,284.3 410.0,282.7 420.0,281.2 430.0,279.6 440.0,278.0 450.0,276.5 460.0,274.9 470.0,273.3 480.0,271.8 490.0,270.2 500.0,268.7 510.0,267.1 520.0,265.5 530.0,264.0 540.0,262.4 550.0,260.8 560.0,259.3 570.0,257.7 580.0,256.1 590.0,254.6 600.0,253.0 610.0,251.5 620.0,249.9 630.0,248.3 640.0,246.8 650.0,245.2 660.0,243.6" fill="none" stroke="#ff5c5c" stroke-width="1.6" stroke-dasharray="4,3"/>
+<circle cx="94.4" cy="332.1" r="3" fill="#5ec8ff"/>
+<circle cx="205.3" cy="275.6" r="3" fill="#5ec8ff"/>
+<circle cx="270.2" cy="240.0" r="3" fill="#5ec8ff"/>
+<circle cx="316.2" cy="218.2" r="3" fill="#5ec8ff"/>
+<circle cx="351.9" cy="196.8" r="3" fill="#5ec8ff"/>
+<circle cx="381.0" cy="185.8" r="3" fill="#5ec8ff"/>
+<circle cx="405.7" cy="170.5" r="3" fill="#5ec8ff"/>
+<circle cx="427.0" cy="164.9" r="3" fill="#5ec8ff"/>
+<circle cx="445.9" cy="158.6" r="3" fill="#5ec8ff"/>
+<circle cx="462.7" cy="152.1" r="3" fill="#5ec8ff"/>
+<circle cx="478.0" cy="147.0" r="3" fill="#5ec8ff"/>
+<circle cx="491.9" cy="143.7" r="3" fill="#5ec8ff"/>
+<circle cx="504.7" cy="141.0" r="3" fill="#5ec8ff"/>
+<circle cx="516.5" cy="128.9" r="3" fill="#5ec8ff"/>
+<circle cx="527.6" cy="124.0" r="3" fill="#5ec8ff"/>
+<circle cx="537.9" cy="122.5" r="3" fill="#5ec8ff"/>
+<circle cx="547.6" cy="124.3" r="3" fill="#5ec8ff"/>
+<circle cx="556.7" cy="122.7" r="3" fill="#5ec8ff"/>
+<circle cx="565.4" cy="119.2" r="3" fill="#5ec8ff"/>
+<circle cx="573.6" cy="120.5" r="3" fill="#5ec8ff"/>
+<circle cx="581.4" cy="108.7" r="3" fill="#5ec8ff"/>
+<circle cx="588.8" cy="107.3" r="3" fill="#5ec8ff"/>
+<circle cx="595.9" cy="106.9" r="3" fill="#5ec8ff"/>
+<circle cx="602.7" cy="104.4" r="3" fill="#5ec8ff"/>
+<circle cx="609.3" cy="104.2" r="3" fill="#5ec8ff"/>
+<circle cx="615.5" cy="104.8" r="3" fill="#5ec8ff"/>
+<circle cx="621.6" cy="106.1" r="3" fill="#5ec8ff"/>
+<circle cx="627.4" cy="100.4" r="3" fill="#5ec8ff"/>
+<circle cx="633.0" cy="98.5" r="3" fill="#5ec8ff"/>
+<circle cx="638.4" cy="97.1" r="3" fill="#5ec8ff"/>
+<circle cx="643.7" cy="96.6" r="3" fill="#5ec8ff"/>
+<circle cx="648.7" cy="96.6" r="3" fill="#5ec8ff"/>
+<text x="102" y="282" fill="#3fb950" font-size="9" font-family="sans-serif">medido 0.315</text>
+<text x="102" y="209" fill="#ffb454" font-size="9" font-family="sans-serif">Chinchilla 0.28</text>
+<text x="102" y="152" fill="#ff5c5c" font-size="9" font-family="sans-serif">Kaplan 0.095</text>
+<line x1="419.4" y1="54" x2="419.4" y2="354" stroke="#ff5c5c" stroke-dasharray="4,3"/>
+<text x="424" y="68" fill="#ff5c5c" font-size="9" font-family="sans-serif">a partir daqui os dados se repetem</text>
+<text x="102" y="79" fill="#8b949e" font-size="9" font-family="sans-serif">reta = expoente constante; encurvar = muda de regime</text>
 </g>
 <g transform="translate(1640,0)">
 <rect x="8" y="8" width="724" height="454" rx="6" fill="#0b0e14" stroke="#2a3140"/>
