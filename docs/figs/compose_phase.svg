@@ -15573,9 +15573,9 @@
 <text x="395" y="398" fill="#8b949e" font-size="11" text-anchor="middle" font-family="sans-serif">imposto de composicao (bpb)  —  quanto o merge custa sobre a media dos shards</text>
 <text x="26" y="210" fill="#8b949e" font-size="11" transform="rotate(-90 26 210)" text-anchor="middle" font-family="sans-serif">alpha (quanto compute vale; log)</text>
 <rect x="80" y="291" width="630" height="4" fill="#ffb454" opacity="0.35"/>
-<text x="395" y="287" fill="#ffb454" font-size="10" font-family="sans-serif">alpha do eixo de DADOS na Chinchilla (0.28) — mesma composicao, ganho muito menor</text>
+<text x="92" y="287" fill="#ffb454" font-size="10" font-family="sans-serif">alpha do eixo de DADOS na Chinchilla (0.28) — mesma composicao, ganho muito menor</text>
 <rect x="80" y="195" width="630" height="4" fill="#ff5c5c" opacity="0.35"/>
-<text x="395" y="191" fill="#ff5c5c" font-size="10" font-family="sans-serif">idem em Kaplan (0.095) — mesma composicao, ganho muito menor</text>
+<text x="92" y="191" fill="#ff5c5c" font-size="10" font-family="sans-serif">idem em Kaplan (0.095) — mesma composicao, ganho muito menor</text>
 <circle cx="212.8" cy="336.2" r="5" fill="#e6edf3" stroke="#0b0e14" stroke-width="1.5"/>
 <circle cx="343.9" cy="336.2" r="5" fill="#e6edf3" stroke="#0b0e14" stroke-width="1.5"/>
 <circle cx="529.1" cy="336.2" r="5" fill="#e6edf3" stroke="#0b0e14" stroke-width="1.5"/>
@@ -15583,11 +15583,9 @@
 <text x="552" y="317" fill="#e6edf3" font-size="9" font-family="sans-serif">faixa da alpha medida (0.32-0.48: o ajuste depende da janela)</text>
 <line x1="96" y1="336" x2="710" y2="336" stroke="#e6edf3" stroke-width="0.8" opacity="0.5"/>
 <text x="88" y="352" fill="#e6edf3" font-size="10" font-family="sans-serif">alpha medido aqui = 0.46 (d96, 4 pontos: L = 1.76 + 530.7 D^-0.458, rmse 0.0022)</text>
-<text x="139" y="296" fill="#e6edf3" font-size="10" font-family="sans-serif">K=4, 1 epoca (imposto EXATO): +0.169</text>
-<text x="139" y="310" fill="#ffb454" font-size="10" font-family="sans-serif">K=4, 2 epocas: +0.335</text>
-<text x="139" y="324" fill="#ff5c5c" font-size="10" font-family="sans-serif">vs alternativa sequencial: +0.570</text>
-<text x="139" y="358" fill="#c9d1d9" font-size="10" font-family="sans-serif">com alpha na faixa medida: K=4 rende 2.7-3.1x de 4x | K=32 rende 22-25x de 32x</text>
-<text x="139" y="372" fill="#c9d1d9" font-size="10" font-family="sans-serif">com o alpha da fronteira (~0.1): K=32 rende ~10x de 32x</text>
+<text x="89" y="352" fill="#e6edf3" font-size="10" font-family="sans-serif">K=4, 1 epoca: imposto EXATO +0.169  ->  2.7-3.1x de 4x | 22-25x de 32x</text>
+<text x="89" y="356" fill="#ffb454" font-size="10" font-family="sans-serif">K=4, 2 epocas: +0.335  ->  2.4x de 4x | 19x de 32x</text>
+<text x="89" y="361" fill="#ff5c5c" font-size="10" font-family="sans-serif">vs alternativa sequencial: +0.570  |  com alpha da fronteira o ganho quase zera</text>
 <text x="552" y="272" fill="#93c5fd" font-size="13" font-family="sans-serif">COMPOR VALE</text>
 <text x="490" y="132" fill="#fca5a5" font-size="13" font-family="sans-serif">COMPOR CUSTA</text>
 <text x="89" y="173" fill="#e6edf3" font-size="11" font-family="sans-serif">fronteiras (tracejado): imposto = alpha * log2(K)</text>

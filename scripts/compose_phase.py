@@ -108,7 +108,7 @@ def main():
                      (A_KAPLAN, "#ff5c5c", "idem em Kaplan (0.095)")):
         o.append(f'<rect x="{x0}" y="{Y(a)-2:.0f}" width="{pw}" height="4" '
                  f'fill="{c}" opacity="0.35"/>')
-        o.append(f'<text x="{X(0.40):.0f}" y="{Y(a)-6:.0f}" fill="{c}" font-size="10" '
+        o.append(f'<text x="{X(0.015):.0f}" y="{Y(a)-6:.0f}" fill="{c}" font-size="10" '
                  f'font-family="sans-serif">{nm} — mesma composicao, ganho muito menor</text>')
     # nossos pontos
     for t, nm in MEAS:
@@ -123,17 +123,12 @@ def main():
     o.append(f'<text x="{X(0.01):.0f}" y="{Y(A_OURS)+16:.0f}" fill="#e6edf3" '
              f'font-size="10" font-family="sans-serif">alpha medido aqui = 0.46 '
              f'(d96, 4 pontos: L = 1.76 + 530.7 D^-0.458, rmse 0.0022)</text>')
-    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-40:.0f}" fill="#e6edf3" font-size="10" '
-             f'font-family="sans-serif">K=4, 1 epoca (imposto EXATO): +0.169</text>')
-    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-26:.0f}" fill="#ffb454" font-size="10" '
-             f'font-family="sans-serif">K=4, 2 epocas: +0.335</text>')
-    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)-12:.0f}" fill="#ff5c5c" font-size="10" '
-             f'font-family="sans-serif">vs alternativa sequencial: +0.570</text>')
-    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)+22:.0f}" fill="#c9d1d9" font-size="10" '
-             f'font-family="sans-serif">com alpha na faixa medida: K=4 rende 2.7-3.1x de 4x | '
-             f'K=32 rende 22-25x de 32x</text>')
-    o.append(f'<text x="{X(0.075):.0f}" y="{Y(A_OURS)+36:.0f}" fill="#c9d1d9" font-size="10" '
-             f'font-family="sans-serif">com o alpha da fronteira (~0.1): K=32 rende ~10x de 32x</text>')
+    for k, (yy, txt, col) in enumerate([
+            (0.545, "K=4, 1 epoca: imposto EXATO +0.169  ->  2.7-3.1x de 4x | 22-25x de 32x", "#e6edf3"),
+            (0.575, "K=4, 2 epocas: +0.335  ->  2.4x de 4x | 19x de 32x", "#ffb454"),
+            (0.605, "vs alternativa sequencial: +0.570  |  com alpha da fronteira o ganho quase zera", "#ff5c5c")]):
+        o.append(f'<text x="{X(0.012):.0f}" y="{Y(yy):.0f}" fill="{col}" font-size="10" '
+                 f'font-family="sans-serif">{txt}</text>')
     # rotulos de regiao
     o.append(f'<text x="{X(0.60):.0f}" y="{Y(0.22):.0f}" fill="#93c5fd" font-size="13" '
              f'font-family="sans-serif">COMPOR VALE</text>')

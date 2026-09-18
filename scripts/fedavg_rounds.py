@@ -92,6 +92,20 @@ def avg_dirs(dirs, out, include_opt=True):
     return len(W) + len(S)
 
 
+def outer_step(prev, avg, u, lr, mu):
+    """Um passo do otimizador externo (Nesterov) do DiLoCo.
+
+    prev: theta do outer antes dos passos locais; avg: media dos workers;
+    u: buffer de momento (persistido entre rodadas).
+    """
+    out, unew = {}, {}
+    for k in avg:
+        g = prev[k].astype("float64") - avg[k].astype("float64")
+        unew[k] = mu * u.get(k, 0.0) + g
+        out[k] = (prev[k].astype("float64") - lr * (g + mu * unew[k])).astype("float32")
+    return out, unew
+
+
 def bpb_of(evfile, rows):
     tb = np.array([int(x) for x in open(os.path.expanduser(
         "~/.cache/autoresearch/tok_tables/token_bytes.txt"))])
@@ -123,6 +137,12 @@ def main():
     ap.add_argument("--holdout", default="/tmp/mix/rows_holdout.npy")
     ap.add_argument("--out", required=True)
     ap.add_argument("--anneal", action="store_true")
+    ap.add_argument("--outer", default="none", choices=("none", "nesterov"),
+                    help="otimizador EXTERNO sobre os parametros sincronizados (DiLoCo): "
+                         "g = theta_outer_prev - theta_avg_inner; u = mu*u + g; "
+                         "theta = theta_outer_prev - lr*(g + mu*u)")
+    ap.add_argument("--outer-lr", type=float, default=0.7)
+    ap.add_argument("--outer-mom", type=float, default=0.9)
     ap.add_argument("--regime", default="federated",
                     choices=("federated", "parallel", "rotating"),
                     help="federated = fatias disjuntas (FL); parallel = MESMA distribuicao "
@@ -194,6 +214,21 @@ def main():
             workers.append(os.path.join(wdir, f"step_{a.tau}"))
         nxt = os.path.join(a.out, f"round{r+1}_common")
         n = avg_dirs(workers, nxt)
+        if a.outer == "nesterov":
+            # medi os pesos means (avg_dirs) e agora aplico o passo do outer
+            import ckio as _ck
+            avg_w = _ck.load_ckpt_dir(nxt)
+            prev_w = _ck.load_ckpt_dir(common)
+            ufile = os.path.join(a.out, "outer_u.json")
+            ukeys = {}
+            if os.path.exists(ufile):
+                ukeys = {k: np.array(v) for k, v in json.load(open(ufile)).items()}
+            new_w, ukeys = outer_step(prev_w, avg_w, ukeys, a.outer_lr, a.outer_mom)
+            shutil.rmtree(nxt, ignore_errors=True)
+            _ck.save_ckpt_dir(nxt, new_w, like=common, op="outer_nesterov",
+                              extra_meta={"outer_lr": a.outer_lr, "outer_mom": a.outer_mom})
+            json.dump({k: v.tolist() for k, v in ukeys.items()}, open(ufile, "w"))
+            print(f"    outer nesterov: lr={a.outer_lr} mu={a.outer_mom}")
         common = nxt
         print(f"  rodada {r+1}/{a.rounds}: {n} tensores mediados (com momentos)")
         if not a.no_eval:
