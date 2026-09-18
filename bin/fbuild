@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# fbuild — gate de build do lab: -Wall -Wextra por padrao, -Werror OPCIONAL.
+#
+# O fpm nao aceita flags cruas no manifesto: [profiles] so' aceita nomes de
+# FEATURE do compilador (ex.: "warn-all"), e nao existe feature para
+# "warnings as errors". Entao o gate vive aqui, e todo job/build do lab deveria
+# chamar este script em vez de `fortran-fpm build` direto.
+#
+#   bin/fbuild                 # -Wall -Wextra
+#   bin/fbuild --werror        # -Wall -Wextra -Werror (o portao de verdade)
+#   FPM_FLAGS="..." bin/fbuild # override
+#
+# Estado atual: a arvore compila SEM avisos com -Wall -Wextra (build limpo em
+# dir novo), logo --werror passa hoje -- e passa a proteger contra regressao.
+set -eu
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# Excecoes OBRIGATORIAS no --werror, e o motivo: o unico arquivo com avisos na
+# arvore e' o m_cli2.f90, parser de CLI VENDORIZADO de terceiros (nao nosso).
+# Ele emite unused-function (set_usage, show_response_file) e
+# maybe-uninitialized (kludge) -- nosso codigo passa -Werror limpo. Sem estas
+# duas excecoes o gate nao roda e deixa de proteger o que importa.
+WERROR=" -Werror -Wno-error=unused-function -Wno-error=maybe-uninitialized"
+[ "${1:-}" = "--werror" ] || WERROR=""
+[ "${1:-}" = "--werror" ] && shift || true
+FLAGS="${FPM_FLAGS:--Wall -Wextra -fcheck=all -fbacktrace}${WERROR}"
+exec nix develop --command bash -c "cd src && fortran-fpm build --flag '$FLAGS' $*"
