@@ -20,9 +20,14 @@ for d in $(ls -d /tmp/scal65/step_* /tmp/scal65_tail/step_* 2>/dev/null | sort -
   # eval) tambem passa em -s e viraria um ponto ruim permanente na curva.
   N=$(grep -cE "^ *[-0-9]" "/tmp/scal65_1k/ev_$s.txt" 2>/dev/null || echo 0)
   [ "$N" -ge 1000 ] && continue            # 1000 = linhas do holdout de 1k
+  # ESCRITA ATOMICA: sai para .tmp e so' vira ev_$s.txt se o eval terminar.
+  # Job morto no meio deixa .tmp (que o skip ignora), nunca um parcial definitivo.
   OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FALSE "$EV" \
     --weights "$d" --rows /tmp/prose65/rows_val1k.npy --attn blas --batch 16 \
-    > /tmp/scal65_1k/ev_$s.txt 2>&1
+    > /tmp/scal65_1k/ev_$s.txt.tmp 2>&1 && \
+    [ "$(grep -cE '^ *[-0-9]' /tmp/scal65_1k/ev_$s.txt.tmp)" -ge 1000 ] && \
+    mv /tmp/scal65_1k/ev_$s.txt.tmp /tmp/scal65_1k/ev_$s.txt || \
+    { echo "  eval $s incompleto/falhou (fica .tmp)"; continue; }
   n=$((n+1))
 done
 echo "  $n checkpoints reavaliados"
