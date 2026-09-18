@@ -99,7 +99,7 @@ def main():
              f'font-family="sans-serif">ajuste todos os 32: L={Lall:.2f}+{A_all:.0f}D^-{a_all:.3f} (rmse {r_all:.4f})</text>')
 
     # ---------- B: log-log do excesso (eixo y de verdade em log) ----------
-    lo, hi = 1.25, 0.40          # faixa do excesso em bpb (log)
+    lo, hi = 0.40, 1.25          # faixa do excesso em bpb (log, maior em cima)
     o2 = [f'<rect x="8" y="8" width="{W+24}" height="{H+24}" rx="6" fill="#0b0e14" '
           f'stroke="#2a3140"/>',
           f'<text x="22" y="28" fill="#e6edf3" font-size="14" font-family="sans-serif">'
@@ -107,7 +107,7 @@ def main():
     eY = lambda v: y0 + ph * (math.log10(hi) - math.log10(max(v, 1e-6))) / (math.log10(hi) - math.log10(lo))
     o2.append(f'<line x1="{x0}" y1="{y0+ph}" x2="{x0+pw}" y2="{y0+ph}" stroke="#39404f"/>')
     o2.append(f'<line x1="{x0}" y1="{y0}" x2="{x0}" y2="{y0+ph}" stroke="#39404f"/>')
-    for v in (1.2, 1.0, 0.8, 0.6, 0.5, 0.4):
+    for v in (1.2, 1.0, 0.8, 0.6, 0.5, 0.4):  # rotulos por log
         o2.append(f'<line x1="{x0}" y1="{eY(v):.1f}" x2="{x0+pw}" y2="{eY(v):.1f}" '
                   f'stroke="#1d222c"/>')
         o2.append(f'<text x="{x0-6}" y="{eY(v)+3:.1f}" fill="#8b949e" font-size="9" '
