@@ -34,12 +34,24 @@ import time
 T = 1024  # TT do modelo (contexto)
 
 
-def run(cmd, log):
-    """Roda e devolve (wall_s, stdout). Aborta alto em falha nao-zero."""
+def run(cmd, log, timeout_s=0):
+    """Roda e devolve (wall_s, stdout). Aborta alto em falha nao-zero ou timeout.
+
+    Timeout NAO e' preciosismo: em 2026-09-19 um run de 6 passos do binario ANTIGO
+    entrou em spin (16 threads, estado R, 58 min sem output) e travou o job
+    inteiro -- o sweep nunca comecou. Um limite por execucao transforma isso em
+    erro explicito.
+    """
     t0 = time.time()
     with open(log, "w") as fh:
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           text=True)
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, timeout=(timeout_s or None))
+        except subprocess.TimeoutExpired:
+            print("TIMEOUT de %ds: %s\n--- ultimas linhas de %s:"
+                  % (timeout_s, " ".join(cmd[:8]), log))
+            print("\n".join(open(log).read().splitlines()[-8:]) if os.path.exists(log) else "")
+            sys.exit(1)
         fh.write(p.stdout)
     wall = time.time() - t0
     if p.returncode != 0:
@@ -49,12 +61,15 @@ def run(cmd, log):
     return wall, p.stdout
 
 
-def final_bpb(train_bin, rows, init, outdir, batch, nsteps, lr, ntrain, bytesfile):
+def final_bpb(train_bin, rows, init, outdir, batch, nsteps, lr, ntrain, bytesfile,
+              timeout_s=None):
     rm = ["--weights", init, "--rows", rows, "--out", outdir, "--nsteps", str(nsteps),
           "--lr", str(lr), "--ntrain", str(ntrain), "--start_row", "0", "--nval", "1",
           "--val_every", str(nsteps), "--trn_probe", "0", "--save_every", str(nsteps),
           "--attn", "blas", "--bytes", bytesfile, "--batch", str(batch)]
-    wall, out = run([train_bin] + rm, os.path.join(outdir, "train.log"))
+    # teto proporcional ao trabalho pedido: 2 s/passo + 120 s de folga
+    wall, out = run([train_bin] + rm, os.path.join(outdir, "train.log"),
+                    timeout_s=(0 if timeout_s is None else 2 * nsteps + 120))
     bpb = None
     for line in out.splitlines():
         low = line.lower()
@@ -102,6 +117,8 @@ def main():
     ap.add_argument("--lr", type=float, default=6e-4)
     ap.add_argument("--ntrain", type=int, default=11797)
     ap.add_argument("--work", default="/tmp/bsweep")
+    ap.add_argument("--timeout", type=int, default=3600,
+                    help="limite por execucao (s); 0 = sem limite")
     a = ap.parse_args()
 
     # parametros do modelo (6*P por token no fwd+bwd) -- do arch.txt do init
@@ -128,7 +145,7 @@ def main():
         d = os.path.join(a.work, "probe_b%d" % b)
         shutil.rmtree(d, ignore_errors=True)
         wall, bpb, _ = final_bpb(a.train, a.rows, a.init, d, b, a.probe_steps,
-                                 a.lr, a.ntrain, a.bytes)
+                                 a.lr, a.ntrain, a.bytes, a.timeout)
         tok = a.probe_steps * b * T
         thr[b] = tok / wall
         print("%-4d %-7d %-10d %-8.1f %-10.0f %-9.1f %.3f" %
@@ -143,7 +160,7 @@ def main():
         d = os.path.join(a.work, "qual_b%d" % b)
         shutil.rmtree(d, ignore_errors=True)
         wall, bpb_train, _ = final_bpb(a.train, a.rows, a.init, d, b, steps,
-                                       a.lr, a.ntrain, a.bytes)
+                                       a.lr, a.ntrain, a.bytes, a.timeout)
         ck = None
         for root, _, files in os.walk(d):
             if "model.safetensors" in files:
