@@ -29,6 +29,8 @@ module load_weights_mod
   ! devolveu, ja com total/sensor/escopo/kind preenchidos pela API do pacote.
   use fortran_energy_mod, only: energy_interval_t
   use safetensors, only: st_writer, st_reader, st_ok
+  use fortran_arch_mod, only: arch_schema, arch_canonical, arch_canonical_of, &
+      arch_id, arch_id_of
   implicit none
 
   ! Nome do arquivo unico e convencao de nomes dos tensores.
@@ -178,6 +180,15 @@ contains
     real(wp), intent(in) :: c_pr(:), c_fc(:), c_pr2(:)
     integer :: ll, qsz, ksz, psz, fcsz, p2sz
     character(len=16) :: lstr
+    ! vocab_size nao aparece em nome de arquivo, mas aparece no SHAPE: um
+    ! wte/lm_head com tamanho errado gera checkpoint que so' falha depois, no
+    ! load -- exatamente o "lixo silencioso" que o verify_ckpt_dir existe para
+    ! pegar. Falha alto aqui e' mais barato que descobrir no proximo job.
+    if (size(wte) /= vocab_size*d_model .or. size(lm_head) /= vocab_size*d_model) then
+      print '(A,2I10)', 'save_gpt_weights: wte/lm_head != vocab*d_model: ', &
+          size(wte), vocab_size*d_model
+      call exit(1)
+    end if
     qsz = n_head*head_dim*d_model
     ksz = n_kv_head*head_dim*d_model
     psz = d_model*n_head*head_dim
@@ -351,6 +362,14 @@ contains
     call set_meta_i(w, 'arch.ctx', ctx)
     call set_meta_i(w, 'arch.bos', bos)
     call set_meta_i(w, 'arch.head_dim', head_dim)
+    ! IDENTIDADE, nao so' campos: uma string canonica e um id derivado dos
+    ! parametros compilados. E' contra isto que o binario se confere (e o
+    ! que substitui, aos poucos, o vinculo por NOME de pasta de build).
+    call w%set_meta('arch.schema', arch_schema())
+    call w%set_meta('arch.canonical', arch_canonical_of(d_model, n_head, &
+        n_kv_head, head_dim, n_layer, vocab_size, ctx, bos))
+    call w%set_meta('arch.id', arch_id_of(arch_canonical_of(d_model, n_head, &
+        n_kv_head, head_dim, n_layer, vocab_size, ctx, bos)))
     call set_meta_i(w, 'n_tensors', 2 + 6*n_layer)
     card = '{"steps":'//i2c(step)//',"lr":'//json_real(lr)// &
            ',"tokens":'//i8c(tokens)//',"rows_file":"'//trim(rowsfile)// &
@@ -495,8 +514,6 @@ contains
     type(st_reader), intent(in) :: r
     character(*), intent(in) :: wdir
     integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim, vocab_size
-    character(len=:), allocatable :: val
-    logical :: found
     call cmp_meta(r, wdir, 'arch.d_model', d_model)
     call cmp_meta(r, wdir, 'arch.n_head', n_head)
     call cmp_meta(r, wdir, 'arch.n_kv', n_kv_head)
@@ -505,7 +522,136 @@ contains
     call cmp_meta(r, wdir, 'arch.head_dim', head_dim)
     ! ctx/bos nao entram na checagem: nao afetam o layout dos pesos (So o
     ! require_arch do arch.txt os confere, e so quando o arch.txt existe).
+    ! Identidade: o checkpoint tem de ser CONSISTENTE CONSIGO -- os campos
+    ! arch.*, a canonica declarada (arch.canonical) e o id declarado (arch.id)
+    ! tem de contar a mesma historia. Isto pega metadata corrompida ou editada a
+    ! mao, e funciona para archs sinteticas (testes). A identidade contra ESTE
+    ! binario e' a checagem campo-a-campo acima; a SELECAO de binario e' feita
+    ! por `arch_id --from DIR` / bin/arch_check.sh.
+    call check_arch_selfconsistent(r, wdir)
   end subroutine check_declared_arch
+
+  ! Autoconsistencia da identidade: campos <-> canônica <-> id.
+  subroutine check_arch_selfconsistent(r, wdir)
+    type(st_reader), intent(in) :: r
+    character(*), intent(in) :: wdir
+    integer :: d, nh, nkv, hd, nl, vv, ctx, bos
+    character(len=:), allocatable :: val, c1
+    logical :: found, any_missing
+    d = 0; nh = 0; nkv = 0; hd = 0; nl = 0; vv = 0; ctx = 0; bos = 0
+    call read_meta_i(r, 'arch.d_model', d)
+    call read_meta_i(r, 'arch.n_head', nh)
+    call read_meta_i(r, 'arch.n_kv', nkv)
+    call read_meta_i(r, 'arch.head_dim', hd)
+    call read_meta_i(r, 'arch.n_layer', nl)
+    call read_meta_i(r, 'arch.vocab', vv)
+    call read_meta_i(r, 'arch.ctx', ctx)
+    call read_meta_i(r, 'arch.bos', bos)
+    any_missing = min(d, nh, nkv, hd, nl, vv, ctx) <= 0
+    if (any_missing) return                    ! checkpoint antigo: nada a checar
+    c1 = arch_canonical_of(d, nh, nkv, hd, nl, vv, ctx, bos)
+    call r%meta('arch.canonical', val, found)
+    if (found .and. trim(val) /= trim(c1)) then
+      print '(A)', 'FATAL: metadata de arch inconsistente (arch.canonical != campos)'
+      print '(2A)', '  arquivo declara: ', trim(val)
+      print '(2A)', '  campos somam   : ', trim(c1)
+      print '(2A)', '  checkpoint: ', trim(wdir)
+      call exit(1)
+    end if
+    call r%meta('arch.id', val, found)
+    if (found .and. trim(val) /= arch_id_of(c1)) then
+      print '(A)', 'FATAL: metadata de arch inconsistente (arch.id != hash dos campos)'
+      print '(2A)', '  arquivo declara: ', trim(val)
+      print '(2A)', '  campos somam   : ', arch_id_of(c1)
+      print '(2A)', '  checkpoint: ', trim(wdir)
+      call exit(1)
+    end if
+  end subroutine check_arch_selfconsistent
+
+  ! Arch de um checkpoint: __metadata__ do safetensors PRIMEIRO (padrao, viaja com
+  ! os pesos), arch.txt como FALLBACK (init em .npy). Um so' leitor para todo
+  ! mundo -- app e teste -- em vez de cada um parsear o sidecar a sua maneira.
+  subroutine read_arch_any(dir, d_model, n_head, n_kv_head, head_dim, n_layer, &
+      vocab_size, ctx, bos, source)
+    character(*), intent(in) :: dir
+    integer, intent(out) :: d_model, n_head, n_kv_head, head_dim, n_layer, &
+        vocab_size, ctx, bos
+    character(*), intent(out) :: source
+    type(st_reader) :: r
+    character(len=:), allocatable :: msg
+    integer :: stat, u, ios
+    character(len=512) :: line
+    logical :: have_all
+
+    d_model = 0; n_head = 0; n_kv_head = 0; head_dim = 0; n_layer = 0
+    vocab_size = 0; ctx = 0; bos = 0
+    source = ''
+    have_all = .false.
+    call r%open(trim(dir)//'/'//ST_CKPT, stat, msg)
+    if (stat == st_ok) then
+      call read_meta_i(r, 'arch.d_model', d_model)
+      call read_meta_i(r, 'arch.n_head', n_head)
+      call read_meta_i(r, 'arch.n_kv', n_kv_head)
+      call read_meta_i(r, 'arch.head_dim', head_dim)
+      call read_meta_i(r, 'arch.n_layer', n_layer)
+      call read_meta_i(r, 'arch.vocab', vocab_size)
+      call read_meta_i(r, 'arch.ctx', ctx)
+      call read_meta_i(r, 'arch.bos', bos)
+      call r%close()
+      have_all = min(d_model, n_head, n_kv_head, head_dim, n_layer, &
+          vocab_size, ctx) > 0
+      if (have_all) source = trim(dir)//'/'//ST_CKPT//' (__metadata__)'
+    end if
+    if (.not. have_all) then
+      open (newunit=u, file=trim(dir)//'/arch.txt', status='old', action='read', iostat=ios)
+      if (ios /= 0) then
+        write (*, '(2A)') 'read_arch_any: sem metadata de arch em ', trim(dir)
+        call exit(1)
+      end if
+      do
+        read (u, '(A)', iostat=ios) line
+        if (ios /= 0) exit
+        call take_kv(line, 'd_model', d_model)
+        call take_kv(line, 'n_head', n_head)
+        call take_kv(line, 'n_kv', n_kv_head)
+        call take_kv(line, 'head_dim', head_dim)
+        call take_kv(line, 'n_layer', n_layer)
+        call take_kv(line, 'vocab', vocab_size)
+        call take_kv(line, 'ctx', ctx)
+        call take_kv(line, 'bos', bos)
+      end do
+      close (u)
+      if (min(d_model, n_head, n_kv_head, head_dim, n_layer, vocab_size, ctx) <= 0) then
+        write (*, '(2A)') 'read_arch_any: arch.txt incompleto em ', trim(dir)
+        call exit(1)
+      end if
+      source = trim(dir)//'/arch.txt'
+    end if
+    write (*, '(2A)') '# arch lida de: ', trim(source)
+  end subroutine read_arch_any
+
+  subroutine read_meta_i(r, key, val)
+    type(st_reader), intent(in) :: r
+    character(*), intent(in) :: key
+    integer, intent(inout) :: val
+    character(len=:), allocatable :: s
+    integer :: got, ios
+    logical :: found
+    call r%meta(key, s, found)
+    if (.not. found) return
+    read (s, *, iostat=ios) got
+    if (ios == 0) val = got
+  end subroutine read_meta_i
+
+  subroutine take_kv(line, key, val)
+    character(*), intent(in) :: line, key
+    integer, intent(inout) :: val
+    integer :: p, q
+    p = index(line, trim(key)//' =')
+    if (p /= 1) return
+    q = index(line, '=')
+    read (line(q+1:), *) val
+  end subroutine take_kv
 
   subroutine cmp_meta(r, wdir, key, want)
     type(st_reader), intent(in) :: r

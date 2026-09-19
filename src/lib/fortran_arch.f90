@@ -17,6 +17,7 @@
 ! <ctx> -- valida a combinação, reescreve os números AQUI e rebuilda. Sem
 ! pré-processador e sem duplicação: a mudança aparece no git diff.
 module fortran_arch_mod
+  use, intrinsic :: iso_fortran_env, only: int64
   use fortran_kinds_mod, only: wp
   implicit none
 
@@ -121,6 +122,81 @@ contains
 
   ! Reusável: todo app que carrega pesos chama ISTO, em vez de repetir a checagem.
   ! Um checkpoint de outra arquitetura tem de parar a execução, não gerar lixo.
+  ! ---------------------------------------------------------------------
+  ! IDENTIDADE da arquitetura.
+  !
+  ! A verdade sobre a arch mora em TRES lugares (os `parameter` deste modulo, o
+  ! __metadata__ do safetensors e o sidecar arch.txt) e o vinculo
+  ! binario<->checkpoint era um NOME DE PASTA (arch_d96_h6_kv2_l12_v8192_c1024,
+  ! schema repetido em fedavg_rounds.py, compose_grid.py e set_arch.sh). Foi
+  ! assim que a arvore ficou com a fonte em d216 e os experimentos em d96.
+  !
+  ! Aqui a arch ganha UMA identidade derivada dos proprios parametros:
+  !   arch_canonical()  string canonica (ordem fixa, sem espaco) -- vai no
+  !                     metadata como arch.canonical;
+  !   arch_id()         16 digitos hex, para selecao e checagem.
+  !
+  ! O id NAO e' criptografico: e' rotacao+xor sobre os bytes da canonica,
+  ! escolhido porque (a) nao depende de overflow de inteiro assinado (que a
+  ! norma nao define e o compilador pode explorar) e (b) tem implementacao
+  ! identica de 5 linhas em Fortran e em Python, o que permite TESTE de
+  ! concordancia entre as linguagens (bin/arch_check.sh). Ele so' precisa
+  ! garantir que configs diferentes nao colidam -- e isso e' testado.
+  ! ---------------------------------------------------------------------
+  ! Versao do schema da identidade (vai no metadata como arch.schema). Mudar o
+  ! CONJUNTO de campos exige subir isto -- e' o que diz ao leitor que o formato
+  ! mudou, em vez de deixar campo faltando passar batido.
+  function arch_schema() result(s)
+    character(len=:), allocatable :: s
+    s = 'fortran_gpt/arch/1'
+  end function arch_schema
+
+  function arch_canonical() result(s)
+    character(len=:), allocatable :: s
+    s = arch_canonical_of(D_MODEL, N_HEAD, N_KV, HD, N_LAYER, VV, TT, BOS)
+  end function arch_canonical
+
+  ! Mesma string canonica para numeros EXPLICITOS: e' o que permite comparar
+  ! Fortran e Python (e checar um checkpoint) sem depender de qual arch este
+  ! binario foi compilado.
+  function arch_canonical_of(d, nh, nkv, hd_, nl, vv_, ctx, bos_) result(s)
+    integer, intent(in) :: d, nh, nkv, hd_, nl, vv_, ctx, bos_
+    character(len=:), allocatable :: s
+    character(len=256) :: buf
+    write (buf, '(A,I0,A,I0,A,I0,A,I0,A,I0,A,I0,A,I0,A,I0,A,I0,A)') &
+        '{"schema":"fortran_gpt/arch/1","d_model":', d, &
+        ',"n_head":', nh, ',"n_kv":', nkv, ',"head_dim":', hd_, &
+        ',"n_layer":', nl, ',"vocab":', vv_, ',"ctx":', ctx, &
+        ',"bos":', bos_, '}'
+    s = trim(buf)
+  end function arch_canonical_of
+
+  function arch_id() result(h)
+    character(len=16) :: h
+    h = arch_id_of(arch_canonical())
+  end function arch_id
+
+  function arch_id_of(s) result(h)
+    character(*), intent(in) :: s
+    character(len=16) :: h
+    integer(int64) :: acc, m17, v1
+    integer :: i, b
+    acc = int(z'0123456789abcdef', int64)      ! semente fixa
+    m17 = int(z'1ffff', int64)                 ! 17 bits (os que saem na rotacao)
+    do i = 1, len(s)
+      b = iachar(s(i:i))
+      acc = ieor(acc, int(b, int64))
+      ! rotacao a esquerda de 17 bits (so' shift e or: sem overflow)
+      acc = ior(shiftl(acc, 17), iand(shiftr(acc, 47), m17))
+      ! mistura
+      acc = ieor(acc, shiftr(acc, 29))
+    end do
+    do i = 0, 15
+      v1 = iand(shiftr(acc, int(4*(15 - i), int64)), 15_int64)
+      h(i + 1:i + 1) = '0123456789abcdef'(int(v1) + 1:int(v1) + 1)
+    end do
+  end function arch_id_of
+
   subroutine require_arch(dir)
     character(len=*), intent(in) :: dir
     logical :: ok
