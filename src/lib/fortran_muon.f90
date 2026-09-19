@@ -44,8 +44,10 @@ contains
     c = size(X, 2)
     was_tall = r > c
     if (was_tall) then
+      allocate (W(c, r))
       W = transpose(X)   ! wide (c,r)
     else
+      allocate (W(r, c))
       W = X
     end if
     k = size(W, 1)

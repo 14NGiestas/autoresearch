@@ -90,7 +90,7 @@ contains
     allocate(mlpd(BB*d_ff))
 
     ! ---- 1. token embedding (single position) --------------
-    call wte_lookup(idx1, wte, emd, BB, 1, vocab_size, d_model)
+    call wte_lookup(idx1, wte, emd, BB, 1, d_model)
 
     ! ---- 2. initial RMSNorm (train.py norms embeddings before blocks)
     call rmsnorm0(emd, xn, BB, d_model, eps)
@@ -228,7 +228,7 @@ contains
     allocate(mlpd(bt*d_ff))
 
     ! ---- 1. token embeddings (TB positions) ------------------
-    call wte_lookup(idx, wte, emd, BB, TB, vocab_size, d_model)
+    call wte_lookup(idx, wte, emd, BB, TB, d_model)
 
     ! ---- 2. initial RMSNorm ----------------------------------
     call rmsnorm0(emd, xn, bt, d_model, eps)

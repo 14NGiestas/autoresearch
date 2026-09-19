@@ -12,6 +12,7 @@
 program infer
   use iso_c_binding
   use fortran_gpt_mod
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
   implicit none
 
   integer, parameter :: sp = c_float
@@ -77,7 +78,7 @@ program infer
         topv = outp((tc-1)*VV+i); best = i
       end if
     end do
-    if (.not. (topv == topv)) then
+    if (ieee_is_nan(topv)) then
       print '(A)', "NaN logit — abort"; call exit(1)
     end if
     ! best is a 1-based position; token IDs are 0-based.

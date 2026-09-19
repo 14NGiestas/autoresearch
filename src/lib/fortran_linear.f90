@@ -59,8 +59,8 @@ contains
   ! Token embedding lookup: out(b,t,:) = wte(idx(b,t), :)
   ! idx is 0-based (PyTorch convention): row id = idx, NOT idx-1.
   ! Flat 1-D indexing preserves row-major layout; sizes as scalar args.
-  subroutine wte_lookup(idx, wte, out, BR, TC, VMAX, DMX)
-    integer(c_int), intent(in) :: BR, TC, VMAX, DMX
+  subroutine wte_lookup(idx, wte, out, BR, TC, DMX)
+    integer(c_int), intent(in) :: BR, TC, DMX
     integer(c_int), intent(in) :: idx(:)
     real(wp), intent(in) :: wte(:)
     real(wp), intent(out) :: out(:)

@@ -83,7 +83,7 @@ contains
     logical :: seen(0:V-1)
     if (win <= 0 .or. ngen == 0) return
     start = max(1, ngen - win + 1)
-    if (pres /= 0.0_wp .or. freq /= 0.0_wp) then
+    if (abs(pres) > 0.0_wp .or. abs(freq) > 0.0_wp) then
       seen = .false.
       do i = start, ngen
         if (gen(i) < 0 .or. gen(i) >= V) cycle
@@ -97,7 +97,7 @@ contains
       end do
     end if
     ! length penalty: if ngen < win, discourage EOS (assume EOS=0) from ending too short
-    if (plen /= 0.0_wp .and. ngen < win) then
+    if (abs(plen) > 0.0_wp .and. ngen < win) then
       logits(1) = logits(1) - plen * real(win - ngen, wp) / real(win, wp)
     end if
   end subroutine apply_windowed_penalties
@@ -166,7 +166,7 @@ contains
     if (pwin > 0) then
       call apply_windowed_penalties(work, V, gen, ngen, pres, freq, pwin, plen)
     else
-      if (pres /= 0.0_wp .or. freq /= 0.0_wp) &
+      if (abs(pres) > 0.0_wp .or. abs(freq) > 0.0_wp) &
           call apply_penalties(work, V, gen, ngen, pres, freq)
     end if
     if (rep > 1.0_wp) call apply_rep_penalty(work, V, gen, ngen, rep)

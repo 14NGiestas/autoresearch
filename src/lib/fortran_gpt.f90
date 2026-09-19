@@ -131,7 +131,7 @@ contains
     qrot => WS%qrot; krot => WS%krot; attn_out => WS%ao; mlpd => WS%mlpd
 
     ! ---- 1. token embedding --------------------------------
-    call wte_lookup(idx, wte, emd, BB, TT, vocab_size, d_model)
+    call wte_lookup(idx, wte, emd, BB, TT, d_model)
 
     ! ---- 2. initial RMSNorm (train.py norms embeddings before blocks)
     call rmsnorm0(emd, xn, BB*TT, d_model, eps)

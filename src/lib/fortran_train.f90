@@ -215,7 +215,7 @@ contains
       allocate(C%qr(G%nl*BT*hdd), C%kr(G%nl*BT*G%nkv*G%hd))
     end if
 
-    call wte_lookup(idx, M%wte, tmp%emd, G%B, G%T, G%V, DD)
+    call wte_lookup(idx, M%wte, tmp%emd, G%B, G%T, DD)
     call rmsnorm0(tmp%emd, tmp%xn, BT, DD, G%eps)
     !$omp parallel do simd
     do jj = 1, BT*DD
@@ -432,9 +432,9 @@ contains
     end do
 
     ! ---- embeddings: raw lookup recomputed, then norm + scatter ----
-    call wte_lookup(idx, M%wte, tmp%xraw, G%B, G%T, G%V, DD)
+    call wte_lookup(idx, M%wte, tmp%xraw, G%B, G%T, DD)
     call rmsnorm0_bwd(tmp%demd, tmp%xraw, tmp%dxn, BT, DD, G%eps)
-    call wte_bwd(idx, tmp%dxn, GR%wte, G%B, G%T, G%V, DD)
+    call wte_bwd(idx, tmp%dxn, GR%wte, G%B, G%T, DD)
   end subroutine compute_grads
 
   ! Allocate + zero AdamW states matching M's shapes.

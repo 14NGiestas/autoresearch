@@ -24,6 +24,7 @@ program repl
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
       write_arch_txt, read_arch_txt, arch_report, require_arch
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
   implicit none
 
   integer, parameter :: sp = c_float
@@ -32,7 +33,7 @@ program repl
   integer, parameter :: N_LAYER = A_LAYER, VV = A_VOCAB, BOS = A_BOS
   integer, parameter :: MAXT = A_CTX   ! checkpoint sequence_len; cache cap
 
-  character(len=512) :: tdir, wdir, arg
+  character(len=512) :: tdir, wdir
   character(len=8192) :: linebuf
   character(len=4096) :: tmpl_raw, sys_raw, stop_raw
   character(len=8) :: space
@@ -67,7 +68,6 @@ program repl
   real(sp), allocatable :: cos_b(:), sin_b(:)
   real(sp), allocatable :: wte(:), lm(:)
   real(sp), allocatable :: c_q(:), c_k(:), c_v(:), c_pr(:), c_fc(:), c_pr2(:)
-  real(sp), allocatable :: outp(:)
   real(sp) :: theta, ang, mchk
 
   n_gen = 40
@@ -77,7 +77,7 @@ program repl
       ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream F --pchunk 64' // &
       ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5 --space SPACE --keep 0' // &
       ' --attn MODE', &
-      help_text=[character(len=80) :: &
+      help_text=[character(len=96) :: &
       'NAME', &
       '  repl - interactive pure-Fortran chat REPL', &
       'SYNOPSIS', &
@@ -127,7 +127,7 @@ program repl
     ! plain loop (temp 0 -> penalized argmax) with the history the plain
     ! path would have at that position, so penalties are supported and
     ! equivalence holds exactly. Stochastic sampling is not.
-    if (temp /= 0.0_sp) then
+    if (abs(temp) > 0.0_sp) then
       write (0, '(A)') '--spec needs greedy decoding: set --temp 0'
       call exit(2)
     end if
@@ -317,7 +317,7 @@ program repl
                 B, VV, D, N_HEAD, N_KV, HD, N_LAYER, keff + 1, 1.0e-5_sp)
           end block
           mchk = maxval(outspec(1:(keff+1)*VV))
-          if (.not. (mchk == mchk)) then
+          if (ieee_is_nan(mchk)) then
             write (0, '(A)') "NaN logit — abort"
             call exit(1)
           end if
@@ -366,7 +366,7 @@ program repl
               ckv, cvv, clen, MAXT, out1, &
               B, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
           mchk = maxval(out1)
-          if (.not. (mchk == mchk)) then
+          if (ieee_is_nan(mchk)) then
             write (0, '(A)') "NaN logit — abort"
             call exit(1)
           end if
@@ -435,7 +435,7 @@ program repl
           cms_dec = cms_dec + (cb - ca)
         end if
         mchk = maxval(out1)
-        if (.not. (mchk == mchk)) then
+        if (ieee_is_nan(mchk)) then
           write (0, '(A)') "NaN logit — abort"
           call exit(1)
         end if

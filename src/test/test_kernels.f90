@@ -44,6 +44,7 @@ program test_kernels
   use fortran_spec_mod, only: accept_prefix, lookup_draft
   use fortran_recurrent_mod, only: recurrent_forward
   use fortran_qkhop_mod, only: qkhop_fwd, qkhop_bwd, qkhop_sgemm, qkhop_bwd_sgemm, qkhop_ph_fwd, qkhop_ph_bwd
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
   implicit none
 
   integer, parameter :: sp = c_float
@@ -268,7 +269,7 @@ contains
     end do
     call fill(wte, VV*DD)
 
-    call wte_lookup(idx, wte, out(1:BR*TC*DD), BR, TC, VV, DD)
+    call wte_lookup(idx, wte, out(1:BR*TC*DD), BR, TC, DD)
 
     do i = 1, BR
       do j = 1, TC
@@ -286,7 +287,7 @@ contains
     end do
 
     print '(A,E10.3)', "  max err = ", max_err
-    call check(max_err == 0.0_sp, "wte_lookup")
+    call check(abs(max_err  - 0.0_sp) <= 0.0_sp, "wte_lookup")
   end subroutine
 
   ! ------------------------------------------------------------------------
@@ -524,7 +525,7 @@ contains
     finite = .true.
     mn = 1.0e30_sp; mx = -1.0e30_sp
     do i = 1, BR*TC*VV
-      if (.not. (outp(i) == outp(i))) then
+      if (ieee_is_nan(outp(i))) then
         finite = .false.
         exit
       end if
@@ -635,7 +636,7 @@ contains
     finite = .true.
     max_drift = 0.0_sp
     do i = 1, BR*TC*VV
-      if (.not. (out4(i) == out4(i))) finite = .false.
+      if (ieee_is_nan(out4(i))) finite = .false.
       e = abs(out4(i) - out1(i))
       if (e > max_drift) max_drift = e
     end do
@@ -927,7 +928,6 @@ contains
     real(sp) :: y(QB*QT*QH*QD), S(QB*QH*QT*QT), h1(QB*QT*QH*QD)
     real(sp) :: dy(QB*QT*QH*QD)
     real(sp) :: dx(QB*QT*QD), dq(QB*QT*QH*QD), dk(QB*QT*QK*QD)
-    real(sp) :: w1(QB*QT*QD), w2(QB*QT*QD), w3(QB*QT*QT)
     real(sp) :: e, worst
     integer :: i
     real(sp) :: qin(32) = reshape([ &
@@ -1028,14 +1028,14 @@ contains
     work(5001) = 1.0_sp
     call apply_byte_mask(work, V)
     do i = 1, 128
-      if (work(i) /= 1.0_sp) then
+      if (abs(work(i) - 1.0_sp) > 0.0_sp) then
         call check(.false., "máscara preserva todos os ids ASCII")
         return
       end if
     end do
     ! work(i) holds id i-1, so the byte space is indices 1..128 and 257..512
-    call check(work(1) == 1.0_sp .and. work(128) == 1.0_sp .and. &
-        work(257) == 1.0_sp .and. work(512) == 1.0_sp .and. &
+    call check(abs(work(1) - 1.0_sp) <= 0.0_sp .and. abs(work(128) - 1.0_sp) <= 0.0_sp .and. &
+        abs(work(257) - 1.0_sp) <= 0.0_sp .and. abs(work(512) - 1.0_sp) <= 0.0_sp .and. &
         work(129) < -1.0e30_sp .and. work(513) < -1.0e30_sp, &
         "máscara: fronteiras exatas (0-127 e 256-511 válidos)")
   end subroutine
@@ -1662,7 +1662,7 @@ contains
     dwte = 0.0_sp
     ref = 0.0_sp
 
-    call wte_bwd(idx, dout, dwte, BR, TC, VV, DD)
+    call wte_bwd(idx, dout, dwte, BR, TC, DD)
 
     do i = 1, BR
       do j = 1, TC
@@ -1679,7 +1679,7 @@ contains
       if (e > max_err) max_err = e
     end do
     print '(A,E10.3)', "  max err = ", max_err
-    call check(max_err == 0.0_sp, "wte scatter exact")
+    call check(abs(max_err  - 0.0_sp) <= 0.0_sp, "wte scatter exact")
   end subroutine
 
   ! ------------------------------------------------------------------------
@@ -1992,7 +1992,7 @@ contains
     integer :: idx(2), targets(2)
     real(sp) :: cos(4), sin(4)
     real(sp) :: nll, n0, n5
-    real(sp) :: e, max_err
+    real(sp) :: max_err
     integer :: k
 
     print '(A)', "=== test_full_step (whole-model FD + overfit) ==="
@@ -2019,7 +2019,7 @@ contains
     call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll)
     call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll)
     print '(A,F10.5)', "  nll =", nll
-    call check(nll == nll .and. nll > 0.0_sp, "nll finite positive")
+    call check(.not. ieee_is_nan(nll) .and. nll > 0.0_sp, "nll finite positive")
 
     max_err = 0.0_sp
     call check_group(M%wte, GR%wte, "wte", max_err, M, G, C, tmp, idx, &
@@ -2218,7 +2218,7 @@ contains
       call train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, nll, k, &
           0.02_sp, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp)
       if (k == 1) n0a = nll
-      call check(nll == nll, "adam nll finite")
+      call check(.not. ieee_is_nan(nll), "adam nll finite")
     end do
     n5a = nll
     d_adam = maxval(abs(M%q - M0%q))
@@ -2239,7 +2239,7 @@ contains
           0.02_sp, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, use_muon=.true., &
           lr_muon=0.01_sp)
       if (k == 1) n0m = nll
-      call check(nll == nll, "muon nll finite")
+      call check(.not. ieee_is_nan(nll), "muon nll finite")
     end do
     n5m = nll
     d_muon = maxval(abs(M%q - M0%q))
@@ -2270,7 +2270,8 @@ contains
     S%mq = 0.0_sp; S%mp2 = 0.0_sp
     call load_muon_state("/tmp/rt_muon", S, found)
     call check(found, "found after save")
-    call check(all(S%mq == 1.5_sp) .and. all(S%mp2 == -2.5_sp), &
+    call check(all(abs(S%mq - 1.5_sp) <= 0.0_sp) .and. &
+        all(abs(S%mp2 + 2.5_sp) <= 0.0_sp), &
         "roundtrip exact")
     call load_muon_state("/tmp/does_not_exist_xyz", S, found)
     call check(.not. found, "missing -> .false.")
@@ -2282,7 +2283,7 @@ contains
     real(sp), allocatable :: cp(:), cf(:), cp2(:)
     real(sp), allocatable :: wte2(:), lm2(:), cq2(:), ck2(:), cv2(:)
     real(sp), allocatable :: cp_(:), cf2(:), cp22(:)
-    integer :: u, i
+    integer :: i
     logical :: ok
 
     print '(A)', "=== test_save_load ==="
@@ -2299,9 +2300,12 @@ contains
         wte, lm, cq, ck, cv, cp, cf, cp2)
     call load_gpt_weights("/tmp/rt_weights", 1, 2, 1, 1, 2, 3, &
         wte2, lm2, cq2, ck2, cv2, cp_, cf2, cp22)
-    ok = all(wte2 == wte) .and. all(lm2 == lm) .and. all(cq2 == cq) &
-        .and. all(ck2 == ck) .and. all(cv2 == cv) .and. all(cp_ == cp) &
-        .and. all(cf2 == cf) .and. all(cp22 == cp2)
+    ! round-trip tem de ser BIT-EXATO; escrito como |dif| <= 0 em vez de ==
+    ! (mesma semantica, e NaN faz o teste FALHAR em vez de passar calado).
+    ok = all(abs(wte2 - wte) <= 0.0_sp) .and. all(abs(lm2 - lm) <= 0.0_sp) .and. &
+        all(abs(cq2 - cq) <= 0.0_sp) .and. all(abs(ck2 - ck) <= 0.0_sp) .and. &
+        all(abs(cv2 - cv) <= 0.0_sp) .and. all(abs(cp_ - cp) <= 0.0_sp) .and. &
+        all(abs(cf2 - cf) <= 0.0_sp) .and. all(abs(cp22 - cp2) <= 0.0_sp)
     call check(ok, "npy roundtrip exact")
     call check(size(cq2) == 4 .and. size(cf2) == 16, "shapes kept")
   end subroutine test_save_load

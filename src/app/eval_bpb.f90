@@ -21,7 +21,7 @@ program eval_bpb
   use iso_fortran_env, only: int32
   use M_CLI2, only: set_args, sget, specified
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
-      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
+      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, &
       write_arch_txt, read_arch_txt, arch_report, require_arch
   implicit none
 
@@ -30,7 +30,7 @@ program eval_bpb
   integer, parameter :: D = A_D, N_HEAD = A_HEAD, N_KV = A_KV, HD = A_HD
   integer, parameter :: N_LAYER = A_LAYER, VV = A_VOCAB, TT = A_CTX
 
-  character(len=512) :: wdir, rowsfile, line
+  character(len=512) :: wdir, rowsfile
   character(len=32) :: batchstr
   integer :: ios, unit, tc, i, j, r, nb, tgt, rownum, nbatch
   integer :: idx(BMAX*TT)
@@ -39,7 +39,7 @@ program eval_bpb
   real(sp), allocatable :: wte(:), lm(:)
   real(sp), allocatable :: c_q(:), c_k(:), c_v(:), c_pr(:), c_fc(:), c_pr2(:)
   real(sp), allocatable :: outp(:), nllbuf(:, :)
-  real(sp) :: theta, ang, m, s, nll
+  real(sp) :: theta, ang, m, s
   character(len=65536) :: buf
   logical :: attn_blas = .false.
   logical :: attn_qk = .false.

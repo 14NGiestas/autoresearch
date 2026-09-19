@@ -32,7 +32,7 @@ contains
 
   subroutine load_tables(dir)
     character(*), intent(in) :: dir
-    integer :: u, i, r, nb, b, ios, total
+    integer :: u, i, r, nb, total
     character(len=512) :: line
     integer, allocatable :: lens(:)
 

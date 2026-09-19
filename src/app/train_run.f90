@@ -53,7 +53,7 @@ program train_run
   type(state_t) :: S
   type(cache_t) :: C
   type(temp_t) :: tmp
-  character(len=512) :: wdir, rowsfile, outdir, arg, ckdir, bytesfile
+  character(len=512) :: wdir, rowsfile, outdir, ckdir, bytesfile
   character(len=:), allocatable :: badpath
   integer :: idx(B*TT), targets(B*TT), ngot
   integer, allocatable :: tbytes(:)
@@ -315,7 +315,10 @@ program train_run
         print '(2A)', "checkpoint verify failed (disk full?): ", trim(badpath)
         call exit(1)
       end if
-      call rotate_ckpts(trim(outdir), tstep, save_every, keep_last)
+      ! Sem rotacao de checkpoints: `rm -rf` via execute_command_line forkaria com
+      ! pools OpenMP vivos e mataria os filhos (smash observado nos steps
+      ! 110/120). Best-effort: steps antigos ficam no disco, limpeza offline.
+      ! (Aqui existia uma subroutine rotate_ckpts vazia so' para documentar isso.)
       ! Custo do proprio checkpoint (estado do otimizador + verify + rotate) fica
       ! numa fase separada: e ele que responde "quanto custa salvar".
       call energy_mark('ckpt')
@@ -389,8 +392,8 @@ contains
   real(sp) function val_bpb(rowsfile, first, nval)
     character(*), intent(in) :: rowsfile
     integer, intent(in) :: first, nval
-    integer :: v_idx(B*TT), v_tgt(B*TT), n, vv2, jj, tid, b2
-    real(sp) :: out_nll, tn, tb
+    integer :: v_idx(B*TT), v_tgt(B*TT), n, jj, tid, b2
+    real(sp) :: tn, tb
     real(sp) :: nlls(B*TT)
     tn = 0.0_sp; tb = 0
     do b2 = 0, nval - 1
@@ -416,7 +419,7 @@ contains
     ! zero malloc. Shapes match tmp exactly (same B,T,D,V,hdd,dff).
     real(sp), pointer :: emd(:), xn(:), sub(:), qo(:), ko(:), vo(:)
     real(sp), pointer :: qrot(:), krot(:), ao(:), mlpd(:), lgt(:)
-    integer :: BT, DD, hdd, dff, ll, jj, it, j2, tg
+    integer :: BT, DD, hdd, dff, ll, it, j2, tg
     integer :: qsz, ksz, psz, fcsz, p2sz
     real(sp) :: mx, sm
     BT = B * TT; DD = D; hdd = N_HEAD * HD
@@ -427,7 +430,7 @@ contains
     qo => tmp%qo; ko => tmp%ko; vo => tmp%vo
     qrot => tmp%qrot; krot => tmp%krot; ao => tmp%ao; mlpd => tmp%mlpF
     lgt => tmp%lgt
-    call wte_lookup(idx, M%wte, emd, B, TT, VV, DD)
+    call wte_lookup(idx, M%wte, emd, B, TT, DD)
     call rmsnorm0(emd, xn, BT, DD, 1.0e-5_sp)
     emd = xn
     do ll = 0, N_LAYER - 1
@@ -469,12 +472,4 @@ contains
 
   end subroutine forward_nlls
 
-  ! delete step_{t-2*save_every} dirs beyond keep_last (best/ untouched)
-  subroutine rotate_ckpts(outdir, tstep, save_every, keep_last)
-    character(*), intent(in) :: outdir
-    integer, intent(in) :: tstep, save_every, keep_last
-    ! Fork-free: rm -rf via execute_command_line forks with live OpenMP
-    ! pools and kills children (step 110/120 smashes). Best-effort only —
-    ! leave old steps on disk, clean offline. No fork, no crash.
-  end subroutine rotate_ckpts
 end program train_run

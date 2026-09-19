@@ -26,7 +26,7 @@ program train_1step
   type(state_t) :: S
   type(cache_t) :: C
   type(temp_t) :: tmp
-  character(len=512) :: wdir, rowsfile, outdir, arg
+  character(len=512) :: wdir, rowsfile, outdir
   integer :: idx(B*TT), targets(B*TT), ngot
   real(sp) :: cos_t(TT*(HD/2)), sin_t(TT*(HD/2))
   real(sp) :: nll0, nll1

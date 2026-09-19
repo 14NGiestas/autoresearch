@@ -27,7 +27,7 @@ program bpb_agg
   integer, allocatable :: ids(:)
   real(real64), allocatable :: vals(:)
   integer, allocatable :: tbytes(:)
-  integer :: nargs, ios, u_e, u_r, u_t, n, i, r, T, used
+  integer :: nargs, ios, u_e, u_r, u_t, n, i, T, used
   integer(int64) :: tot_bytes, max_rows
   integer :: tid, b
   real(real64) :: tot_nll, v, bpb, ln2v

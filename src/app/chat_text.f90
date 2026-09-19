@@ -24,8 +24,9 @@ program chat_text
   use fortran_chat_mod
   use fortran_spec_mod, only: lookup_draft
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
-      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
+      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_BOS => BOS, &
       write_arch_txt, read_arch_txt, arch_report, require_arch
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
   implicit none
 
   integer, parameter :: sp = c_float
@@ -33,7 +34,7 @@ program chat_text
   integer, parameter :: D = A_D, N_HEAD = A_HEAD, N_KV = A_KV, HD = A_HD
   integer, parameter :: N_LAYER = A_LAYER, VV = A_VOCAB, BOS = A_BOS
 
-  character(len=512) :: tdir, wdir, arg
+  character(len=512) :: tdir, wdir
   character(len=1) :: cb
   character(len=4096) :: tmpl_raw, sys_raw, stop_raw
   character(len=8) :: space
@@ -65,7 +66,6 @@ program chat_text
   real(sp), allocatable :: cos_b(:), sin_b(:)
   real(sp), allocatable :: wte(:), lm(:)
   real(sp), allocatable :: c_q(:), c_k(:), c_v(:), c_pr(:), c_fc(:), c_pr2(:)
-  real(sp), allocatable :: outp(:)
   real(sp) :: theta, ang, mchk
   d2 = HD / 2
 
@@ -74,7 +74,7 @@ program chat_text
       ' --seed 12345 --topp 1.0 --pres 0.0 --freq 0.0 --rep 1.0 --pwin 0 --plen 0.0 --nblock 0' // &
       ' --stats F --template TEMPLATE --system SYSTEM --stop STOP --stream T --loops 1 --pchunk 64' // &
       ' --spec 0 --match 2 --spec-probe 8 --spec-min-acc 0.5 --space SPACE', &
-      help_text=[character(len=80) :: &
+      help_text=[character(len=96) :: &
       'NAME', &
       '  chat_text - pure-Fortran text-in/text-out GPT inference', &
       'SYNOPSIS', &
@@ -135,7 +135,7 @@ program chat_text
     ! that position, so penalties (pres/freq/rep/pwin/plen/nblock) are now
     ! supported and equivalence still holds exactly. Only sampling > 0
     ! (stochastic draft-verify needs rejection sampling) is refused.
-    if (temp /= 0.0_sp) then
+    if (abs(temp) > 0.0_sp) then
       print '(A)', "--spec needs greedy decoding: set --temp 0"
       call exit(2)
     end if
@@ -320,7 +320,7 @@ program chat_text
               B, VV, D, N_HEAD, N_KV, HD, N_LAYER, keff + 1, 1.0e-5_sp)
         end block
         mchk = maxval(outspec(1:(keff+1)*VV))
-        if (.not. (mchk == mchk)) then
+        if (ieee_is_nan(mchk)) then
           print '(A)', "NaN logit — abort"; call exit(1)
         end if
         ! sequential, penalty-aware accept: row jj is scored with exactly the
@@ -372,7 +372,7 @@ program chat_text
             ckv, cvv, clen, ntot, out1, &
             B, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp)
         mchk = maxval(out1)
-        if (.not. (mchk == mchk)) then
+        if (ieee_is_nan(mchk)) then
           print '(A)', "NaN logit — abort"; call exit(1)
         end if
         best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &
@@ -441,7 +441,7 @@ program chat_text
         cms_dec = cms_dec + (s1 - s0)
       end if
       mchk = maxval(out1)
-      if (.not. (mchk == mchk)) then
+      if (ieee_is_nan(mchk)) then
         print '(A)', "NaN logit — abort"; call exit(1)
       end if
       best = sample_next(out1, VV, temp, topp, pres, freq, rep, pwin, plen, &

@@ -88,7 +88,7 @@ contains
     qrot => RWS%qrot; krot => RWS%krot; attn_out => RWS%ao; mlpd => RWS%mlpd
 
     ! ---- 1. token embedding --------------------------------
-    call wte_lookup(idx, wte, emd, BB, TT, vocab_size, d_model)
+    call wte_lookup(idx, wte, emd, BB, TT, d_model)
 
     ! ---- 2. initial RMSNorm (matches gpt_forward / train.py) ---
     call rmsnorm0(emd, xn, BB*TT, d_model, eps)

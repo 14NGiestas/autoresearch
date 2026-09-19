@@ -27,7 +27,7 @@ program train_loop
   type(state_t) :: S
   type(cache_t) :: C
   type(temp_t) :: tmp
-  character(len=512) :: wdir, rowsfile, outdir, arg, ckdir
+  character(len=512) :: wdir, rowsfile, outdir, ckdir
   integer :: idx(B*TT), targets(B*TT), ngot
   real(sp) :: ct(TT*(HD/2)), st(TT*(HD/2))
   real(sp) :: nll

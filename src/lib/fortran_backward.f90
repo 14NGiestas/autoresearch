@@ -166,8 +166,8 @@ contains
   end subroutine xent_bwd
 
   ! dwte(v,:) += sum over (b,t) with idx=v of dout(b,t,:). 0-based ids.
-  subroutine wte_bwd(idx, dout, dwte, BR, TC, VMAX, DMX)
-    integer(c_int), intent(in) :: idx(:), BR, TC, VMAX, DMX
+  subroutine wte_bwd(idx, dout, dwte, BR, TC, DMX)
+    integer(c_int), intent(in) :: idx(:), BR, TC, DMX
     real(wp), intent(in)  :: dout(:)
     real(wp), intent(inout) :: dwte(:)
     integer :: ia, ib, ic, id

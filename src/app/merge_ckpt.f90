@@ -36,8 +36,7 @@ program merge_ckpt
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights, verify_ckpt_dir
   use stdlib_io_npy, only: save_npy
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
-      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
-      write_arch_txt, require_arch
+      A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, write_arch_txt, require_arch
   use fortran_chat_mod, only: write_template_txt
   use M_CLI2, only: set_args, sget, rget, specified
   implicit none
@@ -47,8 +46,7 @@ program merge_ckpt
 
   character(len=512) :: dirA, dirB, dirout
   real(wp) :: alpha
-  logical :: ok, archok
-  integer :: nbad, i
+  integer :: nbad
   character(len=:), allocatable :: badpath
   real(wp), allocatable :: a_wte(:), a_lm(:), a_q(:), a_k(:), a_v(:)
   real(wp), allocatable :: a_pr(:), a_fc(:), a_p2(:)
