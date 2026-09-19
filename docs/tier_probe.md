@@ -17,7 +17,7 @@ dá fronteiras que diferem ~380×.
 | RAM, 1 IO/token (aleatório) | **7,5–8,1 µs** | 15,6 µs |
 | disco sequencial | **1,2 µs** (2,5 GB/s) | 26,9 µs |
 | disco, 1 IO/token | **102–107 µs** | **9.732 µs** |
-| recomputar a janela (proj+atenção) | 81 / 128 / 309 µs/token (T=32/128/512) | 309 µs/token (T=512) |
+| recomputar a janela (proj+atenção) | 81 / 128 / **257** µs/token (T=32/128/512) | 309 µs/token (T=512) |
 | **N\* (empata com ler token-a-token, frio)** | **66–88 tokens** | **18.984 tokens** |
 
 (Os números da fermi na tabela são da medição limpa — job 139, máquina ociosa,
