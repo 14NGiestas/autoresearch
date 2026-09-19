@@ -18,7 +18,7 @@ dá fronteiras que diferem ~380×.
 | disco sequencial | **1,2 µs** (2,5 GB/s) | 26,9 µs |
 | disco, 1 IO/token | **102–107 µs** | **9.732 µs** |
 | recomputar a janela (proj+atenção) | 81 / 128 / **257** µs/token (T=32/128/512) | 309 µs/token (T=512) |
-| **N\* (empata com ler token-a-token, frio)** | **66–88 tokens** | **18.984 tokens** |
+| **N\* (empata com ler token-a-token, frio)** | **66–94 tokens** | **18.984 tokens** |
 
 (Os números da fermi na tabela são da medição limpa — job 139, máquina ociosa,
 5 repetições por célula. Sob contenção a banda quente caía para 9–22 GB/s e o
@@ -28,7 +28,8 @@ N\* ia para ~50: medir máquina ocupada dá lixo, e o `probe_trust` reprova.)
 - Contra **disco token-a-token**, recomputar vence para janelas ≲ N\*; acima disso,
   ler ganha (na halfbeast, recomputar 512 tokens = 158 ms contra 4,98 s lendo).
 - **Lote é a variável de controle**: lendo a janela em **um** IO, ler ganha por
-  **17,8×** (T=32), **63,5×** (T=128) na fermi e ~4–7× na halfbeast.
+  **17,8×** (T=32), **63,5×** (T=128) e **178,8×** (T=512) na fermi, e ~4–7× na
+  halfbeast.
 - A **atenção** é O(N²) na janela (O(N) por token): recomputar piora conforme a
   janela cresce.
 
