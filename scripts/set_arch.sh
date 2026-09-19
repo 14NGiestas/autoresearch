@@ -13,16 +13,16 @@ fail() { echo "  RECUSADO: $1"; exit 1; }
 [ "$KV" -ge 1 ] && [ "$KV" -le "$H" ] || fail "kv_heads=$KV fora de 1..heads=$H"
 [ "$V" -gt 8188 ] || fail "vocab=$V precisa ser > BOS=8188"
 F=/home/pauli/autoresearch/src/lib/fortran_arch.f90
-sed -i -E "s/^(  integer, parameter :: D_MODEL = ).*/\1$D/; s/^(  integer, parameter :: N_HEAD = ).*/\1$H/; \
-  s/^(  integer, parameter :: N_KV = ).*/\1$KV/; s/^(  integer, parameter :: N_LAYER = ).*/\1$L/; \
-  s/^(  integer, parameter :: VV = ).*/\1$V/; s/^(  integer, parameter :: TT = ).*/\1$C/" "$F"
+sed -i -E "s/^#define ARCH_D_MODEL .*/#define ARCH_D_MODEL $D/; s/^#define ARCH_N_HEAD .*/#define ARCH_N_HEAD $H/; \
+  s/^#define ARCH_N_KV .*/#define ARCH_N_KV $KV/; s/^#define ARCH_N_LAYER .*/#define ARCH_N_LAYER $L/; \
+  s/^#define ARCH_VOCAB .*/#define ARCH_VOCAB $V/; s/^#define ARCH_CTX .*/#define ARCH_CTX $C/" "$F"
 # verificação: se o sed não pegou, o script TEM de falhar (no-op silencioso é
 # exatamente a classe de bug que estamos combatendo)
-for pair in "D_MODEL = $D" "N_HEAD = $H" "N_KV = $KV" "N_LAYER = $L" "VV = $V" "TT = $C"; do
+for pair in "#define ARCH_D_MODEL $D" "#define ARCH_N_HEAD $H" "#define ARCH_N_KV $KV" "#define ARCH_N_LAYER $L" "#define ARCH_VOCAB $V" "#define ARCH_CTX $C"; do
   grep -q "$pair" "$F" || fail "a reescrita não pegou \"$pair\" -- layout do módulo mudou?"
 done
 echo "  arquitetura: d=$D heads=$H kv=$KV layers=$L vocab=$V ctx=$C (HD=$((D/H)))"
-grep -E 'parameter :: (D_MODEL|N_HEAD|N_KV|N_LAYER|VV|TT)' "$F" | sed 's/^/    /'
+grep -E '^#define ARCH_(D_MODEL|N_HEAD|N_KV|N_LAYER|VOCAB|CTX|BOS) ' "$F" | sed 's/^/    /'
 # UMA pasta de build por arquitetura: glob pegando a pasta errada foi um erro real
 # (o require_arch pegou, mas nao deveria ser possivel errar). O binario passa a ter
 # endereco deterministico: build/arch_d<D>_h<heads>_kv<kv>_l<layers>_v<vocab>_c<ctx>

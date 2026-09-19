@@ -12,6 +12,24 @@ categories = ["machine-learning", "linear-algebra", "io", "numerical"]
 [library]
 source-dir = "lib"
 
+# cpp nos nossos .f90: e' o que permite escolher a ARCH NA INVOCACAO, sem editar
+# fonte (ver [features] abaixo e bin/build_arch). Sem macro definida, valem os
+# #ifndef ARCH_* do fortran_arch.f90 (a config canonica do repo).
+[preprocess]
+cpp.suffixes = ["f90"]
+
+# Uma linha por arch EM USO. O nome da feature e' o DESCRITOR completo (tem de
+# bater com o que bin/build_arch pedir, senao o script cai no --flag -D e avisa).
+# Isto e' documentacao + ergonomia, nao a verdade: a verdade e' o que foi
+# compilado, e o binario se identifica sozinho (arch_id deriva dos parametros).
+[features]
+arch_d96_h6_kv2_l12_v8192_c1024 = { preprocess = { cpp = { macros = [
+  "ARCH_D_MODEL=96", "ARCH_N_HEAD=6", "ARCH_N_KV=2", "ARCH_N_LAYER=12",
+  "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }
+arch_d216_h6_kv2_l12_v8192_c1024 = { preprocess = { cpp = { macros = [
+  "ARCH_D_MODEL=216", "ARCH_N_HEAD=6", "ARCH_N_KV=2", "ARCH_N_LAYER=12",
+  "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }
+
 [dependencies]
 openmp = "*"
 stdlib = "*"

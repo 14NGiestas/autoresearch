@@ -21,13 +21,51 @@ module fortran_arch_mod
   use fortran_kinds_mod, only: wp
   implicit none
 
-  integer, parameter :: D_MODEL = 216
-  integer, parameter :: N_HEAD = 6
-  integer, parameter :: N_KV = 2
-  integer, parameter :: N_LAYER = 12
-  integer, parameter :: VV = 8192
-  integer, parameter :: TT = 1024
-  integer, parameter :: BOS = 8188
+  ! Estes valores sao os DEFAULTS (a config canonica do repo). Para construir um
+  ! binario de OUTRA arch NAO edite este arquivo: passe defines de compilacao --
+  ! o fpm ja' compila nossos fontes com -cpp. Curto:
+  !
+  !     bin/build_arch 96 6 2 12 8192 1024 /tmp/b96
+  !
+  ! ou direto:
+  !
+  !     fortran-fpm build --flag '-cpp -DARCH_D_MODEL=96 -DARCH_N_HEAD=6 \
+  !         -DARCH_N_KV=2 -DARCH_N_LAYER=12 -DARCH_VOCAB=8192 -DARCH_CTX=1024' \
+  !         --build-dir /tmp/b96
+  !
+  ! Por que assim e nao editar-e-reverter: o arquivo e' compartilhado, entao
+  ! editar abre corrida com outro build e deixa a chance de commitar a arch
+  ! trocada (foi assim que a arvore ficou em d216 com os experimentos em d96).
+  ! Com -D nao ha' flip, e o binario se identifica sozinho: a identidade
+  ! (arch_id) e' derivada destes parametros.
+#ifndef ARCH_D_MODEL
+#define ARCH_D_MODEL 216
+#endif
+#ifndef ARCH_N_HEAD
+#define ARCH_N_HEAD 6
+#endif
+#ifndef ARCH_N_KV
+#define ARCH_N_KV 2
+#endif
+#ifndef ARCH_N_LAYER
+#define ARCH_N_LAYER 12
+#endif
+#ifndef ARCH_VOCAB
+#define ARCH_VOCAB 8192
+#endif
+#ifndef ARCH_CTX
+#define ARCH_CTX 1024
+#endif
+#ifndef ARCH_BOS
+#define ARCH_BOS 8188
+#endif
+  integer, parameter :: D_MODEL = ARCH_D_MODEL
+  integer, parameter :: N_HEAD = ARCH_N_HEAD
+  integer, parameter :: N_KV = ARCH_N_KV
+  integer, parameter :: N_LAYER = ARCH_N_LAYER
+  integer, parameter :: VV = ARCH_VOCAB
+  integer, parameter :: TT = ARCH_CTX
+  integer, parameter :: BOS = ARCH_BOS
   integer, parameter :: HD = D_MODEL / N_HEAD   ! derivado, nunca digitado
 contains
 

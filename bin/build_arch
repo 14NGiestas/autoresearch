@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# build_arch — constroi um binario para UMA arch, SEM editar a fonte.
+#
+# Por que existe: a arch estava em `integer, parameter` no fonte, e construir
+# outra arch significava editar o arquivo, compilar e reverter -- com dois
+# problemas reais: (1) o arquivo e' compartilhado, entao editar abre corrida com
+# qualquer outro build (outro agente, outro terminal); (2) a fonte pode ficar na
+# arch errada e ser commitada (foi exatamente o que deixou a arvore em d216 com
+# os experimentos em d96). Agora os defaults sao #define ARCH_* e a arch vira
+# DEFINE de compilacao -- o fpm ja' compila nossos fontes com -cpp.
+#
+# O binario se identifica sozinho: a identidade (arch_id) e' derivada dos
+# parametros compilados, entao este script imprime a identidade do que construiu.
+#
+# Uso:
+#   bin/build_arch D HEADS KV LAYERS VOCAB CTX [BUILD_DIR] [--release]
+#   bin/build_arch 96 6 2 12 8192 1024 /tmp/b96
+#
+# Nada aqui toca src/build/: o BUILD_DIR e' seu (default /tmp/build_arch_<arch>).
+set -eu
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+if [ $# -lt 6 ]; then
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+fi
+D=$1; H=$2; KV=$3; L=$4; V=$5; C=$6
+BD=${7:-/tmp/build_arch_d${1}_h${2}_kv${3}_l${4}_v${5}_c${6}}
+REL=""
+[ "${8:-}" = "--release" ] && REL="--profile release"
+
+case "$BD" in
+  */src/build/*|src/build/*) echo "build_arch: recuse --build-dir dentro de src/build (arvore viva dos jobs)"; exit 2 ;;
+esac
+
+# Caminho declarativo (preferido): a arch esta declarada em src/fpm.toml como
+# feature, e o fpm aplica os macros do cpp. Sem editar nada, escolhido na
+# invocacao -- e' o suporte NATIVO do fpm a variaveis de preprocessamento
+# ([features].<nome>.preprocess.cpp.macros).
+TAG="arch_d${D}_h${H}_kv${KV}_l${L}_v${V}_c${C}"
+if grep -qE "^${TAG} *=" src/fpm.toml; then
+  MODE="--features $TAG"
+  echo "[build_arch] feature declarada em src/fpm.toml: $TAG"
+else
+  # Fallback: valor arbitrario nao declarado. --flag e' suportado pelo fpm e
+  # vale para as dependencias tambem (macros ARCH_* so' sao lidas por nos).
+  MODE="--flag '-cpp -DARCH_D_MODEL=$D -DARCH_N_HEAD=$H -DARCH_N_KV=$KV -DARCH_N_LAYER=$L -DARCH_VOCAB=$V -DARCH_CTX=$C'"
+  echo "[build_arch] feature $TAG NAO declarada -> fallback --flag -D..."
+  echo "[build_arch]   (para o caminho declarativo, adicione a feature em src/fpm.toml)"
+fi
+echo "[build_arch] d=$D heads=$H kv=$KV layers=$L vocab=$V ctx=$C  (HD=$((D/H)))"
+echo "[build_arch] build: $BD"
+nix develop "${NIX_SHELL:-.#cpu-only}" --command bash -c \
+  "cd src && fortran-fpm build $REL $MODE --build-dir '$BD'" 2>&1 | tail -1 | sed 's/^/  /'
+
+BIN=$(ls "$BD"/*/app/arch_id 2>/dev/null | tail -1 || true)
+if [ -n "$BIN" ]; then
+  echo "[build_arch] identidade do binario construido:"
+  "$BIN" | sed 's/^/  /'
+else
+  echo "[build_arch] (app arch_id nao construido; rode 'fpm build' sem --target)"
+fi
+echo "[build_arch] binarios em: $BD/*/app/"
