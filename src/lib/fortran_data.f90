@@ -28,11 +28,42 @@ contains
     is_npy = L > 4 .and. path(L-3:L) == '.npy'
   end function is_npy
 
+  ! Cabecalho do .npy: ordem de memoria e shape. Existe porque um pool gravado em
+  ! ordem C (numpy default) vira uma matriz TRANSPOSTA na cache: o loader lê
+  ! (1025, 11797) em vez de (11797, 1025) e as rodadas morrem mais tarde com
+  ! "rows file too short" num passo que parece aleatorio (foi o que aconteceu em
+  ! 2026-09-19: rows_perm*.npy gravados com np.save sem ordem F derrubaram 6 arms
+  ! do job 137). A convencao do lab e' fortran_order=True.
+  subroutine npy_header(path, fortran_order, nrows, ncols, ok)
+    character(*), intent(in) :: path
+    logical, intent(out) :: fortran_order, ok
+    integer, intent(out) :: nrows, ncols
+    character(len=4096) :: raw
+    integer :: u, ios, p1, p2, p3
+    fortran_order = .false.; nrows = -1; ncols = -1; ok = .false.
+    open (newunit=u, file=trim(path), status='old', access='stream', &
+        form='unformatted', action='read', iostat=ios)
+    if (ios /= 0) return
+    read (u, iostat=ios) raw
+    close (u)
+    if (ios /= 0) return
+    p1 = index(raw, 'fortran_order')
+    if (p1 <= 0) return
+    p2 = index(raw(p1:), ':')
+    if (p2 <= 0) return
+    fortran_order = index(raw(p1 + p2:p1 + p2 + 8), 'True') > 0
+    p3 = index(raw, 'shape')
+    if (p3 <= 0) return
+    read (raw(p3:), *, iostat=ios) nrows, ncols
+    ! 'shape' e' "(a, b)": a leitura acima pega os dois inteiros da tupla
+    ok = ios == 0 .and. nrows > 0 .and. ncols > 0
+  end subroutine npy_header
+
   ! Load path into cache unless already there. Fails loud, never partial.
   subroutine ensure_cache(path)
     character(*), intent(in) :: path
-    integer :: ios, fsize
-    logical :: ex
+    integer :: ios, fsize, h_rows, h_cols
+    logical :: ex, f_ord, h_ok
     if (allocated(cache_rows) .and. cache_path == path) return
     if (allocated(cache_rows)) deallocate (cache_rows)
     inquire (file=trim(path), exist=ex, size=fsize)
@@ -44,6 +75,20 @@ contains
     if (ios /= 0 .or. .not. allocated(cache_rows)) then
       print '(2A)', "rows npy unreadable: ", trim(path)
       call exit(1)
+    end if
+    ! Formato: ordem C vira matriz transposta silenciosamente (ver npy_header).
+    call npy_header(trim(path), f_ord, h_rows, h_cols, h_ok)
+    if (h_ok) then
+      if (.not. f_ord) then
+        print '(2A)', "rows npy nao esta em ordem Fortran (np.save default): ", trim(path)
+        print '(A)', "  grave o pool com np.asfortranarray(...) -- ver scripts/rows_to_npy.py"
+        call exit(1)
+      end if
+      if (size(cache_rows, 1) /= h_rows .or. size(cache_rows, 2) /= h_cols) then
+        print '(A,4I0)', "rows npy: shape do header != shape lida: ", &
+            h_rows, h_cols, size(cache_rows, 1), size(cache_rows, 2)
+        call exit(1)
+      end if
     end if
     cache_path = path
   end subroutine ensure_cache
