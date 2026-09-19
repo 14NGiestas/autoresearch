@@ -70,9 +70,10 @@ def final_bpb(train_bin, rows, init, outdir, batch, nsteps, lr, ntrain, bytesfil
           # interno com --trn_probe 0 custava ~1,8 h por validacao (ver train_run).
           "--val_every", "9999999", "--trn_probe", "1", "--save_every", str(nsteps),
           "--attn", "blas", "--bytes", bytesfile, "--batch", str(batch)]
-    # teto proporcional ao trabalho pedido: 2 s/passo + 120 s de folga
+    # teto generoso: 20 s por passo + 900 s de folga (medir throughput exige
+    # folga: um timeout apertado aborta a medida, nao o erro)
     wall, out = run([train_bin] + rm, os.path.join(outdir, "train.log"),
-                    timeout_s=(0 if timeout_s is None else 2 * nsteps + 120))
+                    timeout_s=(0 if timeout_s is None else 20 * nsteps + 900))
     bpb = None
     for line in out.splitlines():
         low = line.lower()
@@ -103,6 +104,29 @@ def holdout_bpb(eval_bin, ckpt, holdout, batch=16):
                 if 0.1 < v < 20.0:
                     best = v
     return best, out.stdout
+
+
+def ctx():
+    """Contexto que decide se um numero de throughput vale: threads e carga."""
+    omp = os.environ.get("OMP_NUM_THREADS", "(unset)")
+    try:
+        load = float(open("/proc/loadavg").read().split()[0])
+    except OSError:
+        load = -1.0
+    return omp, load
+
+
+def wait_idle(target=1.5, need=3, max_wait=5400):
+    """Espera a maquina ficar ociosa. Medir throughput com load alto da' lixo --
+    ja' aconteceu tres vezes nesta linha de trabalho; agora e' mecanizado."""
+    t0, ok, load = time.time(), 0, -1.0
+    while time.time() - t0 < max_wait:
+        load = float(open("/proc/loadavg").read().split()[0])
+        ok = ok + 1 if load < target else 0
+        if ok >= need:
+            return load
+        time.sleep(30)
+    return -1.0
 
 
 def main():
@@ -141,7 +165,15 @@ def main():
     os.makedirs(a.work, exist_ok=True)
 
     # ---- 1) THROUGHPUT: passos fixos -------------------------------------
-    print("\n# --- THROUGHPUT (passos fixos = %d): quanto o lote acelera o PASSO" % a.probe_steps)
+    omp, load = ctx()
+    print("\n# contexto: OMP_NUM_THREADS=%s  loadavg=%.2f" % (omp, load))
+    if load >= 1.5:
+        print("# esperando a maquina ficar ociosa (load < 1.5 por 3 amostras)...")
+        load = wait_idle()
+        print("# loadavg agora: %.2f" % load)
+        if load < 0:
+            print("# AVISO: nao ficou ociosa em 90 min; os tokens/s abaixo estao CONTAMINADOS")
+    print("# --- THROUGHPUT (passos fixos = %d): quanto o lote acelera o PASSO" % a.probe_steps)
     print("# B    steps   tokens     wall_s   tokens/s   GFLOP/s   s/step")
     thr = {}
     for b in batches:
@@ -151,12 +183,13 @@ def main():
                                  a.lr, a.ntrain, a.bytes, a.timeout)
         tok = a.probe_steps * b * T
         thr[b] = tok / wall
-        print("%-4d %-7d %-10d %-8.1f %-10.0f %-9.1f %.3f" %
+        print("%-4d %-7d %-10d %-8.1f %-10.0f %-9.1f %.3f   load=%.2f" %
               (b, a.probe_steps, tok, wall, tok / wall,
-               6 * P * tok / wall / 1e9, wall / a.probe_steps))
+               6 * P * tok / wall / 1e9, wall / a.probe_steps, ctx()[1]))
 
     # ---- 2) QUALIDADE a TOKENS FIXOS -------------------------------------
     print("\n# --- QUALIDADE a tokens FIXOS (%d tokens): quanto custa trocar updates por lote" % a.tokens)
+    print("# (aqui a carga NAO importa: bpb depende de tokens, nao de tempo)")
     print("# B    steps   wall_s   tokens/s   bpb(holdout)   updates/s")
     for b in batches:
         steps = max(1, a.tokens // (b * T))

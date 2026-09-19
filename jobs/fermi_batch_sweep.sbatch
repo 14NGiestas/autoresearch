@@ -16,6 +16,7 @@
 # a dependencia no submit (afterany dos outros jobs).
 set -u
 cd /home/pauli/autoresearch
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"   # = -c 8 do job: medicao reproduzivel
 PY=.venv-numpy/bin/python3
 BUILD=/tmp/bsweep_build
 D=96; H=6; KV=2; L=12; V=8192; C=1024
@@ -26,6 +27,11 @@ bin/build_arch $D $H $KV $L $V $C "$BUILD" 2>&1 | sed 's/^/  /'
 TRAIN=$(ls $BUILD/*/app/train_run | tail -1)
 EVAL=$(ls $BUILD/*/app/eval_bpb | tail -1)
 echo "  train=$TRAIN"; echo "  eval=$EVAL"
+
+echo "=== SWEEP ($(date '+%H:%M:%S')) -- ociosidade garantida pelo wait_idle do script"
+$PY scripts/batch_sweep.py --train "$TRAIN" --eval "$EVAL" \
+    --batches 1,4,16,64 --tokens 2000000 --probe-steps 30 --work /tmp/bsweep
+echo "fim bsweep $(date '+%F %H:%M:%S')"
 
 echo "=== GATE ESTRITO (o nosso codigo com -Werror; inclui os testes)"
 bin/fstrict 2>&1 | tail -2 | sed 's/^/  /'
@@ -68,7 +74,3 @@ $TRAIN $COMMON --nsteps 4 --val_every 9999999 --save_every 4 --batch 4 \
     --out /tmp/bsweep_b4 > /tmp/bsweep_b4/log 2>&1
 echo "  exit=$?  $(grep -E '^step 4|bpb' /tmp/bsweep_b4/log | tail -1)"
 
-echo "=== SWEEP ($(date '+%H:%M:%S')) load=$(cut -d' ' -f1 /proc/loadavg)"
-$PY scripts/batch_sweep.py --train "$TRAIN" --eval "$EVAL" \
-    --batches 1,4,16,64 --tokens 2000000 --probe-steps 30 --work /tmp/bsweep
-echo "fim bsweep $(date '+%F %H:%M:%S')"
