@@ -65,7 +65,9 @@ def final_bpb(train_bin, rows, init, outdir, batch, nsteps, lr, ntrain, bytesfil
               timeout_s=None):
     rm = ["--weights", init, "--rows", rows, "--out", outdir, "--nsteps", str(nsteps),
           "--lr", str(lr), "--ntrain", str(ntrain), "--start_row", "0", "--nval", "1",
-          "--val_every", str(nsteps), "--trn_probe", "0", "--save_every", str(nsteps),
+          # val_every alto: o bpb que importa e o da holdout (eval_bpb), e o probe
+          # interno com --trn_probe 0 custava ~1,8 h por validacao (ver train_run).
+          "--val_every", "9999999", "--trn_probe", "1", "--save_every", str(nsteps),
           "--attn", "blas", "--bytes", bytesfile, "--batch", str(batch)]
     # teto proporcional ao trabalho pedido: 2 s/passo + 120 s de folga
     wall, out = run([train_bin] + rm, os.path.join(outdir, "train.log"),

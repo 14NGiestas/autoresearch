@@ -41,13 +41,14 @@ BY="$HOME/.cache/autoresearch/tok_tables/token_bytes.txt"
 # nsteps/val_every/save_every ficam FORA do COMMON (cada rodada passa o seu:
 # flag duplicada no CLI e' ambiguidade que nao quero depurar num job)
 COMMON="--weights /tmp/mix/init3m --rows /tmp/mix/rows_f0.npy --lr 6e-4
-        --ntrain 11797 --start_row 0 --nval 1 --trn_probe 0 --attn blas --bytes $BY"
+        --ntrain 11797 --start_row 0 --nval 1 --trn_probe 1 --attn blas --bytes $BY"
 for TAG in antigo novo; do
   rm -rf /tmp/bsweep_neut_$TAG && mkdir -p /tmp/bsweep_neut_$TAG
   if [ "$TAG" = antigo ]; then BIN="$OLD"; EXTRA=""; else BIN="$TRAIN"; EXTRA="--batch 1"; fi
   # shellcheck disable=SC2086
   # shellcheck disable=SC2086
-  $BIN $COMMON --nsteps 6 --val_every 6 --save_every 6 $EXTRA \
+  # val_every alto: com --val_every pequeno cada validacao custa ~1,8 h (ver train_run)
+  $BIN $COMMON --nsteps 6 --val_every 9999999 --save_every 6 $EXTRA \
       --out /tmp/bsweep_neut_$TAG > /tmp/bsweep_neut_$TAG/log 2>&1
   echo "  $TAG: exit=$?  $(grep '^step 6' /tmp/bsweep_neut_$TAG/log | tail -1)"
 done
@@ -63,7 +64,7 @@ fi
 echo "=== B=4 roda? (4 passos)"
 rm -rf /tmp/bsweep_b4 && mkdir -p /tmp/bsweep_b4
 # shellcheck disable=SC2086
-$TRAIN $COMMON --nsteps 4 --val_every 4 --save_every 4 --batch 4 \
+$TRAIN $COMMON --nsteps 4 --val_every 9999999 --save_every 4 --batch 4 \
     --out /tmp/bsweep_b4 > /tmp/bsweep_b4/log 2>&1
 echo "  exit=$?  $(grep -E '^step 4|bpb' /tmp/bsweep_b4/log | tail -1)"
 

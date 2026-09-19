@@ -343,8 +343,14 @@ program train_run
       ! cost hours per validation (a 59k-row prose pool is ~65 h). Capping it
       ! samples the TAIL of the pool (start_row+ntrain-nprobe), i.e. rows this
       ! phase does not train on, which is the number we actually want.
+      ! O probe de treino e' um forward COMPLETO por linha: com nprobe = ntrain
+      ! (o default antigo) um pool de 11.797 linhas custa ~1,8 h POR VALIDACAO --
+      ! foi o que travou o job 143 (parecia spin, era conta). O default agora e'
+      ! um teto pequeno; quem quiser o pool inteiro passa --trn_probe -1.
       nprobe = ntrain - nval
-      if (nprobe_opt > 0) nprobe = min(nprobe_opt, ntrain - nval)
+      if (nprobe_opt == 0) nprobe = min(64, ntrain - nval)          ! default: teto
+      if (nprobe_opt > 0) nprobe = min(nprobe_opt, ntrain - nval)   ! explicito
+      if (nprobe_opt < 0) nprobe = ntrain - nval                    ! -1 = pool todo
       tnll = val_bpb(trim(rowsfile), start_row + ntrain - nprobe, nprobe)
       print '(A,I0,A,F10.5)', "val @", tstep, " bpb    ", vnll
       print '(A,I0,A,F10.5)', "trn @", tstep, " bpb    ", tnll
