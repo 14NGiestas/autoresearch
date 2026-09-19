@@ -11,20 +11,24 @@ dá fronteiras que diferem ~380×.
 
 ## Modo `infer` — janela de KV no decode
 
-| nível / operação (1 token = 3 KB no d96) | fermi (NVMe) | halfbeast (HDD) |
+| nível / operação (1 token = 3 KB no d96) | fermi (NVMe, **ociosa**, medição 139) | halfbeast (HDD) |
 |---|---|---|
-| RAM sequencial (page cache) | 0,15–0,38 µs | 0,375 µs |
-| RAM, 1 IO/token (aleatório) | ~9–15 µs | 15,6 µs |
-| disco sequencial | 1,3–1,5 µs | 26,9 µs |
-| disco, 1 IO/token | **105–155 µs** | **9.732 µs** |
-| recomputar a janela (proj+atenção) | 100–308 µs/token | 309 µs/token (T=512) |
-| **N\* (empata com ler token-a-token, frio)** | **~50 tokens** | **18.984 tokens** |
+| RAM sequencial (page cache) | **0,11–0,12 µs** (25–29 GB/s) | 0,375 µs |
+| RAM, 1 IO/token (aleatório) | **7,5–8,1 µs** | 15,6 µs |
+| disco sequencial | **1,2 µs** (2,5 GB/s) | 26,9 µs |
+| disco, 1 IO/token | **102–107 µs** | **9.732 µs** |
+| recomputar a janela (proj+atenção) | 81 / 128 / 309 µs/token (T=32/128/512) | 309 µs/token (T=512) |
+| **N\* (empata com ler token-a-token, frio)** | **66–88 tokens** | **18.984 tokens** |
+
+(Os números da fermi na tabela são da medição limpa — job 139, máquina ociosa,
+5 repetições por célula. Sob contenção a banda quente caía para 9–22 GB/s e o
+N\* ia para ~50: medir máquina ocupada dá lixo, e o `probe_trust` reprova.)
 
 - Contra **RAM**, ler ganha sempre (10–2000×).
 - Contra **disco token-a-token**, recomputar vence para janelas ≲ N\*; acima disso,
   ler ganha (na halfbeast, recomputar 512 tokens = 158 ms contra 4,98 s lendo).
 - **Lote é a variável de controle**: lendo a janela em **um** IO, ler ganha por
-  ~7× (halfbeast) a ~204× (fermi).
+  **17,8×** (T=32), **63,5×** (T=128) na fermi e ~4–7× na halfbeast.
 - A **atenção** é O(N²) na janela (O(N) por token): recomputar piora conforme a
   janela cresce.
 
