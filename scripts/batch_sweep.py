@@ -42,6 +42,7 @@ def run(cmd, log, timeout_s=0):
     inteiro -- o sweep nunca comecou. Um limite por execucao transforma isso em
     erro explicito.
     """
+    os.makedirs(os.path.dirname(log), exist_ok=True)   # o binario cria --out, mas o log vem antes
     t0 = time.time()
     with open(log, "w") as fh:
         try:
