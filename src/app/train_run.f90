@@ -43,7 +43,10 @@ program train_run
   implicit none
 
   integer, parameter :: sp = c_float
-  integer, parameter :: B = 1
+  ! --batch: quantas sequencias por passo. RUNTIME (nao constante de
+  ! compilacao): as formas do modelo saem de G%B, entao so' os arrays
+  ! locais deste app dependiam de B -- e eles agora sao alocados.
+  integer :: B = 1
   integer, parameter :: TT = A_CTX, D = A_D
   integer, parameter :: N_HEAD = A_HEAD, N_KV = A_KV, HD = A_HD
   integer, parameter :: N_LAYER = A_LAYER, VV = A_VOCAB
@@ -55,7 +58,8 @@ program train_run
   type(temp_t) :: tmp
   character(len=512) :: wdir, rowsfile, outdir, ckdir, bytesfile
   character(len=:), allocatable :: badpath
-  integer :: idx(B*TT), targets(B*TT), ngot
+  integer, allocatable :: idx(:), targets(:)
+  integer :: ngot
   integer, allocatable :: tbytes(:)
   real(sp) :: ct(TT*(HD/2)), st(TT*(HD/2))
   real(sp) :: nll, vnll, tnll, lr, lr_eff, best
@@ -86,7 +90,7 @@ program train_run
       ' --lr 0.0003 --t0 1 --log_every 1 --save_every 10' // &
       ' --start_row 0 --ntrain 40 --val_every 5 --nval 8 --keep_last 2' // &
       ' --trn_probe 0 --attn naive --bytes BYTES' // &
-      ' --opt adam --muon-lr 0.02 --ckpt-format st --anneal 0', &
+      ' --opt adam --muon-lr 0.02 --ckpt-format st --anneal 0 --batch 1', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  train_run - multi-batch trainer (slice 3)', &
@@ -127,6 +131,12 @@ program train_run
   nval = iget('nval')
   keep_last = iget('keep_last')
   bytesfile = trim(sget('bytes'))
+  B = iget('batch')
+  if (B < 1) then
+    print '(A)', 'require --batch >= 1'
+    call exit(1)
+  end if
+  allocate (idx(B*TT), targets(B*TT))
   ckfmt = trim(sget('ckpt-format'))
   if (ckfmt /= 'npy' .and. ckfmt /= 'st' .and. ckfmt /= 'both') then
     print '(A)', 'require --ckpt-format npy|st|both'
@@ -392,9 +402,11 @@ contains
   real(sp) function val_bpb(rowsfile, first, nval)
     character(*), intent(in) :: rowsfile
     integer, intent(in) :: first, nval
-    integer :: v_idx(B*TT), v_tgt(B*TT), n, jj, tid, b2
+    integer, allocatable :: v_idx(:), v_tgt(:)
+    integer :: n, jj, tid, b2
     real(sp) :: tn, tb
-    real(sp) :: nlls(B*TT)
+    real(sp), allocatable :: nlls(:)
+    allocate (v_idx(B*TT), v_tgt(B*TT), nlls(B*TT))
     tn = 0.0_sp; tb = 0
     do b2 = 0, nval - 1
       call load_batch(rowsfile, first + b2, B, TT, v_idx, v_tgt, n)
