@@ -1,5 +1,5 @@
 {
-  description = "Autoresearch ROCm dev environment";
+  description = "Autoresearch: Fortran CPU lab (gfortran + fpm + OpenBLAS) with a CPU-only default";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -16,11 +16,20 @@
 
         rocmPkgs = if pkgs ? pkgsRocm then pkgs.pkgsRocm else pkgs;
 
-        rocmLibs = with rocmPkgs.rocmPackages; [
+        # ---- bibliotecas por stack (nome diz o que tem dentro) --------------
+        cpuLibs = with pkgs; [
+          gfortran
+          fortran-fpm
+          openblas
+          python312
+          uv
+        ];
+
+        rocmLibs = (with rocmPkgs.rocmPackages; [
           rocm-runtime
           clr
           rocblas
-        ] ++ (with pkgs; [
+        ]) ++ (with pkgs; [
           zstd
           libxml2
           # NOTE: ncurses deliberately absent — its libtinfo shadows the
@@ -28,63 +37,73 @@
           # GLIBC_2.42 from nixos-unstable). Nothing here needs it.
         ]);
 
-      in
-      {
-        devShells.inference = pkgs.mkShell {
-          # Eval/inference-only shell: no ROCm (multi-GB, useless on an Intel
-          # box). Same nixpkgs rev as .default via flake.lock, so gfortran and
-          # OpenBLAS are the SAME derivations as the training box -- that is
-          # what makes cross-machine bpb and tok/s comparable at all.
-          buildInputs = with pkgs; [
-            gfortran
-            fortran-fpm
-            openblas
-            python312
-            uv
-          ];
+        # `fpm` aponta para fortran-fpm (no nixpkgs o binario se chama
+        # fortran-fpm; todo mundo digita `fpm`). Mesmo espirito do mfi.
+        fpmAlias = pkgs.writeShellScriptBin "fpm" ''
+          exec ${pkgs.fortran-fpm}/bin/fortran-fpm "$@"
+        '';
 
+        commonBuildInputs = [ pkgs.gfortran pkgs.fortran-fpm fpmAlias ];
+
+        # ---- fabricas de shell ---------------------------------------------
+        mkCpuShell = pkgs.mkShell {
+          nativeBuildInputs = commonBuildInputs ++ [ pkgs.python312 pkgs.uv ];
+          buildInputs = cpuLibs;
           shellHook = ''
             export OMP_NUM_THREADS="''${OMP_NUM_THREADS:-4}"
             export OPENBLAS_NUM_THREADS="''${OPENBLAS_NUM_THREADS:-4}"
             export EVAL_OMP="$OMP_NUM_THREADS"
-            echo "inference/eval shell ready (no ROCm; OMP=$OMP_NUM_THREADS)."
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openblas ]}:$LD_LIBRARY_PATH"
+            echo "cpu-only shell ready (no GPU runtime; OMP=$OMP_NUM_THREADS)."
           '';
         };
 
-        devShells.default =
-          pkgs.mkShell {
-            buildInputs = with pkgs; [
-              uv
-              python312
-              gfortran
-              fortran-fpm
-              openblas
-            ] ++ rocmLibs;
+        mkRocmShell = pkgs.mkShell {
+          nativeBuildInputs = commonBuildInputs ++ [ pkgs.python312 pkgs.uv ];
+          buildInputs = cpuLibs ++ rocmLibs;
+          shellHook = ''
+            export ROCM_PATH="${rocmPkgs.rocmPackages.rocm-runtime}"
+            export HIP_PATH="${rocmPkgs.rocmPackages.clr}"
+            # não incluir stdenv.cc.cc aqui: sombreava libstdc++ do sistema e quebrava node/pi (CXXABI_1.3.15)
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath rocmLibs}:$LD_LIBRARY_PATH"
+            export TORCH_USE_HIP_DSA=1
+            export AMD_SERIALIZE_KERNEL=1
+            export ROCM_VERSION=6.2.3
+            export PYTORCH_ROCM_ARCH="gfx1100"
+            export GFX_ARCH=gfx1100
+            export HSA_OVERRIDE_GFX_VERSION=11.0.0
+            export TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=0
+            export TORCH_BLAS_PREFER_HIPBLASLT=0
+            export HIP_VISIBLE_DEVICES=0
+            export HIP_MEMORY_POOL_LIMIT=16000000000
+            export PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.9,max_split_size_mb:512
+            export OMP_NUM_THREADS="''${OMP_NUM_THREADS:-4}"
+            echo "rocm shell ready (GPU AMD gfx1100; torch-free)."
+          '';
+        };
 
-            shellHook = ''
-              export ROCM_PATH="${rocmPkgs.rocmPackages.rocm-runtime}"
-              export HIP_PATH="${rocmPkgs.rocmPackages.clr}"
-              # não incluir stdenv.cc.cc aqui: sombreava libstdc++ do sistema e quebrava node/pi (CXXABI_1.3.15)
-              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath rocmLibs}:$LD_LIBRARY_PATH"
-              export TORCH_USE_HIP_DSA=1
-              export AMD_SERIALIZE_KERNEL=1
-              export ROCM_VERSION=6.2.3
-              export PYTORCH_ROCM_ARCH="gfx1100"
-              export GFX_ARCH=gfx1100
-              export HSA_OVERRIDE_GFX_VERSION=11.0.0
-              export TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=0
-              export TORCH_BLAS_PREFER_HIPBLASLT=0
-              export HIP_VISIBLE_DEVICES=0
-              export HIP_MEMORY_POOL_LIMIT=16000000000
-              export PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.9,max_split_size_mb:512
+      in
+      {
+        # Nomes por STACK; alias por MAQUINA aponta para o stack certo dela.
+        # Os dois usam o MESMO nixpkgs rev (flake.lock): gfortran e OpenBLAS sao
+        # as mesmas derivacoes em qualquer maquina -- e' isso que torna bpb e
+        # tok/s comparaveis entre fermi e halfbeast.
+        devShells = {
+          cpu-only = mkCpuShell;
+          rocm = mkRocmShell;
 
-              # torch-free shell: training/inference moved to pure Fortran (src/).
-              # No venv bootstrap — python3 here is for numpy-only tooling (parity
-              # harness, future .pt export reader). See hyp_34ea7c.
+          # default = CPU-only (espirito do mfi): entrar no shell da maquina nao
+          # pode custar o download de ~GB de runtime de GPU que o trabalho
+          # Fortran nao usa. Quem quer GPU pede: `nix develop .#rocm`.
+          default = mkCpuShell;
 
-              echo "ROCm autoresearch shell ready (torch-free)."
-            '';
-          };
+          # por maquina
+          fermi = mkRocmShell;      # GPU AMD gfx1100
+          halfbeast = mkCpuShell;   # Intel i9-7900X, sem GPU util
+
+          # legado: .#inference era o nome antigo do cpu-only
+          inference = mkCpuShell;
+        };
       }
     );
 }

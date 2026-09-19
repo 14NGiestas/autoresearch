@@ -1,10 +1,13 @@
 name = "fortran_gpt"
 version = "0.1.0"
 license = "MIT"
-author = "autoresearch"
-maintainer = "autoresearch"
-copyright = "Copyright 2026, autoresearch"
-description = "Pure-Fortran GPT forward pass: RMSNorm, matmul, RoPE, causal attention, ReLU^2"
+author = "Ian Giestas Pauli"
+maintainer = "iangiestas@usp.br"
+copyright = "Copyright 2026, Ian Giestas Pauli"
+homepage = "https://github.com/14NGiestas/autoresearch"
+description = "Pure-Fortran GPT for CPU: forward/backward, training loop, KV/generation, safetensors checkpoints, and self-measured energy/CPU/IO per phase"
+keywords = ["gpt", "transformer", "language-model", "inference", "training", "safetensors", "energy"]
+categories = ["machine-learning", "linear-algebra", "io", "numerical"]
 
 [library]
 source-dir = "lib"
@@ -12,7 +15,7 @@ source-dir = "lib"
 [dependencies]
 openmp = "*"
 stdlib = "*"
-safetensors = { git = "https://github.com/14NGiestas/safetensors-fortran", tag = "v0.1.1" }
+safetensors = { git = "https://github.com/14NGiestas/safetensors-fortran", tag = "v0.1.2" }
 # Energia/CPU/IO medidos pelo PROPRIO processo (fortran_energy, pacote separado
 # em energy-fortran/). path por enquanto: vira `git = ...` quando for publicado.
 fortran_energy = { path = "../energy-fortran" }
@@ -20,9 +23,26 @@ fortran_energy = { path = "../energy-fortran" }
 # reverted the same day: its BLAS interfaces are LP64 (default integer)
 # but nixpkgs OpenBLAS is ILP64 (USE64BITINT) -> SIGFPE in gemm_driver.
 # See src/lib/fortran_blas.f90 header. Do not re-add without ILP64 BLAS.
-# NOTE: M_CLI2 vendored as src/lib/m_cli2.f90 (CC0-1.0, upstream:
-# github.com/urbanjost/M_CLI2) — fpm 0.10.1 ignores the dep's .F90
-# sources, so a git dependency builds nothing.
+# M_CLI2 (parser de CLI) como DEPENDENCIA, nao vendado. A nota antiga dizia
+# que "fpm 0.10.1 ignora os .F90 da dependencia" -- isso e' FALSO no fpm do
+# nix: testado 2026-09-18 com um pacote minimo, `M_CLI2 = {git=...}` compila e
+# roda (src/M_CLI2.F90 e' pre-processado normalmente). Pinado por COMMIT porque
+# a tag V3.2.0 difere em 1109 linhas do arquivo que estava vendado; este sha
+# tem src/M_CLI2.F90 IDENTICO ao vendado (caixa a parte), verificado com diff.
+M_CLI2 = { git = "https://github.com/urbanjost/M_CLI2", rev = "0704ed34c800f5d153cd192dedc0052c53ec9589" }
 
 [build]
 link = ["openblas"]
+
+# Perfis: `debug` (default) e `release` sao EMBUTIDOS do fpm -- nao redefinir.
+# Nao ha perfil de "warnings extras": o fpm 0.13 usa `[features]` para inclusao
+# condicional de fonte (estilo Cargo), nao para flags de compilador, e a nota
+# antiga ("[profiles] so' aceita nome de feature do compilador") valia para fpm
+# anterior. O gate estrito (com -Werror e valendo SO' no nosso codigo) e':
+#
+#   bin/fstrict                          # -Wall -Wextra -fcheck=all -Werror
+#   fortran-fpm build --build-dir /tmp/B  # build normal (deps + nos)
+#   fortran-fpm test  --build-dir /tmp/B  # suite completa
+#
+# (Nao ha bloco [profiles] de proposito: um perfil com nome de feature do
+# compilador e' rejeitado por esta versao do fpm.)

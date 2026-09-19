@@ -27,6 +27,16 @@ grep -E 'parameter :: (D_MODEL|N_HEAD|N_KV|N_LAYER|VV|TT)' "$F" | sed 's/^/    /
 # (o require_arch pegou, mas nao deveria ser possivel errar). O binario passa a ter
 # endereco deterministico: build/arch_d<D>_h<heads>_kv<kv>_l<layers>_v<vocab>_c<ctx>
 BD="build/arch_d${D}_h${H}_kv${KV}_l${L}_v${V}_c${C}"
-cd /home/pauli/autoresearch/src && nix develop .. --command /home/pauli/fortran-fpm build \
+# Identidade da arch (src/lib/fortran_arch.f90): imprimir aqui e' o que impede a
+# divergencia invisivel que a gente viveu (arvore em d216, experimentos em d96).
+# O id e' derivado dos numeros, entao nao ha o que manter em sincronia.
+CAN=$(python3 /home/pauli/autoresearch/scripts/arch.py --canonical-of \
+    "d_model=$D,n_head=$H,n_kv=$KV,head_dim=$((D/H)),n_layer=$L,vocab=$V,ctx=$C,bos=8188" 2>/dev/null) || CAN=""
+[ -n "$CAN" ] && echo "  identidade: $CAN" && \
+    echo "  id: $(python3 /home/pauli/autoresearch/scripts/arch.py --id-of "$CAN")"
+# P3 (pendente): trocar a pasta por build/arch_<id> e selecionar por identidade
+# em vez de por nome -- o schema em nome de pasta esta' duplicado em
+# fedavg_rounds.py e compose_grid.py.
+cd /home/pauli/autoresearch/src && nix develop ..#cpu-only --command /home/pauli/fortran-fpm build \
     --profile release --flag "-march=native -ffast-math" --build-dir "$BD" 2>&1 | tail -1 | sed 's/^/  /'
 echo "  binario: src/$BD/*/app/train_run"

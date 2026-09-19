@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# fstrict — gate ESTRITO aplicado APENAS ao nosso codigo.
+#
+# Por que nao `fortran-fpm build --flag '-Werror'` (o que o bin/fbuild faz):
+# o --flag do fpm vai tambem para as DEPENDENCIAS (stdlib, safetensors, M_CLI2),
+# que nao sao nossas e sao re-baixadas a cada build limpo. Medido em 2026-09-18:
+# stdlib sozinho emite compare-reals (104x), conversion (93x) e
+# unused-dummy-argument (20x); safetensors e M_CLI2 tambem emitem. Um -Werror
+# global exigiria uma lista de excecoes tao grande que o gate deixaria de
+# proteger o que importa -- o NOSSO codigo.
+#
+# Estrategia em dois estagios:
+#   1. compila tudo com flags default (deps + nos, INCLUINDO os testes) ->
+#      todos os .mod existem e o compile_commands.json cobre teste tambem;
+#   2. RECOMPILA somente os nossos fontes (na ordem de compile_commands.json)
+#      com -Werror, escrevendo os .mod num dir scratch e lendo das dependencias.
+#
+# Uso:  bin/fstrict                       # -Wall -Wextra -fcheck=all -Werror
+#       FSTRICT_FLAGS="..." bin/fstrict
+# Saida: 0 = nenhum aviso no nosso codigo; != 0 = lista de arquivos e avisos.
+set -eu
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+B=${FSTRICT_BUILD:-/tmp/fstrict_build}      # build do fpm (deps + nos)
+M=${FSTRICT_MODS:-/tmp/fstrict_mods}        # .mod das nossas fontes recompiladas
+FLAGS=${FSTRICT_FLAGS:-"-Wall -Wextra -fcheck=all -Werror"}
+
+rm -rf "$B" "$M" && mkdir -p "$M"
+echo "[fstrict] estagio 1: build default em $B"
+nix develop "${NIX_SHELL:-.#cpu-only}" --command bash -c "cd src && fortran-fpm build --tests --build-dir '$B'" \
+    >"$B.log" 2>&1 || { echo "[fstrict] build default FALHOU:"; tail -15 "$B.log"; exit 1; }
+
+[ -f "$B/compile_commands.json" ] || { echo "[fstrict] fpm nao gerou compile_commands.json"; exit 1; }
+echo "[fstrict] estagio 2: recompilando NOSSOS fontes com: $FLAGS"
+
+python3 - "$B/compile_commands.json" "$M" "$FLAGS" <<'PY'
+import json, os, shlex, subprocess, sys, glob
+
+cc, mods, flags = sys.argv[1], sys.argv[2], sys.argv[3]
+root = os.path.dirname(cc)
+entries = json.load(open(cc))
+
+dep_inc, seen = [], set()
+# TODOS os .mod do estagio 1 (dependencias E os nossos): assim a ordem em
+# compile_commands.json deixa de importar (fpm ja compilou tudo uma vez).
+for p in glob.glob(os.path.join(root, '**', '*.mod'), recursive=True):
+    d = os.path.dirname(p)
+    if d not in seen and os.path.abspath(d) != os.path.abspath(mods):
+        seen.add(d); dep_inc.append(d)
+
+ours = [e for e in entries if '/dependencies/' not in e.get('file', '')
+        and e.get('file', '').endswith(('.f90', '.F90'))]
+print(f"[fstrict] nossos arquivos: {len(ours)} | dirs de .mod: {len(dep_inc)}")
+
+fails, n = [], 0
+compiler = None
+for e in entries:
+    args = e.get('arguments') or shlex.split(e.get('command', ''))
+    if args:
+        compiler = args[0]; break
+for e in ours:
+    f = e['file']
+    cmd = ([compiler, '-c', f] + shlex.split(flags)
+           + ['-cpp', '-fopenmp', f'-J{mods}', f'-I{mods}']
+           + [f'-I{d}' for d in dep_inc]
+           + ['-o', os.path.join(mods, 'obj.o')])
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=e.get('directory'))
+    n += 1
+    if r.returncode != 0:
+        fails.append((f, r.stderr.strip()))
+
+if not fails:
+    print(f"[fstrict] OK — {n} arquivos nossos compilados com -Werror, nenhum aviso")
+    sys.exit(0)
+for f, err in fails:
+    print(f"\n--- {f}")
+    print('\n'.join(err.splitlines()[:10]))
+print(f"\n[fstrict] FALHOU: {len(fails)} de {n} arquivos nossos")
+sys.exit(1)
+PY
