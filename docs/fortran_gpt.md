@@ -133,6 +133,29 @@ identidades explícitas** em vez de um nome de pasta.
 conferir `arch_id`; P4 = aposentar o `arch.txt` (primeiro derivado, depois fora),
 com entrada no HEP.
 
+## Retrato da arquitetura
+
+Um comando imprime como a arquitetura está **agora** — diagrama do bloco com as
+dimensões, tabela de tensores (shape e params), os derivados que decidem custo
+e a **identidade**:
+
+```bash
+scripts/arch_view.py /tmp/mix/init3m --repo-default --svg /tmp/arch.svg
+```
+
+Ele lê a arch do **checkpoint** (metadata primeiro, `arch.txt` depois) e, com
+`--repo-default`, compara com os `#define ARCH_*` do repo — imprimindo
+`>>> DIVERGENCIA` quando um build novo sairia para outra arquitetura. Foi
+precisamente essa a confusão d216/d96: agora ela aparece em uma linha em vez de
+esperar alguém conferir campo a campo.
+
+Derivados que saem junto (e que decidem decisões): params, FLOPs/token (fwd e
+fwd+bwd), atenção/token, **KV B/token**, **ativação B/token** (o `allocate(C%…)`
+do `fortran_train.f90`), estado do otimizador (m,v) e o que um lote de T=1024
+ocupa. Com uma ressalva medida embutida no texto: **FLOPs ≠ custo na atenção** —
+no `tier_probe`, atenção custou 225 µs/token contra 83 µs/token das projeções
+com ~0,6× dos FLOPs (ela é dominada pelo tráfego da matriz T×T).
+
 ## Convenções que evitam bug
 
 1. **A arquitetura é uma só**: shapes em `fortran_arch_mod`, derivados, nunca
