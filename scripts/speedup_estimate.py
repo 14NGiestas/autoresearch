@@ -61,8 +61,9 @@ TIMELINE = [
     ("+ execucao paralela", "4 workers x OMP~2 (agregado 7292 vs 297)",
      MEASURED["tok_s_node_4workers"] / MEASURED["tok_s_1worker_omp16"]),
     ("+ B (lote)",          "medido PLANO: nao ajuda", MEASURED["batch_factor"]),
-    ("+ head_dim 32",       "1.80x no passo, mesmos FLOPs/params", MEASURED["arch_factor_d32"]),
-    ("+ head_dim 48",       "2.44x no passo", MEASURED["arch_factor_d48"]),
+    # head_dim 32 e 48 sao ALTERNATIVAS (constroi-se um modelo, com D=32 OU D=48),
+    # nao degraus cumulativos: um so' fator, o do D=48, com o D=32 anotado.
+    ("+ head_dim 48 (D=32: x1.80)", "mesmos FLOPs/params, outra forma", MEASURED["arch_factor_d48"]),
 ]
 
 
