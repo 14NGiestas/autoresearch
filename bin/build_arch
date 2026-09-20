@@ -77,6 +77,23 @@ if ! OUT=$(nix develop "${NIX_SHELL:-.#cpu-only}" --command bash -c \
 fi
 printf '%s\n' "$OUT" | tail -1 | sed 's/^/  /'
 
+# GRAVA A ARCH. O nome do diretorio e' convencao, nao contrato: quem renomeia o
+# dir muda o significado em silencio. A fonte da verdade e' este arquivo, escrito
+# aqui, com os parametros que ESTE build recebeu. O formato e' o mesmo do arch.txt
+# do checkpoint, entao um leitor so' serve para os dois.
+mkdir -p "$BD"
+{
+  echo "d_model = $D"
+  echo "n_head = $H"
+  echo "n_kv = $KV"
+  echo "n_layer = $L"
+  echo "vocab = $V"
+  echo "ctx = $C"
+  echo "head_dim = $((D/H))"
+  echo "# escrito pelo build_arch; lido pelo job_env (mesmo formato do checkpoint)"
+} > "$BD/arch.txt"
+echo "[build_arch] arch registrada em $BD/arch.txt"
+
 # Publica os caminhos dos apps. O fpm guarda UMA configuracao por --build-dir
 # (passamos sempre um dir dedicado), entao "exatamente um diretorio de app" e' um
 # invariante VERIFICAVEL, nao adivinhacao. O que quebrou o job 155 foi o
