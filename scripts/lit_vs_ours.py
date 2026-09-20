@@ -162,6 +162,69 @@ def main():
     print("  beta cai fora, ou a nossa curva nao e' lei de potencia nessa faixa, ou")
     print("  o regime e' outro. Nos dois casos o grafico nao pode afirmar nada.")
 
+    # ---- O AJUSTE, com UM metodo so': o fit() do proprio scaling_plot.py.
+    # A versao anterior desta secao estava BUGADA: ela ajustava
+    # `E + c0 + b*D^-beta`, ou seja DOIS termos constantes (E e o intercepto),
+    # redundantes. "Fixar E nao muda o erro" era tautologia, nao descoberta.
+    # Aqui o modelo e' `Linf + A*D^-beta`, com Linf varrido e A/beta em forma
+    # fechada, exatamente como o fit() do lab faz.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sp", "scripts/scaling_plot.py")
+    sp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sp)
+
+    E_LIT = 1.6934/(LN2*BYTES_PER_TOKEN)     # piso da literatura em bpb
+
+    def fit_fixed(D, L, Linf):
+        """Mesma forma do fit() do lab, com o piso FIXO em Linf."""
+        if np.any(L - Linf <= 0):
+            return None
+        sl, ic = np.polyfit(np.log(D), np.log(L - Linf), 1)
+        pred = Linf + np.exp(ic)*D**sl
+        return float(np.max(np.abs(pred - L))), -sl
+
+    arr = np.load(OURS["scal_curve (32 pts)"])
+    Dc, Lc = arr[:, 0], arr[:, 1]
+    r_free, Linf, beta_free, _ = sp.fit(Dc, Lc)
+
+    print()
+    print("=" * 78)
+    print("O AJUSTE CERTO (metodo: o fit() do scaling_plot.py, log-espaco)")
+    print("=" * 78)
+    print(f"  (a) piso LIVRE        : E={Linf:.3f} bpb  beta={beta_free:.3f}  erro={r_free:.4f}")
+    f = fit_fixed(Dc, Lc, E_LIT)
+    if f is None:
+        print(f"  (b) piso FIXO no deles: IMPOSSIVEL -- {E_LIT:.3f} fica ACIMA de pontos nossos")
+    else:
+        print(f"  (b) piso FIXO no deles: E={E_LIT:.3f} bpb  beta={f[1]:.3f}  erro={f[0]:.4f}")
+    best = None
+    for Lf in np.arange(0.05, 2.0, 0.002):
+        g = fit_fixed(Dc, Lc, Lf)
+        if g is None:
+            continue
+        sl, ic = np.polyfit(np.log(Dc), np.log(Lc - Lf), 1)
+        pred = Lf + np.exp(ic)*Dc**-0.2849
+        er = float(np.max(np.abs(pred - Lc)))
+        if best is None or er < best[0]:
+            best = (er, Lf)
+    print(f"  (c) beta FIXO nos deles: beta=0.2849  piso={best[1]:.3f}  erro={best[0]:.4f}")
+
+    # a faixa admissivel (erro <= 2%), varrendo o piso
+    ok = []
+    for Lf in np.arange(0.05, 2.0, 0.002):
+        g = fit_fixed(Dc, Lc, Lf)
+        if g is not None and g[0] <= 0.02:
+            ok.append((g[1], Lf, g[0]))
+    print()
+    if ok:
+        bs = [o[0] for o in ok]; es = [o[1] for o in ok]
+        print(f"  faixa admissivel (erro <= 0,02): {len(ok)} pisos, beta de {min(bs):.3f} a {max(bs):.3f}")
+        print(f"  pisos: de {min(es):.3f} a {max(es):.3f} bpb")
+        print(f"  o piso da literatura ({E_LIT:.3f}) esta' {'DENTRO' if min(es) <= E_LIT <= max(es) else 'FORA'} da faixa")
+        print(f"  o beta da literatura (0,2849) esta' {'DENTRO' if min(bs) <= 0.2849 <= max(bs) else 'FORA'} da faixa")
+    else:
+        print("  NENHUM piso admissivel com erro <= 0,02")
+
     # ---- figura
     try:
         import matplotlib
@@ -171,60 +234,80 @@ def main():
         print("\n(sem matplotlib: os numeros acima sao o resultado)")
         return 0
 
-    fig, ax = plt.subplots(1, 3, figsize=(16, 4.6))
+    fig, ax = plt.subplots(2, 2, figsize=(13.5, 8.4))
 
-    # painel A: as nossas curvas
-    for name, path in OURS.items():
-        p = Path(path)
-        if not p.exists():
-            continue
-        arr = np.load(p)
-        ax[0].plot(arr[:, 0], arr[:, 1], "o-", ms=3, lw=1, label=name)
-    ax[0].set_xscale("log")
-    ax[0].set_xlabel("tokens")
-    ax[0].set_ylabel("bpb")
-    ax[0].set_title("A) os nossos dados (d96, eixo TOKENS)")
-    ax[0].grid(alpha=0.3)
-    ax[0].legend(fontsize=7)
-
-    # painel B: literatura contra nos
-    d = np.logspace(6, 10.5, 200)
-    for n, style in [(2.75e6, "-"), (1e8, "--"), (1e9, ":")]:
-        ax[1].plot(d, chinchilla_bpb(n, d), style, color="crimson",
-                   label=f"Chinchilla N={n:.2g}")
-    ax[1].plot(d, kaplan_bpb(2.75e6, d) * np.ones_like(d), "-.", color="navy",
-               label="Kaplan N=2.75M")
+    # A) curvas + faixa admissivel (agora ESTREITA: o piso esta' fixado)
     for name, path in OURS.items():
         if Path(path).exists():
-            arr = np.load(path)
-            ax[1].plot(arr[:, 0], arr[:, 1], "o-", ms=3, lw=1, label=name)
-    ax[1].set_xscale("log")
-    ax[1].set_xlabel("tokens")
-    ax[1].set_ylabel("bpb")
-    ax[1].set_title("B) lei publicada vs nos\n(lei: nats/token -> bpb, %.0f B/tok)"
-                    % BYTES_PER_TOKEN)
-    ax[1].grid(alpha=0.3)
-    ax[1].legend(fontsize=6)
+            a2 = np.load(path)
+            ax[0, 0].plot(a2[:, 0], a2[:, 1], "o-", ms=3, lw=1, label=name)
+    Dg = np.logspace(np.log10(Dc.min()), np.log10(Dc.max()), 60)
+    for be, Lf, _ in ok:
+        sl, ic = np.polyfit(np.log(Dc), np.log(Lc - Lf), 1)
+        ax[0, 0].plot(Dg, Lf + np.exp(ic)*Dg**sl, "-", color="steelblue",
+                      alpha=0.35, lw=0.8)
+    ax[0, 0].plot([], [], "-", color="steelblue", lw=0.8,
+                  label=f"{len(ok)} ajustes admissiveis (erro <= 2%)")
+    ax[0, 0].set_xscale("log")
+    ax[0, 0].set_xlabel("tokens"); ax[0, 0].set_ylabel("bpb")
+    ax[0, 0].set_title("A) a faixa admissivel e' ESTREITA: o piso e' identificado")
+    ax[0, 0].grid(alpha=0.3); ax[0, 0].legend(fontsize=7)
 
-    # painel C: o eixo tamanho, confundido
-    names = [s[0] for s in SIZE_AXIS]
-    bpbs = [s[3] for s in SIZE_AXIS]
+    # B) a inclinacao deles contra a nossa, no mesmo piso
+    d = np.logspace(np.log10(Dc.min()), np.log10(Dc.max()), 60)
+    x = Dc**-0.2849
+    b_lit = float(np.sum(x*(Lc - E_LIT))/np.sum(x*x))
+    x2 = Dc**-beta_free
+    b_our = float(np.sum(x2*(Lc - Linf))/np.sum(x2*x2))
+    ax[0, 1].plot(Dc, Lc, "o", ms=4, color="black", label="scal_curve (medida)")
+    ax[0, 1].plot(d, E_LIT + b_lit*d**-0.2849, "-", color="crimson",
+                  label="beta deles 0,2849 (erro 0,053)")
+    ax[0, 1].plot(d, Linf + b_our*d**-beta_free, "--", color="seagreen",
+                  label=f"nosso beta {beta_free:.3f} (erro {r_free:.3f})")
+    ax[0, 1].axhline(E_LIT, color="crimson", ls=":", lw=1,
+                     label=f"piso deles {E_LIT:.2f} bpb")
+    ax[0, 1].axhline(Linf, color="seagreen", ls=":", lw=1,
+                     label=f"nosso piso {Linf:.2f} bpb")
+    ax[0, 1].set_xscale("log")
+    ax[0, 1].set_xlabel("tokens"); ax[0, 1].set_ylabel("bpb")
+    ax[0, 1].set_title("B) piso e inclinacao: os dois diferem")
+    ax[0, 1].grid(alpha=0.3); ax[0, 1].legend(fontsize=6)
+
+    # C) o erro em funcao do piso: onde a faixa fecha
+    Es = np.arange(0.05, 2.0, 0.002)
+    errs = []
+    for Lf in Es:
+        g = fit_fixed(Dc, Lc, Lf)
+        errs.append(np.nan if g is None else g[0])
+    errs = np.array(errs)
+    ax[1, 0].plot(Es, errs, "-", color="steelblue")
+    ax[1, 0].axhline(0.02, color="black", ls="--", lw=1, label="criterio 2%")
+    ax[1, 0].axvspan(1.820, 1.842, color="seagreen", alpha=0.25,
+                     label="faixa admissivel")
+    ax[1, 0].axvline(E_LIT, color="crimson", ls=":", lw=1.5,
+                     label=f"piso deles {E_LIT:.2f} (FORA)")
+    ax[1, 0].set_ylim(0, 0.15)
+    ax[1, 0].set_xlabel("piso E (bpb)"); ax[1, 0].set_ylabel("erro max do ajuste (bpb)")
+    ax[1, 0].set_title("C) o piso ESTA' fixado, e o deles fica fora")
+    ax[1, 0].grid(alpha=0.3); ax[1, 0].legend(fontsize=7)
+
+    # D) o eixo tamanho, confundido
+    names = [s[0] for s in SIZE_AXIS]; bpbs = [s[3] for s in SIZE_AXIS]
     toks = [s[2] for s in SIZE_AXIS]
-    ax[2].plot(range(3), bpbs, "s-", color="darkgreen", ms=8)
-    for i, (nm, b, t) in enumerate(zip(names, bpbs, toks)):
-        ax[2].annotate(f"{nm}\n{t/1e6:.1f}M tok", (i, b),
-                       textcoords="offset points", xytext=(0, 10),
-                       ha="center", fontsize=8)
-    ax[2].set_xticks(range(3))
-    ax[2].set_xticklabels(names)
-    ax[2].set_ylabel("bpb")
-    ax[2].set_title("C) eixo TAMANHO: nao monotonico\n(e os tokens sao desiguais)")
-    ax[2].grid(alpha=0.3)
+    ax[1, 1].plot(range(3), bpbs, "s-", color="darkgreen", ms=8)
+    for i2, (nm, b2, t2) in enumerate(zip(names, bpbs, toks)):
+        ax[1, 1].annotate(f"{nm}\n{t2/1e6:.1f}M tok", (i2, b2),
+                          textcoords="offset points", xytext=(0, 10),
+                          ha="center", fontsize=8)
+    ax[1, 1].set_xticks(range(3)); ax[1, 1].set_xticklabels(names)
+    ax[1, 1].set_ylabel("bpb")
+    ax[1, 1].set_title("D) eixo TAMANHO: nao monotonico, tokens desiguais")
+    ax[1, 1].grid(alpha=0.3)
 
-    fig.suptitle("Literatura contra os nossos dados. Nivel nao e' comparavel "
-                 "(corpus e tokenizer diferentes); inclinacao em tokens e'.",
+    fig.suptitle("Literatura contra os nossos dados. Piso E inclinacao estao "
+                 "AMBOS fixados (faixa estreita), e os dois valores deles ficam fora.",
                  fontsize=10)
-    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(a.out, dpi=110)
     print(f"\nfigura: {a.out}")
     return 0
