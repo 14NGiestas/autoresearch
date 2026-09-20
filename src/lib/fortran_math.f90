@@ -30,9 +30,17 @@ module fortran_math_mod
 contains
 
   ! tanh(x), approximately, for x in [-5, 5]. Returns +-1 outside that range.
+  !
+  ! LOGIT_CAP_EXACT_TANH is a measurement switch, not a product option. It swaps
+  ! the polynomial for the intrinsic tanh, which answers the question "how much
+  ! does the approximation move the result" and "what does it cost in time".
+  ! Build it with: fortran-fpm build --flag -DLOGIT_CAP_EXACT_TANH
   elemental function fast_tanh(x) result(y)
     real(wp), intent(in) :: x
     real(wp) :: y, x2
+#ifdef LOGIT_CAP_EXACT_TANH
+    y = tanh(x)
+#else
     if (x > SAT) then
       y = 1.0_wp
     else if (x < -SAT) then
@@ -45,6 +53,7 @@ contains
           + x2*(2.656616768082727089e-6_wp + x2*(-5.5138381821615909058e-8_wp &
           + x2*4.8162484477588665996e-10_wp))))))))
     end if
+#endif
   end function fast_tanh
 
   ! The attention soft cap: cap * tanh(x / cap). A cap of 0 or less means no cap.
