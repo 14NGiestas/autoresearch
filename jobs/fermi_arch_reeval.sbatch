@@ -40,12 +40,13 @@ for RUN in /tmp/aq/h*_s*/run/step_*; do
   EVB=$(ls /tmp/aq/build_h${HF}_kv${KVF}/*/app/eval_bpb 2>/dev/null | tail -1)
   [ -z "$EVB" ] && { printf "%-16s %-10s %-10s\n" "$TAG" "$((96/HF))" "sem binario eval"; continue; }
   OUT=$($PY scripts/eval_bpb_dir.py --eval "$EVB" --ckpt "$RUN" 2>&1 | tail -1)
-  if [ -z "$OUT" ] || [ "${OUT#*[!0-9.]}" = "$OUT" ] && [ -n "${OUT//[0-9.]/}" ]; then
-    printf "%-16s %-10s %-10s\n" "$TAG" "$((96/HF))" "FALHOU: $OUT"
-  else
-    printf "%-16s %-10s %-10s\n" "$TAG" "$((96/HF))" "$OUT"
-    N_OK=$((N_OK + 1))
-  fi
+  # um bpb sempre comeca com digito; qualquer outra coisa e' erro, e o erro
+  # aparece inteiro em vez de virar "falhou".
+  case "$OUT" in
+    [0-9]*) printf "%-16s %-10s %-10s\n" "$TAG" "$((96/HF))" "$OUT"
+            N_OK=$((N_OK + 1)) ;;
+    *)      printf "%-16s %-10s %s\n" "$TAG" "$((96/HF))" "FALHOU: $OUT" ;;
+  esac
 done
 # cobertura: uma tabela parcial nao pode passar por completa
 echo "cobertura: $N_OK de $N_TOT bracos avaliados"
