@@ -1,116 +1,152 @@
-# sync_composition — o que custa sincronizar (K=4, 3M params, CPU, τ=122)
+# sync_composition — the cost of a synchronization
 
-Nota de trabalho. Números são bpb de holdout (100 linhas, fixas) do modelo 3M
-(`train_run`, attn BLAS), mesmo init (`/tmp/mix/init3m`) e mesmo pool
-(`/tmp/mix/rows_f0.npy`) salvo quando dito. Driver: `scripts/fedavg_rounds.py`.
-**Estado: as conclusões abaixo já incorporam duas correções nossas** (atribuição
-do ganho do outer; mecanismo do reset) — ver as seções marcadas CORRIGIDO.
+This note records one line of work. The numbers are bpb on a fixed holdout of
+100 lines. The model is the 3M model (d96) of this repository, and the binary is
+`train_run` with BLAS attention. The init is `/tmp/mix/init3m` and the pool is
+`/tmp/mix/rows_f0.npy`, unless the text says otherwise. The driver is
+`scripts/fedavg_rounds.py`.
 
-## O instrumento
+Two corrections are already inside the text below. One corrects the source of the
+gain of the outer optimizer. The other corrects the mechanism of the reset.
 
-| item | valor |
+## The instrument
+
+| item | value |
 |---|---|
-| workers | K=4 (4 processos `train_run`) |
-| sincronização | média dos pesos a cada τ passos/worker |
-| orçamento | 1952 passos/worker = 16 rodadas a τ=122 (o "wall-clock") |
-| compute | K × 1952 = 7808 passos de worker |
-| régua parede | run único de 1952 passos = **2,44475** (reproduzido em 2,44476) |
-| régua compute | run único de 7808 passos = **2,12000** |
-| one-shot | 1 rodada de τ=1952 = 2,50360 (**pior que não compor**) |
+| workers | K=4, four `train_run` processes |
+| synchronization | the average of the weights every tau steps for each worker |
+| budget | 1952 steps for each worker, which is 16 rounds at tau=122 |
+| compute | K times 1952, which is 7808 worker steps |
+| wall-clock reference | one run of 1952 steps: **2.44475** |
+| compute reference | one run of 7808 steps: **2.12000** |
+| one-shot | one round of 1952 steps: 2.50360, which is worse than no composition |
 
-## O que fazer com o estado do otimizador (tabela 3×2)
+## What to do with the optimizer state (a table of 3 by 2)
 
-| K=4, τ=122, 1952 passos/worker | sem outer | com outer Nesterov lr=0,7 |
+| K=4, tau=122, 1952 steps for each worker | no outer | outer Nesterov, lr=0.7 |
 |---|---|---|
-| momentos **mediados** entre workers | 2,69018 | 2,42053 |
-| momentos **por worker** (sem média) | **2,68616** | **2,42092** |
-| momentos **zerados** (reset) | **2,49459** | **2,33183** |
+| moments **averaged** between workers | 2.69018 | 2.42053 |
+| moments **for each worker**, no average | **2.68616** | **2.42092** |
+| moments **reset** to zero | **2.49459** | **2.33183** |
 
-**CORRIGIDO — o veneno é estado estale, não a média.** Mediar os momentos vs
-manter cada worker com os seus é *indiferente* (−0,004 e +0,0004, dentro do
-ruído). O que importa é não carregar estado desalinhado com os pesos pós-média:
-reset ganha por 0,19 (sem outer) e 0,09 (com outer). (Nossa primeira leitura —
-"a média de momentos entre workers é o veneno" — está **refutada**.)
+**CORRECTED: the poison is stale state, and not the average.** To average the
+moments and to keep them for each worker are the same result, at -0.004 and
++0.0004. Both sit inside the noise. The reset wins by 0.19 without the outer and
+by 0.09 with it. Our first reading said that the average of the moments between
+workers is the poison. That reading is refuted.
 
-## De onde vem o ganho do outer (controle K=1)
+## The source of the gain of the outer optimizer (a control at K=1)
 
-| K=1, τ=122, 16 rodadas (mesmo compute) | bpb |
+| K=1, tau=122, 16 rounds, the same compute | bpb |
 |---|---|
-| momentos carregados | 2,71348 |
-| + outer Nesterov 0,7 | **2,49638** |
+| moments carried | 2.71348 |
+| plus outer Nesterov at 0.7 | **2.49638** |
 
-**CORRIGIDO — ~80% do outer é "otimizador melhor", não conserto de sync.** Sem
-composição nenhuma o outer vale −0,217; com K=4 vale −0,270. A comparação justa
-deixa de ser "composto vs máquina única pura" e passa a ser **"composto+outer
-(2,33183) vs máquina única+outer (2,49638)" = 0,16 bpb a favor de compor**, no
-mesmo wall-clock (agora com o mesmo otimizador dos dois lados).
+**CORRECTED: about 80 percent of the outer gain is a better optimizer, and not a
+repair of the synchronization.** Without any composition the outer gives -0.217.
+With K=4 it gives -0.270. So the fair comparison is not composition against a
+plain single machine. The fair comparison is **composition with the outer
+(2.33183) against a single machine with the same outer (2.49638)**. The
+composition then wins by 0.16 bpb at the same wall-clock, because both sides use
+the same optimizer.
 
-## Resíduo sem explicação: a estrutura de rodadas
+## The cost of the round structure
 
-K=1 com **1 rodada** bate a referência antiga na 5ª casa (2,44476 vs 2,44475) →
-o encanamento é neutro. Mas K=1 com **16 rodadas** custa **+0,27** (2,71348), e
-depois do outer ainda sobra **+0,05** (2,49638 vs 2,44476). Candidatos: warmup
-linear de 2 passos que é *run-relative* e reinicia a cada invocação (32 de 1952
-passos), estado do Adam, ou efeito de processo novo. **Job 140** (τ × nº de
-rodadas a passos fixos, + um arm sem momentos) testa se o custo é **por
-invocação**. Enquanto isso: todos os arms compartilham esse custo, então as
-comparações *entre arms* valem; a comparação com a régua de 1 rodada é a que
-precisa de qualificação.
+K=1 with **one round** matches the old reference to five digits, at 2.44476
+against 2.44475. So the plumbing is neutral. K=1 with **16 rounds** costs +0.27,
+at 2.71348. The outer recovers most of it, and +0.05 remains. A linear warmup of
+2 steps restarts at every invocation, and 32 of 1952 steps are warmup. The state
+of the optimizer is the other candidate.
 
-## Frequência de sync: satura (e não é lr errado)
+| K=1, 1952 steps, moments carried | rounds | bpb |
+|---|---|---|
+| tau=1952 | 1 | 2.44476 |
+| tau=488 | 4 | 2.54990 |
+| tau=244 | 8 | 2.62045 |
+| tau=122 | 16 | 2.71348 |
+| tau=61 | 32 | 2.77547 |
+| tau=122, moments reset | 16 | **2.55094** |
 
-| τ | syncs | lr_outer 0,4 | **0,7** | 1,0 |
+The cost grows with the **number of rounds** and not with tau. The reset recovers
+about two thirds of it. At K=1 there is no average at all, and the state agrees
+with the weights. The reset still wins by 0.16. So the mechanism is not stale
+state. The likely mechanism is the one that federated learning already knows:
+a restart of Adam at each round lifts the step size again.
+
+The comparison between arms stays valid, because every arm pays this cost. The
+comparison against the one-round reference needs the note above.
+
+## The frequency of a sync saturates
+
+| tau | syncs | lr 0.4 | **lr 0.7** | lr 1.0 |
 |---|---|---|---|---|
-| 488 | 4 | — | 2,55000 | (1,5 explode) |
-| 244 | 8 | em curso | — | — |
-| 122 | 16 | — | **2,33183** | — |
-| 61 | 32 | 2,38053 | **2,32519** | 2,38800 |
+| 488 | 4 | - | 2.55000 | 1.5 explodes |
+| 244 | 8 | 2.50783 | 2.34745 | 2.32873 |
+| 122 | 16 | - | **2.33183** | - |
+| 61 | 32 | 2.38053 | **2.32519** | 2.38800 |
 
-Em τ=61, 0,7 é **mínimo local claro** (os dois vizinhos piores) → o achatamento
-**não** é lr mal ajustado. Com o melhor lr, τ=61 empata com τ=122 (−0,007):
-**sincronizar o dobro não compra nada**, e o custo de comunicação (16 syncs ≈
-4 KB/token) não é a restrição.
+At tau=61 the value 0.7 is a clear local minimum, because both neighbors are
+worse. So the flat result is not a bad lr. With the best lr, tau=61 ties tau=122
+at -0.007. **A double sync rate buys nothing**, and the cost of the
+communication, about 4 KB for one token, is not the limit.
 
-## K: o ganho satura
+The table also corrects an earlier suspicion. I suspected that tau and lr_outer
+are not separable. They are: 0.7 is the best value at every tau in the test.
 
-| K (τ=122, 16 rodadas, 1952 passos/worker) | bpb | compute (passos de worker) | fração do ideal |
+## K saturates
+
+| K, tau=122, 16 rounds, 1952 steps for each worker | bpb | worker steps | part of the ideal |
 |---|---|---|---|
-| 4 | 2,33183 | 7.808 | 35% |
-| 8 | **2,32762** | 15.616 | 28% |
+| 4 | 2.33183 | 7808 | 35 percent |
+| 8 | **2.32762** | 15616 | 28 percent |
 
-K=8 empata com K=4 com **o dobro do compute**, e o delta é minúsculo em todos os
-pontos comparáveis. **Correção de interpretação:** o lote efetivo por
-*atualização* **cresce** com K (cada update corresponde a K·τ·T tokens) — o que
-satura é a qualidade por token quando se troca *atualizações* por lote. Ou seja:
-compor gasta atualizações, e este modelo precisa de muitas (a régua de
-7.808 updates vence a de 16 updates com os mesmos tokens).
+K=8 ties K=4 with **a double compute**, and the difference is small at every
+comparable point. **CORRECTED interpretation:** the effective batch for one
+*update* does **grow** with K, because one update covers K times tau times T
+tokens. The saturation is in the quality for one token, when the run trades
+updates for batch. Composition spends updates, and this model needs many. The
+reference of 7808 updates beats the reference of 16 updates at the same token
+count.
 
-## O caminho que sobra: o passo
+## The path that remains: the step
 
-Medido no log do worker (122 passos): **124.928 tokens em 68,5 s = 1.823
-tokens/s** com ~8 threads = **30 GFLOP/s ≈ 3,8 GFLOP/s por core**, porque B=1
-faz cada GEMM minúsculo (M=1024, N=K=d=96 → 0,019 GFLOP). Composição deu 1,35×;
-eficiência de passo tem **3–5×** na mesa (hyp_c3aed6, **job 143**).
+The worker log gives **124928 tokens in 68.5 s**, which is **1823 tokens per
+second** on 8 threads. That is **30 GFLOP/s**, or 3.8 GFLOP/s for one core.
+B=1 makes every GEMM small: M=1024, N=K=d=96, which is 0.019 GFLOP for one call.
+Composition gave 1.35 times. The step efficiency holds 3 to 5 times, and that is
+the larger number.
 
-Confundimento achado de quebra: cada worker usa ~8 threads de BLAS, mas o job é
-alocado com `-c 8` e o driver lança K=4 workers em paralelo → **oversubscrição**.
-A comparação por *tokens/worker* segue justa; a de wall-clock precisa de
-`OMP_NUM_THREADS` por worker (ou `-c 32`).
+The measurement of the step is closed now. These values are measured:
 
-## Aberto
-
-| item | onde |
+| component | result |
 |---|---|
-| custo por invocação (warmup/estado)? | job 140 |
-| os 3 arms decisivos num 2º sorteio de dados | job 144 |
-| τ=244 em lr 0,7 e 1,0 (o 138 foi cortado no limite de 4 h) | job 145 |
-| eficiência de passo (B ∈ {1,4,16,64}) | job 143 |
-| K=2 e K=16 (fechar a curva em K) | a agendar |
-| 2–3 sementes por arm (ruído estimado ±0,017) | a agendar |
+| batching, B from 1 to 16 | throughput is flat: 858, 863, and 849 tokens per second |
+| elementwise kernels | 13.2 ms, which is 1.1 percent of a step |
+| GEMMs | 483 GFLOP/s with sgemm |
+| attention | about 50 to 60 percent of a step |
 
-## Refs
+The attention is the bottleneck. The root cause is the arch: `head_dim=16` gives
+9.8 GFLOP/s, and `head_dim=128` gives 74.3 GFLOP/s at the same T and the same
+FLOPs. The reason is the score matrix of T by T for each head, with a dot product
+of width 16.
 
-- `docs/tier_probe.md` — a outra ponta (memória/energia).
-- `hep/` — `hyp_ea9457` (esta linha), `hyp_8f9016` (saturação em K),
-  `hyp_c3aed6` (eficiência de passo).
-- `scripts/fedavg_rounds.py` — driver; `docs/fortran_gpt.md` — a biblioteca.
+One confound appeared on the way. Each worker uses about 8 BLAS threads, and the
+job asks for 8 cores with 4 workers in parallel. That is oversubscription. The
+comparison by tokens for each worker stays valid. The comparison by wall-clock
+needs `OMP_NUM_THREADS` for each worker, or a larger allocation. A measurement
+with 16 threads is 2.3 times **slower** than one with 8.
+
+## Open items
+
+| item | where |
+|---|---|
+| the quality cost of head_dim, at fixed kv | job 154 |
+| K=2 and K=16 | to schedule |
+| 2 or 3 seeds for each arm | to schedule |
+
+## References
+
+* `docs/tier_probe.md` — the other end, memory and energy.
+* `hep/` — `hyp_ea9457` (this line), `hyp_8f9016` (the saturation in K), and
+  `hyp_c3aed6` (step efficiency).
+* `docs/fortran_gpt.md` — the library. `docs/writing.md` — the writing rules.
