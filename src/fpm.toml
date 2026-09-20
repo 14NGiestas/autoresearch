@@ -33,7 +33,7 @@ arch_d216_h6_kv2_l12_v8192_c1024 = { preprocess = { cpp = { macros = [
 [dependencies]
 openmp = "*"
 stdlib = "*"
-safetensors = { git = "https://github.com/14NGiestas/safetensors-fortran", tag = "v0.1.2" }
+safetensors = { git = "https://github.com/14NGiestas/safetensors-fortran", tag = "v0.1.3" }
 # Energia/CPU/IO medidos pelo PROPRIO processo (fortran_energy, pacote separado
 # em energy-fortran/). path por enquanto: vira `git = ...` quando for publicado.
 fortran_energy = { path = "../energy-fortran" }

@@ -26,6 +26,7 @@
 ! gives 0.20 and 0.146. That is step 1.
 module fortran_texture_mod
   use, intrinsic :: iso_fortran_env, only: int64, real64
+  use safetensors_json, only: json_escape
   implicit none
   private
 
@@ -255,14 +256,17 @@ contains
     if (present(key)) then
       if (len_trim(key) > 0) k = trim(key)
     end if
+    ! Escape the key and the stage with the function of the package. The module
+    ! safetensors_json writes the same bytes as serde_json, so a second
+    ! implementation here cannot drift from it.
     write (buf, '(A,A,A,I0,A,F7.4,A,F7.4,A,F7.4,A,F7.4,A,F7.4,A,F7.4,A,F7.4,A,I0,A,I0,A,A,A)') &
-        '{"', trim(k), '":{"n":', t%n, &
+        '{"', json_escape(trim(k)), '":{"n":', t%n, &
         ',"alpha":', t%alpha, ',"byte_alto":', t%byte_alto, &
         ',"palavra_plausivel":', t%palavra_plausivel, &
         ',"distinct1":', t%distinct1, ',"distinct2":', t%distinct2, &
         ',"distinct3":', t%distinct3, ',"rep_frac":', t%rep_frac, &
         ',"palavras":', t%palavras, ',"maior_laco":', t%maior_laco, &
-        ',"estagio":"', trim(t%estagio), '"}}'
+        ',"estagio":"', json_escape(trim(t%estagio)), '"}}'
     s = trim(buf)
   end function texture_json
 

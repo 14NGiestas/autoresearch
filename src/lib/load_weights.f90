@@ -31,6 +31,7 @@ module load_weights_mod
   use safetensors, only: st_writer, st_reader, st_ok
   use fortran_arch_mod, only: arch_schema, arch_canonical, arch_canonical_of, &
       arch_id, arch_id_of
+  use safetensors_json, only: json_escape, json_num
   implicit none
 
   ! Nome do arquivo unico e convencao de nomes dos tensores.
@@ -47,12 +48,14 @@ contains
 
   ! Formata um real para um numero JSON valido (o card e um STRING no metadata,
   ! mas quem le faz json.loads nele; "3.00000000E-04" e JSON valido).
+  ! A real value for the card. Delegate to the function of the package. That
+  ! function turns NaN and Inf into null, because JSON holds no such value. A
+  ! card with NaN is not readable, and the card must stay readable when a run
+  ! diverges.
   function json_real(x) result(s)
     real(wp), intent(in) :: x
     character(len=:), allocatable :: s
-    character(len=32) :: buf
-    write (buf, '(ES15.8E2)') x
-    s = trim(adjustl(buf))
+    s = json_num(real(x, real64))
   end function json_real
 
   ! Um real64 como numero JSON/texto de metadata. UM formatador para os dois
@@ -372,7 +375,7 @@ contains
         n_kv_head, head_dim, n_layer, vocab_size, ctx, bos)))
     call set_meta_i(w, 'n_tensors', 2 + 6*n_layer)
     card = '{"steps":'//i2c(step)//',"lr":'//json_real(lr)// &
-           ',"tokens":'//i8c(tokens)//',"rows_file":"'//trim(rowsfile)// &
+           ',"tokens":'//i8c(tokens)//',"rows_file":"'//json_escape(trim(rowsfile))// &
            '","metrics":{}'//energy_card_json(energy)//'}'
     call w%set_meta('card', card)
     call set_meta_energy(w, energy)
