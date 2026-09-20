@@ -154,6 +154,38 @@ def main():
     print("\n  [fechamento] inicio %.1f nos -> hoje %.1f nos  =  ganho x%.0f"
           % (n_start, n_now, n_start / n_now))
 
+    # ---- With the machines that we have -----------------------------------
+    # Our hardware holds two machines. The estimate needs their thread count,
+    # because the measured rate is per 8-core node. Halfbeast uses an HDD and a
+    # slower CPU, so this number is a ceiling and not a promise.
+    OURS = [("fermi", 16), ("halfbeast", 20)]
+    threads = sum(t for _, t in OURS)
+    node_equiv = threads / 8.0
+    print("\n=== COM OS NOSSOS 2 NOS (%s = %d threads, %.1fx um no' de 8 cores)"
+          % (", ".join("%s %d" % m for m in OURS), threads, node_equiv))
+    print("  %-34s %10s %12s" % ("cenario", "tempo", "e' suficiente?"))
+    # Hoje: a base e' o no' eficiente (4 workers x 1823 = 7292), e a composicao
+    # entra SO' como tokens-equivalentes. Contar a composicao tambem como
+    # velocidade seria contar duas vezes -- foi o bug desta secao.
+    for label, spd, teq in [("hoje, 20 tokens/param", MEASURED["arch_factor_d48"], tf),
+                            ("hoje, 100 tokens/param", MEASURED["arch_factor_d48"], tf)]:
+        tpp = 20.0 if "20" in label else 100.0
+        tps, tokens, years, _ = estimate(a.params, tpp, a.months, spd, teq)
+        secs = tokens / (tps * node_equiv)
+        days = secs / 86400.0
+        print("  %-34s %8.1f dias %12s" % (label, days, "sim" if days <= a.months * 30.44 else "NAO"))
+    # Largest model that fits in the target time. A model of P parameters needs
+    # 20*P tokens at 6*P FLOPs per token. The budget fixes P squared.
+    flops_budget = MEASURED["tok_s_node_4workers"] * MEASURED["arch_factor_d48"] * \
+        node_equiv * MEASURED["flops_per_token_d96"] * (a.months * 30.44 * 86400.0)
+    p_true = ((flops_budget / tf) / 120.0) ** 0.5   # 120 = 6 FLOP/token x 20 tokens/param
+    print("  %-34s %.0f M params" % ("maior modelo em %.0f meses (20 tok/param)" % a.months, p_true / 1e6))
+    print("  (o orcamento de FLOPs em %.0f meses e' %.1f EFLOP; 1B a 20 tok/param pede 120 EFLOP)"
+          % (a.months, flops_budget / 1e18))
+    print("  (o teto ignora o HDD da halfbeast e o clock menor dela)")
+    print("  (a composicao entra como tokens-equivalentes, medidos a 3M. Usar esse")
+    print("   fator a 245M e' extrapolacao, e fica marcado como tal.)")
+
     # SVG simples: a linha do tempo como degraus
     W, H = 900, 340
     s = ['<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d">' % (W, H),
