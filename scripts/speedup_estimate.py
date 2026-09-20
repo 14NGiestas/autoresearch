@@ -44,6 +44,12 @@ import numpy as np
 # ---------------------------------------------------------------- MEDIDO
 MEASURED = {
     "tok_s_1worker_omp8": 853.0,     # archhead/sweep: 1024 tokens / 1.20 s (1 worker)
+    # MEDIDO em 2026-09-20 no job 164 (build -O2) contra o job 163 (build -O0, o
+    # default do fpm que o projeto usou em TODOS os runs ate' hoje): 0,65 s/passo
+    # contra 1,65 s/passo no d96 com --attn blas. Fator 2,5x. A entrada acima
+    # (853) fica INTACTA de proposito: e' a velocidade com que os runs registrados
+    # de fato correram, e mudar-la tornaria os numeros historicos irreproduziveis.
+    "opt_factor": 2.5,
     "tok_s_1worker_omp16": 297.0,    # 1024/3.449: 16 threads e' 2.3x PIOR
     "tok_s_worker_4w": 1823.0,       # POR WORKER nos runs K=4 (o driver)
     "tok_s_node_4workers": 7292.0,   # AGREGADO de um no' de 8 cores: 4 x 1823
@@ -83,7 +89,7 @@ def comp_token_factor(gain, alpha):
 
 
 def estimate(params, tok_per_param, months, speed=1.0, token_equiv=1.0,
-             tok_s_base=None):
+             tok_s_base=None, opt=1.0):
     """Nos necessarios para treinar `params` em `months`.
 
     Modelo UNICO (para as duas tabelas fecharem por construcao):
@@ -96,6 +102,10 @@ def estimate(params, tok_per_param, months, speed=1.0, token_equiv=1.0,
     `tok_s_base`   = throughput AGREGADO de um no' de 8 cores no d96."""
     if tok_s_base is None:
         tok_s_base = MEASURED["tok_s_node_4workers"]
+    # O fator de otimizacao do build entra AQUI, na fonte, e nao em cada chamada:
+    # as chamadas passam base explicito, entao aplicar no ramo do default nao fazia
+    # nada (foi o bug de tres tentativas). Uma regra, um lugar.
+    tok_s_base = tok_s_base * opt
     flops_per_token = 6.0 * params
     tok_s_per_node = tok_s_base * MEASURED["flops_per_token_d96"] / flops_per_token * speed
     tokens = params * tok_per_param / token_equiv
@@ -115,6 +125,12 @@ def main():
     ap.add_argument("--budgets", default="1,2,7,30,182",
                     help="time budgets in days, comma separated")
     ap.add_argument("--tok-per-param", type=float, default=20.0)
+    ap.add_argument("--opt", type=float, default=1.0,
+                    help="fator de otimizacao do BUILD. 2,5 e' o medido em 2026-09-20 "
+                         "(job 164 -O2 contra job 163 -O0, mesmo codigo: 0,65 contra "
+                         "1,65 s/passo no d96). 1.0 = o mundo em que os runs registrados "
+                         "correram. Entra como multiplicador de throughput, entao o "
+                         "tempo cai por --opt e o tamanho alcancavel sobe por sqrt.")
     a = ap.parse_args()
 
     print("=== ENTRADAS MEDIDAS (com a fonte)")
@@ -147,7 +163,7 @@ def main():
         ("+ composicao (= hoje)", START, MEASURED["tok_s_node_4workers"] / START * MEASURED["arch_factor_d48"], tf),
     ]
     for label, base, spd, teq in rows_tab:
-        tps, tokens, years, nodes = estimate(a.params, a.tokens_per_param, a.months, spd, teq, base)
+        tps, tokens, years, nodes = estimate(a.params, a.tokens_per_param, a.months, spd, teq, base, a.opt)
         print("  %-27s %10.1f %9.1f a %10.1f" % (label, tps, years, nodes))
     print("    (100 tokens/param, hoje: %.1f nos p/ %.0f meses)"
           % (estimate(a.params, 100.0, a.months, rows_tab[-1][2], tf, START)[3], a.months))
