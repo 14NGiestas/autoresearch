@@ -35,9 +35,10 @@ import sys
 
 # ---------------------------------------------------------------- MEDIDO
 MEASURED = {
-    "tok_s_1worker_omp8": 853.0,     # archhead/sweep: 1024 tokens / 1.20 s
+    "tok_s_1worker_omp8": 853.0,     # archhead/sweep: 1024 tokens / 1.20 s (1 worker)
     "tok_s_1worker_omp16": 297.0,    # 1024/3.449: 16 threads e' 2.3x PIOR
-    "tok_s_4workers_omp2": 1823.0,   # log do worker do driver (agregado x4)
+    "tok_s_worker_4w": 1823.0,       # POR WORKER nos runs K=4 (o driver)
+    "tok_s_node_4workers": 7292.0,   # AGREGADO de um no' de 8 cores: 4 x 1823
     "flops_per_token_d96": 11.8e6,   # 6 x 2.75M params
     "gemm_microbench_gflops": 517.0, # bench_gemm, sgemm
     "arch_factor_d32": 1.80,         # archhead: 1.201 -> 0.6678 s/passo
@@ -50,11 +51,16 @@ MEASURED = {
 # Linha do tempo das descobertas: (quando, rotulo, multiplicador de eficiencia)
 # O multiplicador e' o ganho de FLOPs/s-equivalentes (ou de tokens-equivalentes,
 # no caso da composicao) em relacao ao inicio.
+# A linha do tempo comeca do modo de execucao MAL configurado (1 worker com
+# OMP=16, que e' 24.5x pior que 4 workers com OMP~2) e multiplica so' os ganhos
+# MEDIDOS. Nada de dupla contagem: cada fator e' medido contra o anterior.
 TIMELINE = [
-    ("inicio",              "1 worker, OMP=8, head_dim 16, sem receita", 1.0),
-    ("+ execucao paralela", "4 workers x OMP~2 (8.5x agregado) vs OMP=16 (2.3x pior)",
-     MEASURED["tok_s_4workers_omp2"] / MEASURED["tok_s_1worker_omp16"]),
-    ("+ B (lote)",          "medido plano: NAO ajuda", MEASURED["batch_factor"]),
+    # a primeira entrada e' o BASELINE (mult=1.0): o tok/s dele vai como
+    # tok_s_base=START para o estimate(), nao como multiplicador
+    ("inicio (mal config)", "1 worker, OMP=16, head_dim 16, sem receita", 1.0),
+    ("+ execucao paralela", "4 workers x OMP~2 (agregado 7292 vs 297)",
+     MEASURED["tok_s_node_4workers"] / MEASURED["tok_s_1worker_omp16"]),
+    ("+ B (lote)",          "medido PLANO: nao ajuda", MEASURED["batch_factor"]),
     ("+ head_dim 32",       "1.80x no passo, mesmos FLOPs/params", MEASURED["arch_factor_d32"]),
     ("+ head_dim 48",       "2.44x no passo", MEASURED["arch_factor_d48"]),
 ]
@@ -67,17 +73,26 @@ def comp_token_factor(gain, alpha):
     return l_ratio ** (-1.0 / alpha)
 
 
-def estimate(params, tok_per_param, months, factors):
-    """Tempo (anos) para treinar esse modelo num no', e nos necessarios."""
+def estimate(params, tok_per_param, months, speed=1.0, token_equiv=1.0,
+             tok_s_base=None):
+    """Nos necessarios para treinar `params` em `months`.
+
+    Modelo UNICO (para as duas tabelas fecharem por construcao):
+        tokens_necessarios = params * tokens/param / token_equiv
+        tok/s por no'      = base_d96 * (flops_d96/flops_modelo) * speed
+        nos                = tokens_necessarios / (tok/s * segundos_alvo)
+
+    `speed`        = ganhos de VELOCIDADE (execucao, head_dim)
+    `token_equiv`  = ganhos que reduzem TOKENS necessarios (composicao)
+    `tok_s_base`   = throughput AGREGADO de um no' de 8 cores no d96."""
+    if tok_s_base is None:
+        tok_s_base = MEASURED["tok_s_node_4workers"]
     flops_per_token = 6.0 * params
-    tok_s_per_node = MEASURED["tok_s_4workers_omp2"] * MEASURED["flops_per_token_d96"] \
-        / flops_per_token * factors
-    tokens = params * tok_per_param
+    tok_s_per_node = tok_s_base * MEASURED["flops_per_token_d96"] / flops_per_token * speed
+    tokens = params * tok_per_param / token_equiv
     seconds = tokens / tok_s_per_node
-    years = seconds / (365.25 * 24 * 3600)
-    months_1node = years * 12.0
-    nodes_needed = months_1node / months
-    return tok_s_per_node, tokens, years, nodes_needed
+    return tok_s_per_node, tokens, seconds / (365.25 * 24 * 3600), \
+        seconds / (months * 30.44 * 24 * 3600)
 
 
 def main():
@@ -91,13 +106,14 @@ def main():
     print("=== ENTRADAS MEDIDAS (com a fonte)")
     print("  tok/s, 1 worker OMP=8        %8.0f   (sweep: 1024 tokens / 1.20 s)" % MEASURED["tok_s_1worker_omp8"])
     print("  tok/s, 1 worker OMP=16       %8.0f   (2.3x PIOR: 3.449 s/passo)" % MEASURED["tok_s_1worker_omp16"])
-    print("  tok/s, 4 workers OMP~2       %8.0f   por worker (agregado 7292)" % MEASURED["tok_s_4workers_omp2"])
+    print("  tok/s, por worker (K=4)      %8.0f   (log do driver)" % MEASURED["tok_s_worker_4w"])
+    print("  tok/s, NO' de 8 cores        %8.0f   AGREGADO (4 workers x 1823)" % MEASURED["tok_s_node_4workers"])
     print("  FLOPs/token no d96           %8.1f M (6 x 2.75M params)" % (MEASURED["flops_per_token_d96"] / 1e6))
     print("  GEMM puro (microbench)       %8.0f GFLOP/s (teto de eficiencia)" % MEASURED["gemm_microbench_gflops"])
     print("  fator head_dim 32 / 48        %8.2f / %.2f x" % (MEASURED["arch_factor_d32"], MEASURED["arch_factor_d48"]))
     print("  fator de lote (B)            %8.2f x (medido plano)" % MEASURED["batch_factor"])
 
-    flops_node = MEASURED["tok_s_4workers_omp2"] * MEASURED["flops_per_token_d96"]
+    flops_node = MEASURED["tok_s_node_4workers"] * MEASURED["flops_per_token_d96"]
     print("\n  => FLOPs/s agregados por no' (8 cores): %.0f GFLOP/s = %.0f%% do microbench de GEMM"
           % (flops_node / 1e9, 100 * flops_node / (MEASURED["gemm_microbench_gflops"] * 1e9)))
 
@@ -108,29 +124,34 @@ def main():
     print("\n=== ESTIMATIVA (params=%.0e, %.0f tokens/param, alvo %.0f meses)"
           % (a.params, a.tokens_per_param, a.months))
     print("  %-22s %10s %12s %12s" % ("cenario", "tok/s/no'", "tempo 1 no'", "nos p/ alvo"))
-    for label, mult in [("atual (head_dim 48)", MEASURED["arch_factor_d48"]),
-                        ("composicao incluida", MEASURED["arch_factor_d48"] * tf),
-                        ("head_dim 32", MEASURED["arch_factor_d32"]),
-                        ("sem os ganhos de hoje", 1.0)]:
-        tps, tokens, years, nodes = estimate(a.params, a.tokens_per_param, a.months, mult)
-        print("  %-22s %10.1f %10.2f a %12.1f" % (label, tps, years, nodes))
-    for tp in (20.0, 100.0):
-        tps, tokens, years, nodes = estimate(a.params, tp, a.months,
-                                             MEASURED["arch_factor_d48"] * tf)
-        print("    (%3.0f tokens/param: %6.1fB tokens -> %.2f anos num no', %.1f nos p/ %.0f meses)"
-              % (tp, tokens / 1e9, years, nodes, a.months))
+    START = MEASURED["tok_s_1worker_omp16"]
+    rows_tab = [
+        ("inicio (1 worker, OMP=16)", START, 1.0, 1.0),
+        ("+ execucao eficiente", START, MEASURED["tok_s_node_4workers"] / START, 1.0),
+        ("+ head_dim 32", START, MEASURED["tok_s_node_4workers"] / START * MEASURED["arch_factor_d32"], 1.0),
+        ("+ head_dim 48", START, MEASURED["tok_s_node_4workers"] / START * MEASURED["arch_factor_d48"], 1.0),
+        ("+ composicao (= hoje)", START, MEASURED["tok_s_node_4workers"] / START * MEASURED["arch_factor_d48"], tf),
+    ]
+    for label, base, spd, teq in rows_tab:
+        tps, tokens, years, nodes = estimate(a.params, a.tokens_per_param, a.months, spd, teq, base)
+        print("  %-27s %10.1f %9.1f a %10.1f" % (label, tps, years, nodes))
+    print("    (100 tokens/param, hoje: %.1f nos p/ %.0f meses)"
+          % (estimate(a.params, 100.0, a.months, rows_tab[-1][2], tf, START)[3], a.months))
+    n_start = estimate(a.params, a.tokens_per_param, a.months, 1.0, 1.0, START)[3]
+    n_now = estimate(a.params, a.tokens_per_param, a.months, rows_tab[-1][2], tf, START)[3]
 
     print("\n=== COMO A ESTIMATIVA MUDOU (multiplicador acumulado de eficiencia)")
     acc = 1.0
+    print("  %-20s %8s %10s %10s %12s" % ("descoberta", "fator", "acum", "anos/1no'", "nos p/ alvo"))
     for when, what, mult in TIMELINE:
         acc *= mult
-        tps, tokens, years, nodes = estimate(a.params, a.tokens_per_param, a.months, acc)
-        print("  %-20s x%-6.2f acum x%-6.2f  ->  %6.2f anos num no'  |  %5.1f nos p/ %.0f meses"
-              % (when, mult, acc, years, nodes, a.months))
-    acc_final = acc * tf
-    tps, tokens, years, nodes = estimate(a.params, a.tokens_per_param, a.months, acc_final)
-    print("  %-20s x%-6.2f acum x%-6.2f  ->  %6.2f anos num no'  |  %5.1f nos p/ %.0f meses"
-          % ("+ composicao", tf, acc_final, years, nodes, a.months))
+        tps, tokens, years, nodes = estimate(a.params, a.tokens_per_param, a.months, acc, 1.0, START)
+        print("  %-20s x%-7.2f x%-9.2f %10.1f %12.1f" % (when, mult, acc, years, nodes))
+    _, _, years, nodes = estimate(a.params, a.tokens_per_param, a.months, acc, tf, START)
+    print("  %-20s x%-7.2f x%-9.2f %10.1f %12.1f   (tokens-equivalentes)"
+          % ("+ composicao (= hoje)", tf, acc * tf, years, nodes))
+    print("\n  [fechamento] inicio %.1f nos -> hoje %.1f nos  =  ganho x%.0f"
+          % (n_start, n_now, n_start / n_now))
 
     # SVG simples: a linha do tempo como degraus
     W, H = 900, 340
