@@ -253,24 +253,41 @@ def main():
     ax[0, 0].set_title("A) a faixa admissivel e' ESTREITA: o piso e' identificado")
     ax[0, 0].grid(alpha=0.3); ax[0, 0].legend(fontsize=7)
 
-    # B) a inclinacao deles contra a nossa, no mesmo piso
+    # B) TRES coisas diferentes, que nao podem ser confundidas:
+    #    (1) a nossa medida
+    #    (2) a LEI deles avaliada no nosso N e D -- extrapolacao 1,5 a 3 ordens
+    #        ABAIXO da faixa onde ela foi ajustada, portanto nao e' medida
+    #    (3) a inclinacao deles forcada nos NOSSOS dados com o piso DELES --
+    #        contrafactual, e os nossos dados rejeitam esse piso (erro 6x)
     d = np.logspace(np.log10(Dc.min()), np.log10(Dc.max()), 60)
     x = Dc**-0.2849
     b_lit = float(np.sum(x*(Lc - E_LIT))/np.sum(x*x))
     x2 = Dc**-beta_free
     b_our = float(np.sum(x2*(Lc - Linf))/np.sum(x2*x2))
-    ax[0, 1].plot(Dc, Lc, "o", ms=4, color="black", label="scal_curve (medida)")
-    ax[0, 1].plot(d, E_LIT + b_lit*d**-0.2849, "-", color="crimson",
-                  label="beta deles 0,2849 (erro 0,053)")
+    ax[0, 1].plot(Dc, Lc, "o", ms=4, color="black", label="(1) scal_curve, medido")
     ax[0, 1].plot(d, Linf + b_our*d**-beta_free, "--", color="seagreen",
-                  label=f"nosso beta {beta_free:.3f} (erro {r_free:.3f})")
-    ax[0, 1].axhline(E_LIT, color="crimson", ls=":", lw=1,
-                     label=f"piso deles {E_LIT:.2f} bpb")
-    ax[0, 1].axhline(Linf, color="seagreen", ls=":", lw=1,
-                     label=f"nosso piso {Linf:.2f} bpb")
+                  label=f"(1) nosso ajuste beta={beta_free:.3f}")
+    # (2) a lei deles no nosso N, em bpb com os NOSSOS bytes/token
+    law = lambda Dv: (CHIN_E + CHIN_A/2.75e6**CHIN_ALPHA + CHIN_B/Dv**CHIN_BETA)/(LN2*BYTES_PER_TOKEN)
+    dd = np.logspace(np.log10(Dc.min()), 10, 80)
+    ax[0, 1].plot(dd, law(dd), "-", color="darkorange", lw=1.4,
+                  label="(2) LEI deles em N=2,75M (extrapolada)")
+    # (3) contrafactual: inclinacao deles, piso deles, amplitude nossa
+    ax[0, 1].plot(d, E_LIT + b_lit*d**-0.2849, "-", color="crimson",
+                  label="(3) inclinacao deles + piso deles (contrafactual)")
+    # o cruzamento
+    Ds = np.logspace(np.log10(Dc.min()), 9, 4000)
+    A = Linf + b_our*Ds**-beta_free
+    C = E_LIT + b_lit*Ds**-0.2849
+    k = int(np.argmin(np.abs(A - C)))
+    ax[0, 1].axvline(Ds[k], color="gray", ls=":", lw=1)
+    ax[0, 1].annotate(f"cruzam em ~{Ds[k]/1e6:.0f}M\n(abaixo: nos melhor\nacima: contrafactual melhor)",
+                      (Ds[k], 2.35), fontsize=6, ha="center", color="gray")
+    ax[0, 1].axhline(E_LIT, color="crimson", ls=":", lw=1, label=f"piso deles {E_LIT:.2f}")
+    ax[0, 1].axhline(Linf, color="seagreen", ls=":", lw=1, label=f"nosso piso {Linf:.2f}")
     ax[0, 1].set_xscale("log")
     ax[0, 1].set_xlabel("tokens"); ax[0, 1].set_ylabel("bpb")
-    ax[0, 1].set_title("B) piso e inclinacao: os dois diferem")
+    ax[0, 1].set_title("B) medido, lei extrapolada, e contrafactual")
     ax[0, 1].grid(alpha=0.3); ax[0, 1].legend(fontsize=6)
 
     # C) o erro em funcao do piso: onde a faixa fecha
