@@ -26,6 +26,15 @@ cpp.suffixes = ["f90"]
 arch_d96_h6_kv2_l12_v8192_c1024 = { preprocess = { cpp = { macros = [
   "ARCH_D_MODEL=96", "ARCH_N_HEAD=6", "ARCH_N_KV=2", "ARCH_N_LAYER=12",
   "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }
+arch_d96_h6_kv1_l12_v8192_c1024 = { preprocess = { cpp = { macros = [
+  "ARCH_D_MODEL=96", "ARCH_N_HEAD=6", "ARCH_N_KV=1", "ARCH_N_LAYER=12",
+  "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }
+arch_d96_h3_kv1_l12_v8192_c1024 = { preprocess = { cpp = { macros = [
+  "ARCH_D_MODEL=96", "ARCH_N_HEAD=3", "ARCH_N_KV=1", "ARCH_N_LAYER=12",
+  "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }
+arch_d96_h2_kv1_l12_v8192_c1024 = { preprocess = { cpp = { macros = [
+  "ARCH_D_MODEL=96", "ARCH_N_HEAD=2", "ARCH_N_KV=1", "ARCH_N_LAYER=12",
+  "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }
 arch_d216_h6_kv2_l12_v8192_c1024 = { preprocess = { cpp = { macros = [
   "ARCH_D_MODEL=216", "ARCH_N_HEAD=6", "ARCH_N_KV=2", "ARCH_N_LAYER=12",
   "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }

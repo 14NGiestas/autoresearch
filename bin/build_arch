@@ -53,11 +53,21 @@ echo "[build_arch] build: $BD"
 nix develop "${NIX_SHELL:-.#cpu-only}" --command bash -c \
   "cd src && fortran-fpm build $REL $MODE --build-dir '$BD'" 2>&1 | tail -1 | sed 's/^/  /'
 
-BIN=$(ls "$BD"/*/app/arch_id 2>/dev/null | tail -1 || true)
-if [ -n "$BIN" ]; then
-  echo "[build_arch] identidade do binario construido:"
-  "$BIN" | sed 's/^/  /'
+# Publica os caminhos dos apps. O fpm guarda UMA configuracao por --build-dir
+# (passamos sempre um dir dedicado), entao "exatamente um diretorio de app" e' um
+# invariante VERIFICAVEL, nao adivinhacao. O que quebrou o job 155 foi o
+# `tail -1` sobre um glob que casava varios: ele escolheu o binario kv2 para um
+# checkpoint kv1. Aqui, mais de um match e' ERRO, nao escolha.
+APPS=$(ls -d "$BD"/*/app 2>/dev/null | grep . || true)
+N=$(printf '%s' "$APPS" | grep -c . || true)
+if [ "$N" = "1" ]; then
+  for APP in arch_id train_run eval_bpb merge_ckpt; do
+    [ -x "$APPS/$APP" ] && echo "[build_arch] app $APP $APPS/$APP"
+  done
+elif [ "$N" = "0" ]; then
+  echo "[build_arch] nenhum dir app em $BD (build falhou?)"
 else
-  echo "[build_arch] (app arch_id nao construido; rode 'fpm build' sem --target)"
+  echo "[build_arch] AMBIGUO: $N dirs app em $BD; um --build-dir tem UMA config"
+  printf '%s\n' "$APPS" | sed 's/^/    /'
+  exit 3
 fi
-echo "[build_arch] binarios em: $BD/*/app/"

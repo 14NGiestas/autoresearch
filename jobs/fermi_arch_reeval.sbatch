@@ -33,12 +33,16 @@ for RUN in /tmp/aq/h*_s*/run/step_*; do
   [ -d "$RUN" ] || continue
   N_TOT=$((N_TOT + 1))
   TAG=$(echo "$RUN" | sed 's|/tmp/aq/||; s|/run/.*||')
-  # o kv vem do PROPRIO checkpoint, nao de um glob
+  # O kv e o n_head vem do PROPRIO checkpoint, e o caminho do binario vem do
+  # bin/build_arch (que publica "[build_arch] app eval_bpb <path>"). Nada de
+  # glob com tail -1: o job 155 avaliou dois bracos kv=1 com binario kv=2.
+  # Bonus: build_arch CONSTROI o binario que falta, que era o buraco raiz.
   KVF=$(sed -n 's/.*n_kv *= *\([0-9]*\).*/\1/p' "$RUN/arch.txt" 2>/dev/null | head -1)
   HF=$(sed -n 's/.*n_head *= *\([0-9]*\).*/\1/p' "$RUN/arch.txt" 2>/dev/null | head -1)
-  [ -z "$KVF" ] && { printf "%-16s %-10s %-10s\n" "$TAG" "?" "sem arch.txt"; continue; }
-  EVB=$(ls /tmp/aq/build_h${HF}_kv${KVF}/*/app/eval_bpb 2>/dev/null | tail -1)
-  [ -z "$EVB" ] && { printf "%-16s %-10s %-10s\n" "$TAG" "$((96/HF))" "sem binario eval"; continue; }
+  [ -z "$KVF" ] && { printf "%-16s %-10s %s\n" "$TAG" "?" "sem arch.txt"; continue; }
+  BD=/tmp/aq/build_h${HF}_kv${KVF}
+  EVB=$(bin/build_arch 96 "$HF" "$KVF" 12 8192 1024 "$BD" 2>&1 | sed -n 's/^\[build_arch\] app eval_bpb //p')
+  [ -z "$EVB" ] && { printf "%-16s %-10s %s\n" "$TAG" "$((96/HF))" "sem binario eval"; continue; }
   OUT=$($PY scripts/eval_bpb_dir.py --eval "$EVB" --ckpt "$RUN" 2>&1 | tail -1)
   # um bpb sempre comeca com digito; qualquer outra coisa e' erro, e o erro
   # aparece inteiro em vez de virar "falhou".
