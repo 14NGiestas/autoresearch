@@ -25,8 +25,12 @@ echo "attnmat job=${SLURM_JOB_ID} $(date '+%F %H:%M:%S') load=$(cut -d' ' -f1 /p
 if [ ! -x "$(ls $BUILD/*/app/bench_attn 2>/dev/null | tail -1 || true)" ]; then
   nix develop .#cpu-only --command bash -c "cd src && fortran-fpm build --features arch_d96_h6_kv2_l12_v8192_c1024 --build-dir $BUILD" 2>&1 | tail -1
 fi
-BA=$(ls $BUILD/*/app/bench_attn | tail -1)
-BG=$(ls $BUILD/*/app/bench_gemm | tail -1)
+BA=$(ls $BUILD/*/app/bench_attn 2>/dev/null | tail -1)
+BG=$(ls $BUILD/*/app/bench_gemm 2>/dev/null | tail -1)
+if [ -z "$BA" ] || [ -z "$BG" ]; then
+  echo "FALHOU: build nao produziu bench_attn/bench_gemm em $BUILD (disco? erro de compilacao?)"
+  exit 1
+fi
 echo "  bench_attn=$BA"
 echo "  OMP_NUM_THREADS=$OMP_NUM_THREADS"
 
