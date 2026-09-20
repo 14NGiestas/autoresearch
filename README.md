@@ -102,7 +102,13 @@ uv run scripts/error_budget.py
 uv run scripts/lit_vs_ours.py --out /tmp/lit_vs_ours.png
 ```
 
-No virtualenv to activate and no `--with` flags. Versions are pinned to the ones
+No virtualenv to activate and no `--with` flags.
+
+**Never let `uv` resolve this repo's `pyproject.toml`.** It declares
+`torch==2.9.1` (a leftover from the upstream fork), so a `uv run` that resolves
+the project downloads torch and gigabytes of CUDA, and it removes and recreates
+`.venv` in the root. `uv run <script.py>` is safe because the PEP 723 header
+wins. For anything else, pass `--no-project`. Versions are pinned to the ones
 already recorded in the runs. `grep -L "/// script" scripts/*.py` lists any file
 that still lacks a header.
 
