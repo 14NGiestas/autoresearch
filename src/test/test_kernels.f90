@@ -69,6 +69,7 @@ program test_kernels
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
   call test_attn_bwd_sgemm(2.0_sp)
+  call test_attn_bwd_sgemm(relu_attn=.true.)
   call test_corpus_golden()
   call test_arch()
   call test_valid_mask()
@@ -1089,7 +1090,7 @@ contains
   ! causal_attn, which is exactly what the analytic kernel must reproduce.
   ! Two cases: no GQA sharing (H == K_H, the tight-stride path) and a GQA
   ! group (H = 2*K_H) where dK/dV must accumulate across query heads.
-  subroutine test_attn_bwd_sgemm(cap)
+  subroutine test_attn_bwd_sgemm(cap, relu_attn)
     integer, parameter :: B = 1, T = 4, DD = 4
     integer, parameter :: H = 4, KH = 2          ! rep = 2: GQA accumulation
     real(sp) :: q(B*T*H*DD), k(B*T*KH*DD), v(B*T*KH*DD), dy(B*T*H*DD)
@@ -1101,10 +1102,14 @@ contains
     real(sp) :: dq2(B*T*H*DD), dk2(B*T*KH*DD), dv2(B*T*KH*DD)
     integer :: i
     real(sp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
     real(sp) :: cp
+    logical :: relu
 
     cp = 0.0_sp
     if (present(cap)) cp = cap
+    relu = .false.
+    if (present(relu_attn)) relu = relu_attn
     hs = HH
     tol = 2.0e-3_sp
     if (cp > 0.0_sp) tol = 4.0e-3_sp   ! piso de roundoff do FD em sp
@@ -1117,15 +1122,15 @@ contains
 
     dq = 0.0_sp; dk = 0.0_sp; dv = 0.0_sp
     call attn_bwd_sgemm(dy, q, k, v, dq, dk, dv, B, T, H, KH, DD, &
-        Swork, dP, dS, dkv, cp)
+        Swork, dP, dS, dkv, cp, relu)
 
     worst = 0.0_sp
     do i = 1, B*T*H*DD
       qp = q; qp(i) = qp(i) + hs
-      call causal_attn(qp, k, v, y, B, T, H, KH, DD, cp)
+      call causal_attn(qp, k, v, y, B, T, H, KH, DD, cp, relu)
       lp = sum(dy*y)
       qp = q; qp(i) = qp(i) - hs
-      call causal_attn(qp, k, v, y, B, T, H, KH, DD, cp)
+      call causal_attn(qp, k, v, y, B, T, H, KH, DD, cp, relu)
       lm = sum(dy*y)
       err = abs((lp - lm)/(2.0_sp*hs) - dq(i))
       if (err > worst) worst = err
@@ -1136,10 +1141,10 @@ contains
     worst = 0.0_sp
     do i = 1, B*T*KH*DD
       kp = k; kp(i) = kp(i) + hs
-      call causal_attn(q, kp, v, y, B, T, H, KH, DD, cp)
+      call causal_attn(q, kp, v, y, B, T, H, KH, DD, cp, relu)
       lp = sum(dy*y)
       kp = k; kp(i) = kp(i) - hs
-      call causal_attn(q, kp, v, y, B, T, H, KH, DD, cp)
+      call causal_attn(q, kp, v, y, B, T, H, KH, DD, cp, relu)
       lm = sum(dy*y)
       err = abs((lp - lm)/(2.0_sp*hs) - dk(i))
       if (err > worst) worst = err
@@ -1150,10 +1155,10 @@ contains
     worst = 0.0_sp
     do i = 1, B*T*KH*DD
       vp = v; vp(i) = vp(i) + hs
-      call causal_attn(q, k, vp, y, B, T, H, KH, DD, cp)
+      call causal_attn(q, k, vp, y, B, T, H, KH, DD, cp, relu)
       lp = sum(dy*y)
       vp = v; vp(i) = vp(i) - hs
-      call causal_attn(q, k, vp, y, B, T, H, KH, DD, cp)
+      call causal_attn(q, k, vp, y, B, T, H, KH, DD, cp, relu)
       lm = sum(dy*y)
       err = abs((lp - lm)/(2.0_sp*hs) - dv(i))
       if (err > worst) worst = err
@@ -1165,7 +1170,7 @@ contains
     ! independent implementations of the same gradient, so they must agree,
     ! cap included. This one has no finite-difference truncation error.
     dq2 = 0.0_sp; dk2 = 0.0_sp; dv2 = 0.0_sp
-    call attn_bwd(dy, q, k, v, dq2, dk2, dv2, B, T, H, KH, DD, cp)
+    call attn_bwd(dy, q, k, v, dq2, dk2, dv2, B, T, H, KH, DD, cp, relu)
     err = max(maxval(abs(dq - dq2)), max(maxval(abs(dk - dk2)), maxval(abs(dv - dv2))))
     print '(A,E10.3)', "  |bwd blas - bwd naive| = ", err
     call check(err < 1.0e-5_sp, "os dois backwards concordam (cap incluso)")

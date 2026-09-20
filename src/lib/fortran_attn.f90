@@ -167,16 +167,20 @@ contains
   ! Per (batch, head): S is a (T,T) scratch the caller owns and we reuse.
   ! Summation order differs from causal_attn, so expect ~1e-6 drift, not bit
   ! equality (asserted in test_attn_sgemm).
-  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap)
+  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap, relu_attn)
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in)  :: q(:), k(:), v(:)
     real(wp), intent(out) :: y(:)
     real(wp), intent(inout) :: S(:)          ! (T,T) scratch
     real(wp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
     integer :: aa, bb, kb, rep, ii, jj
     integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
     real(wp) :: scale, mx, sm, inv, cp
+    logical :: relu_a
 
+    relu_a = .false.
+    if (present(relu_attn)) relu_a = relu_attn
     cp = 0.0_wp
     if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(D, wp))
@@ -199,14 +203,25 @@ contains
           do jj = 1, ii
             ! cap before the mask: a masked position must not reach the softmax
             S((ii-1)*T + jj) = fast_softcap(S((ii-1)*T + jj), cp)
-            if (S((ii-1)*T + jj) > mx) mx = S((ii-1)*T + jj)
+            ! ReLU-attention: relu(S)/T. Normaliza por T (a sequencia inteira),
+            ! igual ao par naive e ao backward. O FD foi quem expos a
+            ! inconsistencia quando forward e backward discordavam.
+            if (relu_a) then
+              if (S((ii-1)*T + jj) < 0.0_wp) S((ii-1)*T + jj) = 0.0_wp
+            else
+              if (S((ii-1)*T + jj) > mx) mx = S((ii-1)*T + jj)
+            end if
           end do
+          if (relu_a) then
+            inv = 1.0_wp / real(T, wp)
+          else
           sm = 0.0_wp
           do jj = 1, ii
             S((ii-1)*T + jj) = exp(S((ii-1)*T + jj) - mx)
             sm = sm + S((ii-1)*T + jj)
           end do
           inv = 1.0_wp / sm
+          end if
           do jj = 1, ii
             S((ii-1)*T + jj) = S((ii-1)*T + jj) * inv
           end do
@@ -613,17 +628,21 @@ contains
   ! out explicitly. Scratch (caller-owned, reused across layers):
   !   SP, dPbuf, dSbuf : (TT*TT), dkv: (2*TT*K_HH*DD) for the dK/dV accumulators.
   subroutine attn_bwd_sgemm(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, &
-       SP, dPbuf, dSbuf, dkv, cap)
+       SP, dPbuf, dSbuf, dkv, cap, relu_attn)
     integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
     real(wp), intent(in)  :: dy(:), q(:), k(:), v(:)
     real(wp), intent(out) :: dq(:)
     real(wp), intent(inout) :: dk(:), dv(:)
     real(wp), intent(inout) :: SP(:), dPbuf(:), dSbuf(:), dkv(:)
     real(wp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
     integer :: ia, kb, ib, ii, jj
     integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
     real(wp) :: scale, mx, sm, inv, rowsum, cp
+    logical :: relu_a
 
+    relu_a = .false.
+    if (present(relu_attn)) relu_a = relu_attn
     cp = 0.0_wp
     if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(DD, wp))
@@ -660,15 +679,27 @@ contains
             do jj = 1, ii
               ! cap before the mask: a masked position must not reach the softmax
               SP((ii-1)*TT + jj) = fast_softcap(SP((ii-1)*TT + jj), cp)
+              ! dSbuf guarda a score ASSINADA: o bloco de dS le' dali a mascara do
+              ! relu (e, no caminho softmax, a derivada do cap). Guardar depois do
+              ! clamp perderia o sinal e o dv sairia errado -- foi o que o
+              ! cross-check pegou.
               dSbuf((ii-1)*TT + jj) = SP((ii-1)*TT + jj)   ! kept for the derivative
-              if (SP((ii-1)*TT + jj) > mx) mx = SP((ii-1)*TT + jj)
+              if (relu_a) then
+                if (SP((ii-1)*TT + jj) < 0.0_wp) SP((ii-1)*TT + jj) = 0.0_wp
+              else
+                if (SP((ii-1)*TT + jj) > mx) mx = SP((ii-1)*TT + jj)
+              end if
             end do
+            if (relu_a) then
+              inv = 1.0_wp/real(TT, wp)
+            else
             sm = 0.0_wp
             do jj = 1, ii
               SP((ii-1)*TT + jj) = exp(SP((ii-1)*TT + jj) - mx)
               sm = sm + SP((ii-1)*TT + jj)
             end do
             inv = 1.0_wp/sm
+            end if
             do jj = 1, ii
               SP((ii-1)*TT + jj) = SP((ii-1)*TT + jj)*inv
             end do
@@ -683,17 +714,28 @@ contains
           call sgemm('N', 'T', m, n, kk, 1.0_wp, &
                dy((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), lda, SP, ldb, &
                1.0_wp, dkv(TT*K_HH*DD + (kb-1)*DD + 1:), ldc)
-          ! ---- softmax backward -> dS (masked, with the cap derivative) ----
+          ! ---- dS (mascarado). Softmax: P*(dP - rowsum). ReLU: (S>0)*dP/T, sem
+          ! rowsum e sem P -- a derivada do relu e' so' a mascara.
           do ii = 1, TT
-            rowsum = 0.0_wp
-            do jj = 1, ii
-              rowsum = rowsum + SP((ii-1)*TT + jj)*dPbuf((ii-1)*TT + jj)
-            end do
-            do jj = 1, ii
-              dSbuf((ii-1)*TT + jj) = SP((ii-1)*TT + jj) &
-                  * (dPbuf((ii-1)*TT + jj) - rowsum) &
-                  * fast_softcap_deriv(dSbuf((ii-1)*TT + jj), cp)
-            end do
+            if (relu_a) then
+              do jj = 1, ii
+                if (dSbuf((ii-1)*TT + jj) > 0.0_wp) then
+                  dSbuf((ii-1)*TT + jj) = dPbuf((ii-1)*TT + jj)/real(TT, wp)
+                else
+                  dSbuf((ii-1)*TT + jj) = 0.0_wp
+                end if
+              end do
+            else
+              rowsum = 0.0_wp
+              do jj = 1, ii
+                rowsum = rowsum + SP((ii-1)*TT + jj)*dPbuf((ii-1)*TT + jj)
+              end do
+              do jj = 1, ii
+                dSbuf((ii-1)*TT + jj) = SP((ii-1)*TT + jj) &
+                    * (dPbuf((ii-1)*TT + jj) - rowsum) &
+                    * fast_softcap_deriv(dSbuf((ii-1)*TT + jj), cp)
+              end do
+            end if
             do jj = ii + 1, TT
               dSbuf((ii-1)*TT + jj) = 0.0_wp
             end do
