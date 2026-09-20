@@ -54,7 +54,7 @@ run_arm () {   # heads kv seed
   if [ -n "$RPL" ]; then
     printf 'O que e a computacao?\n' | timeout 300 "$RPL" --tables ~/.cache/autoresearch/tok_tables \
         --weights "$CK" --n 200 --temp 0.8 --seed 11 --attn blas 2>/dev/null > "$OUT/sample.txt"
-    local TS=$(ls /tmp/aq_build/*/app/texture_scan 2>/dev/null | tail -1)
+    local TS=$(ls /tmp/aq/build_*/app/texture_scan 2>/dev/null | tail -1)   # o scan vive no build do proprio braco
     [ -n "$TS" ] && TX=$("$TS" "$OUT/sample.txt" --json 2>/dev/null | $PY -c "import json,sys; print(json.load(sys.stdin)['texture']['palavra_plausivel'])" 2>/dev/null || echo n/d)
   fi
   printf "%-16s %-9s %-11s %-9s %-11s %-8s\n" "$TAG" "$HD" "$KVB" "$SP" "${B:-n/d}" "$TX"
