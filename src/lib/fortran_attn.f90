@@ -167,13 +167,22 @@ contains
   ! Per (batch, head): S is a (T,T) scratch the caller owns and we reuse.
   ! Summation order differs from causal_attn, so expect ~1e-6 drift, not bit
   ! equality (asserted in test_attn_sgemm).
-  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap, relu_attn)
+  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap, relu_attn, pos_frac)
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in)  :: q(:), k(:), v(:)
     real(wp), intent(out) :: y(:)
     real(wp), intent(inout) :: S(:)          ! (T,T) scratch
     real(wp), intent(in), optional :: cap
     logical, intent(in), optional :: relu_attn
+    ! INSTRUMENTO: fracao de scores POSITIVOS (antes do cap e do relu) por
+    ! cabeca. Serve para ver cabeca morta -- o relu pode produzir zero exacto,
+    ! e uma fracao de 1% e' morte funcional sem ser zero. Distribuicao, nao
+    ! binario: e' o que separa 'o relu mudou por causa do exp' de 'o relu
+    ! matou cabecas'.
+    ! intent(inout): o chamador zera UMA vez e acumula entre chamadas. Com
+    ! intent(out) o kernel zeraria a cada linha e so' a ultima sobreviveria.
+    real(wp), intent(inout), optional :: pos_frac(:)
+    integer :: npos
     integer :: aa, bb, kb, rep, ii, jj
     integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
     real(wp) :: scale, mx, sm, inv, cp
@@ -198,9 +207,14 @@ contains
              q((aa-1)*T*H*D + (bb-1)*D + 1:), ldb, &
              0.0_wp, S, ldc)
         ! ---- causal mask + softmax, row by row ----
+        npos = 0
         do ii = 1, T
           mx = -huge(1.0_wp)
           do jj = 1, ii
+            ! conta ANTES do cap e do relu: e' o sinal do score do modelo
+            if (present(pos_frac)) then
+              if (S((ii-1)*T + jj) > 0.0_wp) npos = npos + 1
+            end if
             ! cap before the mask: a masked position must not reach the softmax
             S((ii-1)*T + jj) = fast_softcap(S((ii-1)*T + jj), cp)
             ! ReLU-attention: relu(S)/T. Normaliza por T (a sequencia inteira),
@@ -229,6 +243,10 @@ contains
             S((ii-1)*T + jj) = 0.0_wp
           end do
         end do
+        if (present(pos_frac)) then
+          ! denominador: os pares causais por cabeca = T*(T+1)/2
+          pos_frac(bb) = pos_frac(bb) + real(npos, wp)/real(T*(T + 1)/2, wp)
+        end if
         ! ---- Y = P V ----
         m = int(D, c_int64_t); n = int(T, c_int64_t); kk = int(T, c_int64_t)
         lda = int(K_H*D, c_int64_t); ldb = int(T, c_int64_t)

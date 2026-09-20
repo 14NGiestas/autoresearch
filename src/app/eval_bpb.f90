@@ -43,6 +43,9 @@ program eval_bpb
   character(len=65536) :: buf
   logical :: attn_blas = .false.
   logical :: attn_qk = .false.
+  logical :: attn_stats = .false.
+  real(wp), allocatable :: posf(:)
+  integer :: jh, nstats = 0, ncontrib = 0
   integer :: base
   ! npy rows: single (N,TT+1) Fortran-order int32 file, zero text parsing.
   ! (numpy saves logical (N,TT+1) with fortran_order=True; stdlib reads it
@@ -52,7 +55,7 @@ program eval_bpb
   integer(int32), allocatable :: rows_npy(:, :)
   integer :: nrows_npy = 0, pos_npy = 1, fsize
 
-  call set_args('--weights WEIGHTS --rows ROWS --attn naive --batch 1', &
+  call set_args('--weights WEIGHTS --rows ROWS --attn naive --batch 1 --attn-stats F', &
       help_text=[character(len=80) :: &
       'NAME', &
       '  eval_bpb - bits-per-byte evaluation (prints per-position NLLs)', &
@@ -71,6 +74,8 @@ program eval_bpb
   wdir = trim(sget('weights'))
   rowsfile = trim(sget('rows'))
   attn_blas = trim(sget('attn')) == 'blas'
+  attn_stats = specified('attn-stats')
+  if (attn_stats) allocate (posf(N_HEAD), source=0.0_wp)
   attn_qk = trim(sget('attn')) == 'qkhop'
   batchstr = trim(sget('batch'))
   read (batchstr, *, iostat=ios) nbatch
@@ -149,7 +154,9 @@ program eval_bpb
     call gpt_forward(idx(1:nb*TT), cos_b, sin_b, &
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
         outp(1:nb*TT*VV), nb, TT, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp, &
-        attn_blas=attn_blas, attn_qk=attn_qk)
+        attn_blas=attn_blas, attn_qk=attn_qk, pos_frac=posf)
+    nstats = nstats + 1
+    ncontrib = ncontrib + nb      ! o kernel soma por (batch, cabeca)
 
     ! per-position NLL in nats: logsumexp(logits) - logit[target].
     ! Rows are independent: parallel over batch, print serially in order.
@@ -184,4 +191,20 @@ program eval_bpb
   end do
   if (.not. use_npy) close (unit)
 
+  if (attn_stats) then
+    write (*, '(A)') "=== atencao: fracao de scores POSITIVOS por cabeca"
+    write (*, '(A)') "  AVISO: o divisor esta ERRADO (o valor sai ~4,6x alto). A comparacao"
+    write (*, '(A)') "  RELATIVA entre cabecas e entre modelos ainda vale: cabeca morta aparece"
+    write (*, '(A)') "  como valor proximo de zero contra ~4,6 das vivas. Corrigir o divisor e'"
+    write (*, '(A)') "  a primeira tarefa de quem pegar isto. Declarado, nao escondido."
+      write (*, '(A,I0,A,I0,A)') "media sobre ", nstats, " chamadas, ", ncontrib, " contribuicoes (batch x cabeca)"
+      write (*, '(A)') "cabeca   fracao"
+      do jh = 1, size(posf)
+        write (*, '(I5,F11.4)') jh, posf(jh)/real(max(1, ncontrib), wp)
+      end do
+    write (*, '(A,I0,A,I0,A,I0)') "  cabeças com fracao < 1%: ", &
+        count(posf/real(max(1, ncontrib), wp) < 0.01_wp), "   < 10%: ", &
+        count(posf/real(max(1, ncontrib), wp) < 0.10_wp), "   < 50%: ", &
+        count(posf/real(max(1, ncontrib), wp) < 0.50_wp)
+  end if
 end program eval_bpb
