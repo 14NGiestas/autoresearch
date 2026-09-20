@@ -92,6 +92,20 @@ nix develop --command bash -c 'export OMP_NUM_THREADS=8;
 Run the proofs: `cd src && fortran-fpm test` (kernels),
 `/tmp/parity.py` (wiring vs train.py), `scripts/eval_driver.py --rows 4` (val bpb).
 
+## Running a script
+
+Every script in `scripts/` declares its own dependencies with a PEP 723 header.
+`uv` reads the header and builds the environment on the spot:
+
+```sh
+uv run scripts/error_budget.py
+uv run scripts/lit_vs_ours.py --out /tmp/lit_vs_ours.png
+```
+
+No virtualenv to activate and no `--with` flags. Versions are pinned to the ones
+already recorded in the runs. `grep -L "/// script" scripts/*.py` lists any file
+that still lacks a header.
+
 ## Design choices (how this fork differs)
 
 - **Fortran is the implementation, not a port.** New math goes in

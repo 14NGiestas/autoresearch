@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+#   "pyarrow==25.0.1",
+# ]
+# ///
 """nli_probe.py — "jeV de graca": o LM atual sabe ordenar entailment?
 
 Ideia do openjev (NLI cross-encoder como primitiva universal) trazida para a

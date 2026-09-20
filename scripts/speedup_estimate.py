@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """speedup_estimate.py — quanto falta para 1B em 6 meses, e como isso mudou.
 
 A pergunta: "uma estimativa do speedup desde que começamos, para 1B em 6 meses ou

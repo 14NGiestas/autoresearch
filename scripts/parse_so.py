@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """parse_so.py — StackExchange Posts.xml -> pares Q+A (resposta aceita).
 stdlib + multiprocessing (8 procs): iterparse p/ questoes, dict de respostas
 aceitas, strip HTML via regex, conta tokens BPE por amostragem.

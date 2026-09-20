@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """scaling_plot.py — a curva de escala medida, com o piso identificado.
 
 Painel A: bpb medido (holdout) vs tokens vistos, com os dois ajustes (todos os

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """filter_wiki.py — a wiki não precisa inteira (medido).
 
 50,6% dos artigos têm <2 KB e carregam 4,4% dos tokens; 39% têm <1 KB e carregam

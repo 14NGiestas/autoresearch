@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """
 Phase 1 curriculum: Python code from CodeAlpaca-20k (instruction → code).
 Public, no auth, 20k rows, ~7.7 MB.

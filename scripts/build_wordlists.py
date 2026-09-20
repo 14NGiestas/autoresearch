@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """build_wordlists.py — listas de formas plenas p/ H2 (stdlib + enc).
 Complementa hunspell (bases+afixos nao expandidos) e Figueiredo (lemas):
   wiki_forms.txt  <- formas modernas flexionadas (wiki filtrada)

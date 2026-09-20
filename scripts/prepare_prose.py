@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """prepare_prose.py — clean the harvested Portuguese prose into a train/val set.
 
 Sources (see scripts/fetch_mec_machado.py for the MEC side, and the PG catalog

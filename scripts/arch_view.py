@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """arch_view.py — retrato da arquitetura: diagrama, tensores, derivados, identidade.
 
 Responde "como nossa arquitetura está AGORA?" com UMA saida, de um lugar so':

@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """arch.py — a identidade da arquitetura, em Python, IGUAL ao Fortran.
 
 Por que existe: a arch morava em tres lugares (os `parameter` de fortran_arch.f90,

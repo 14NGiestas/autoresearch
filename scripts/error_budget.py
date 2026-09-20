@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Orcamento de erro: quanto nos sabemos, e o que domina.
 
 Uma medida sem barra de erro nao e' um fato, e' uma opiniao com digitos. Este

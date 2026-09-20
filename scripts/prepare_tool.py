@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """
 Phase 2 curriculum: tool-use trajectories (curl, fetch, python -c, grep, read).
 Mixed with the Python code corpus for diversity.

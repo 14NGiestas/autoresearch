@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """export_token_bytes.py — one-time byte-length table for exact val-bpb
 in Fortran (train_run app). Mirrors prepare.py: special tokens -> 0,
 else utf-8 length of decode([i]). One int per line, 8192 lines.

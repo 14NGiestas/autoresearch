@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Previsao antes da medida: quanto um efeito deveria mover o numero.
 
 A regra, e ela tem uma razao pratica: antes de enfileirar um job, escreva quanto

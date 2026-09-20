@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """bpe_parity_prose.py — P1: o espaço BPE serve para prosa em português, e quanto?
 
 Duas perguntas, uma execução:

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """build_mix.py — monta o corpus MISTO (prosa + ptwiki) no espaço BPE.
 
 Por que misturar: as fases sequenciais criaram especialistas que apagam uns aos

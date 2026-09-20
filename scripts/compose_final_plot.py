@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """compose_final_plot.py — o que medimos, em tres paineis sem ruido.
 
 A. A LEI DO IMPOSTO vs LR (dados do job 104/101, medias UNIFORMES EXATAS): o

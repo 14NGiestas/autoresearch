@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """rebasin.py — alinha B em A por permutacao de heads (Git Re-Basin guloso).
 Por camada: 72 perms validas (intra-grupo GQA x swap) com composicao do
 stream; escolhe a de menor drift local. Uso:

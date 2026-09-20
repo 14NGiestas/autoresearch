@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """rows_to_npy.py — converte rows texto (ids separados por espaco) para npy 2D.
 
 Formato alvo: int32 little-endian, shape (N, TT+1), row-major C, um arquivo

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """ckio.py — I/O de checkpoint AGNOSTICO DE FORMATO (fase 2 do backend st).
 
 Um checkpoint tem duas representacoes possiveis:

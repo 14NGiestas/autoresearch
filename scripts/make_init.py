@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """make_init.py — fresh random init for a Fortran GPT checkpoint dir.
 
 Replicates the measured convention of /tmp/mix/init3m (the 3M sweep init):

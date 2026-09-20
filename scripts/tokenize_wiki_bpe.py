@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """tokenize_wiki_bpe.py — wiki filtrada (jsonl title/text) -> ids BPE (stdlib).
 
 Mesmo espaco do P1/P2 (load_enc, BOS 8188), mesmo portao de round-trip.

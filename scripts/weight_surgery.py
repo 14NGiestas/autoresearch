@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """weight_surgery.py — transformacoes em espaco de pesos + teste de funcao.
 Controles: perm paired (prediz IDENTICO), resto (prediz destruicao graduada).
 Aceita checkpoint st (model.safetensors) ou npy legado, e escreve cada variante no

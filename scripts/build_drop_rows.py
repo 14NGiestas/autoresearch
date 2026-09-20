@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """build_drop_rows.py — rows f_drop: mesmo TEXTO do f0, segmentação BPE-dropout.
 
 Truque de velocidade: encode_ordinary (C) dá a segmentação base; o dropout

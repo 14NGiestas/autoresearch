@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "pyarrow==25.0.1",
+# ]
+# ///
 """tokenize_budget.py — jsonl -> linhas BPE ate orcamento de tokens (stdlib).
 Fontes: --fmt wiki (title/text), --fmt so (q/qb/a), --fmt instr (text).
 Uso: .venv-numpy/bin/python3 scripts/tokenize_budget.py --fmt so \

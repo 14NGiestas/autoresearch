@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """decode_rows.py — traduz rows (ids) para texto legível."""
 import argparse, pickle, pathlib, sys
 

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """test_ckio.py — prova que as FERRAMENTAS leem checkpoint safetensors (st-only).
 
 Complementa a suite Fortran (que cobre a escrita/leitura safetensors do lado do

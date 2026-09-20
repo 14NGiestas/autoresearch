@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """tokenize_prose_bpe.py — P2 passo 1: a mesma prosa, no espaço BPE.
 
 Re-tokeniza os rows byte-level de /tmp/prose/prose_all.txt para o espaço BPE (o

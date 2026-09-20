@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """bpb_from_eval.py — aggregate eval_bpb output into held-out bits-per-byte.
 
 eval_bpb prints one line per row with T per-position NLLs (natural log, as

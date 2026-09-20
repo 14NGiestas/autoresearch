@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """sweep_status.py — observabilidade da varredura de dose-resposta (e vizinhança).
 
 Por que existe: os logs brutos existem, mas ninguém agrega. Hoje três falhas

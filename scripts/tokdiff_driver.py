@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """tokdiff_driver.py — differential test: Fortran tokenizer vs tiktoken.
 
 Samples N docs from the val shard, writes each byte-exact to a file, runs

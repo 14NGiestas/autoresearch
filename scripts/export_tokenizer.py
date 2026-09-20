@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """export_tokenizer.py — one-time export of tokenizer tables for the
 pure-Fortran tokenizer (src/lib/tokenizer_*.f90). Runtime needs no Python.
 

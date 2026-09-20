@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """morph_segment.py — segmentacao morfologica conservadora p/ PT (stdlib).
 Parte palavra em [prefixo] + radical + [sufixo] com listas fechadas; so corta
 se o radical restante tem >=3 letras. Erra p/ NAO cortar (conservador):

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """rescale_ckpt.py — multiplica todos os pesos de um checkpoint por uma constante.
 
 Teste de mecanismo do imposto de composicao: se a media de K shards encolhe a

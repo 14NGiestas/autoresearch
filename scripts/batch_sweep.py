@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """batch_sweep.py — quanto a eficiencia de LOTE compra (a tokens fixos).
 
 Pergunta (hyp_c3aed6): o treino roda com B=1 e cada GEMM e' minusculo

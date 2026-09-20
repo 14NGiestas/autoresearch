@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """planner.py — calculadora de estimativas para ESCOLHER o modelo.
 
 Três perguntas, com as constantes medidas nesta máquina:

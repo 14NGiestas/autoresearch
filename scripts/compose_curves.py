@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """compose_curves.py — as tres curvas que decidem se compor vale a pena.
 
 Painel A: lei de escala propria (L vs tokens distintos), com os bracos fundidos

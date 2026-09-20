@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "matplotlib==3.10.8",
+#   "numpy==2.5.2",
+# ]
+# ///
 """Literatura contra os nossos dados: onde a comparacao e' legitima e onde nao e'.
 
 TRES AVISOS, e sem eles o grafico mente:

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """compose_metrics.py — mecanismo do imposto de composicao, sem treinar nada.
 
 Mede, nos checkpoints ja salvos:

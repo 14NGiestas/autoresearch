@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """neologism_rate.py — H2: taxa de palavras fora de wordlist PT (stdlib only).
 
 OOV aqui mistura neologismos + arcaismos: o desenho honesto e COMPARATIVO

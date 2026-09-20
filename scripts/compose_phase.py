@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """compose_phase.py — o espaço de fases da composição, num só SVG.
 
 Lê TODOS os history.json que sobreviveram (scratch de /tmp) e desenha:

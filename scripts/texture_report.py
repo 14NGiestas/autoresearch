@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """texture_report.py — painel de TEXTURA de um texto gerado (sem dicionario).
 
 Por que existe: os scripts neologism_rate.py/archaism_rate.py precisam de

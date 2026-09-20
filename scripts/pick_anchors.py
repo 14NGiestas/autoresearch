@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """pick_anchors.py — IRT-inspired anchor rows for fast proxy eval (stdlib only).
 
 Idea (tinyBenchmarks spirit, adapted): per-position NLLs are continuous, so

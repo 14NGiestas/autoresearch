@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """build_morph_rows.py — rows f_morph: mesmo TEXTO do f0, BPE com fronteiras.
 Cada palavra -> morphemes (morph_segment) -> BPE guloso por morpheme (p=0);
 merges NUNCA cruzam fronteira. Separadores via ordinary. Decode-integridade

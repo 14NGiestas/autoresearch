@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """st_read.py -- le um checkpoint safetensors escrito pelo trainer e confere.
 
 Independente do Fortran: usa o oraculo pure-Python da propria biblioteca

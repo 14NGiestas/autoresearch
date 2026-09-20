@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """compose_grid.py — taxonomia da composicao linear (merge de shards).
 
 PERGUNTA. Treinar K shards em paralelo e MEDIR a media dos pesos custa quanto,

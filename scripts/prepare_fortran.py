@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """
 Phase 4: Fortran from fortran-lang/webpage (learn/ tutorials).
 

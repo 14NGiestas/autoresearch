@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """fetch_mec_machado.py — harvest Machado de Assis's complete works as text.
 
 Source: machado.mec.gov.br (MEC/FNE digital collection of the complete works,

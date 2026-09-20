@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """fedavg_rounds.py — local SGD com tau FINITO: o experimento que decide a meta.
 
 O grid de composicao mediu tau=infinito (uma unica media no fim): imposto de

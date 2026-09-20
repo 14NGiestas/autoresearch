@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """archaism_rate.py — indice de arcaismo ortografico em PT (stdlib only).
 
 Padroes pre-reforma/oitocentistas de alta precisao: ph/th/y, geminadas

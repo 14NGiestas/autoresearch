@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """export_weights.py — torch-free PyTorch checkpoint exporter (stdlib only).
 
 Reads a torch.save() .pt (zip + pickle) WITHOUT torch installed, using a

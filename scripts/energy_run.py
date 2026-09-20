@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """energy_run.py — contabilidade de energia dos treinos (J por token).
 
 Por que existe: bpb mede qualidade, J/token mede PRECO. Sem o segundo eixo,

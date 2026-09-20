@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """bpe_dropout.py — BPE-dropout puro (Provilkov et al.): merge com prob. p é
 pulado, gerando segmentações alternativas da mesma palavra. p=0 deve ser
 bit-idêntico ao tiktoken ordinário (portão). stdlib + tiktoken ranks.

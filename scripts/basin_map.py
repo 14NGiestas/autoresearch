@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """basin_map.py — geografia do espaco de pesos (stdlib + numpy).
 1. histograma ASCII por variante (forma da distribuicao).
 2. PCA via Gram (N pontos x 3M dims) -> scatter SVG com rotulos.

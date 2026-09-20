@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """eval_bpb_dir.py — the bpb of a checkpoint, with the canonical rule.
 
 The app eval_bpb prints the negative log likelihood of each token and no summary.

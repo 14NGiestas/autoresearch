@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """eval_driver.py — torch-free bits-per-byte eval of the Fortran engine.
 
 Replicates prepare.py:evaluate_bpb's data side (pinned val shard,

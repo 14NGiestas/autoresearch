@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """merge_checkpoints.py — model soup: média elemento a elemento de dois checkpoints.
 
 Caso favorável: mesmo pai, mesmos hiperparâmetros, dados disjuntos (nossos ramos

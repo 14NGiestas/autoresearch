@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+#   "pyarrow==25.0.1",
+# ]
+# ///
 """mc_bench.py — multiple-choice por perplexidade (sem instruction-following).
 parquet ARC-PT -> rows (Q+alternativa, trunc/pad T) + sidecar (lens, gabarito).
 Régua: argmin NLL (prefixo comum cancela). Uso:

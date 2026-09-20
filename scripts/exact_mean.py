@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "numpy==2.5.2",
+# ]
+# ///
 """exact_mean.py — media UNIFORME exata de N checkpoints (e verificacao).
 
 Existe por causa de um bug real: scripts/merge_checkpoints.py calcula

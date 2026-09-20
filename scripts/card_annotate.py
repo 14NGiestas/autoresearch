@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """card_annotate.py — junta a CARACTERIZACAO ao arquivo de pesos.
 
 O trainer escreve no __metadata__ o que ele sabe (arch, steps, lr, tokens,
