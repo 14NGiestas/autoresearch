@@ -25,7 +25,7 @@ program train_run
   use fortran_energy_mod
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights, &
-      save_gpt_weights_st, verify_ckpt_dir, require_run_cap, require_run_attn_fn
+      save_gpt_weights_st, verify_ckpt_dir, require_run_flags
   use fortran_chat_mod, only: write_template_txt
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
@@ -73,6 +73,9 @@ program train_run
   real(sp) :: logit_cap
   character(len=16) :: attn_fn
   logical :: relu_attn
+  integer, parameter :: N_FLAGS = 2
+  character(len=32) :: f_keys(N_FLAGS), f_kinds(N_FLAGS), f_vals(N_FLAGS)
+  character(len=32) :: capstr
   character(len=8) :: ckfmt
   integer(int64) :: ck_tokens
   ! Energia auto-medida (fortran_energy): o card de cada save leva o delta exato
@@ -229,8 +232,11 @@ program train_run
   call require_arch(trim(wdir))
   ! The cap belongs to the run. A resume with a different one would change the
   ! model in silence, so this stops the run when the recorded value differs.
-  call require_run_cap(trim(wdir), logit_cap)
-  call require_run_attn_fn(trim(wdir), trim(attn_fn))
+  ! A tabela das flags que mudam o grafo. Uma flag nova entra AQUI, e so' aqui.
+  write (capstr, '(ES12.5)') logit_cap
+  f_keys(1) = 'run.logit_cap'; f_kinds(1) = 'r'; f_vals(1) = trim(capstr)
+  f_keys(2) = 'run.attn_fn';   f_kinds(2) = 's'; f_vals(2) = trim(attn_fn)
+  call require_run_flags(trim(wdir), N_FLAGS, f_keys, f_kinds, f_vals)
 
   call init_state(M, S)
   ! Optimizer carry across phases (Cognivolve): old checkpoints without
@@ -338,7 +344,7 @@ program train_run
         call save_gpt_weights_st(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
             TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
             M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard, &
-            logit_cap=logit_cap, attn_fn=trim(attn_fn))
+            n_flags=N_FLAGS, f_keys=f_keys, f_vals=f_vals)
       end if
       call save_adam_state(trim(ckdir), S)
       if (use_muon) call save_muon_state(trim(ckdir), S)
@@ -401,7 +407,7 @@ program train_run
           call save_gpt_weights_st(trim(outdir) // "/best", N_LAYER, D, N_HEAD, &
               N_KV, HD, VV, TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
               M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard, &
-              logit_cap=logit_cap, attn_fn=trim(attn_fn))
+              n_flags=N_FLAGS, f_keys=f_keys, f_vals=f_vals)
         end if
         call save_adam_state(trim(outdir) // "/best", S)
         if (use_muon) call save_muon_state(trim(outdir) // "/best", S)

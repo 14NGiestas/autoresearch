@@ -332,7 +332,7 @@ contains
   ! treina preenche depois; um numero inventado aqui viraria verdade no experimento.
   subroutine save_gpt_weights_st(wdir, n_layer, d_model, n_head, n_kv_head, &
       head_dim, vocab_size, ctx, bos, step, lr, tokens, rowsfile, &
-      wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2, energy, logit_cap, attn_fn)
+      wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2, energy, n_flags, f_keys, f_vals)
     character(*), intent(in) :: wdir, rowsfile
     integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim
     integer, intent(in) :: vocab_size, ctx, bos, step
@@ -342,14 +342,12 @@ contains
     real(wp), intent(in) :: c_q(:), c_k(:), c_v(:)
     real(wp), intent(in) :: c_pr(:), c_fc(:), c_pr2(:)
     type(energy_interval_t), intent(in), optional :: energy
-    real(wp), intent(in), optional :: logit_cap
-    character(*), intent(in), optional :: attn_fn
+    integer, intent(in), optional :: n_flags
+    character(*), intent(in), optional :: f_keys(:), f_vals(:)
     type(st_writer) :: w
     character(len=:), allocatable :: msg, card, tname
     character(len=16) :: lstr
     integer :: ll, qsz, ksz, psz, fcsz, p2sz, stat
-    real(wp) :: cap
-    character(len=16) :: fn
 
     qsz = n_head*head_dim*d_model
     ksz = n_kv_head*head_dim*d_model
@@ -387,23 +385,16 @@ contains
     call w%set_meta('arch.id', arch_id_of(arch_canonical_of(d_model, n_head, &
         n_kv_head, head_dim, n_layer, vocab_size, ctx, bos)))
     call set_meta_i(w, 'n_tensors', 2 + 6*n_layer)
-    ! The logit soft cap is a property of the RUN, not of the arch: it does not
-    ! change a shape. It is recorded so that a resume with a different cap fails
-    ! loud instead of changing the model in silence.
-    cap = 0.0_wp
-    if (present(logit_cap)) cap = logit_cap
-    call set_meta_r(w, 'run.logit_cap', cap)
-    ! A funcao de atencao e' um argumento de RUNTIME que muda a SEMANTICA sem
-    ! mudar forma nenhuma: exatamente o caso do cap. Entao ela vai para o card
-    ! e e' conferida na retomada, senao carregar um checkpoint de softmax num
-    ! binario que roda relu muda o modelo em silencio.
-    fn = 'softmax'
-    if (present(attn_fn)) fn = attn_fn
-    call w%set_meta('run.attn_fn', trim(fn))
+    ! As flags de RUN vao para o metadata por um caminho so'. A regra e' uma:
+    ! toda flag que muda o grafo e' gravada, e incompatibilidade na carga e'
+    ! fatal. Uma flag nova e' uma linha na tabela do chamador, nao um par de
+    ! rotinas novas.
+    if (present(n_flags)) then
+      if (n_flags > 0) call save_run_flags(w, n_flags, f_keys, f_vals)
+    end if
     card = '{"steps":'//i2c(step)//',"lr":'//json_real(lr)// &
            ',"tokens":'//i8c(tokens)//',"rows_file":"'//json_escape(trim(rowsfile))// &
-           ',"logit_cap":'//json_real(cap)//',"attn_fn":"'//json_escape(trim(fn))//'"'// &
-           ',"metrics":{}'//energy_card_json(energy)//'}'
+           '","metrics":{}'//energy_card_json(energy)//'}'
     call w%set_meta('card', card)
     call set_meta_energy(w, energy)
 
@@ -708,44 +699,79 @@ contains
     call exit(1)
   end subroutine require_run_cap
 
-  ! A funcao de atencao do checkpoint tem que casar com a da flag. Para um
-  ! checkpoint ANTIGO nao ha' chave, e ai' a resposta e' conhecida: softmax,
-  ! porque relu nao existia. Entao o default e' provado, nao suposto.
-  subroutine require_run_attn_fn(wdir, want)
-    character(*), intent(in) :: wdir, want
+  ! ---------------------------------------------------------------------------
+  ! Flags de RUN que mudam o GRAFO de computacao. A regra e' uma so':
+  !
+  !   toda flag que altera o grafo e' gravada no card, e toda incompatibilidade
+  !   na carga e' FATAL.
+  !
+  ! Por que generico: o logit cap e o attn_fn foram implementados um a um, cada um
+  ! com a sua rotina de gravacao e a sua de checagem. O usuario notou que duas
+  ! vezes no mesmo dia a mesma classe de erro reapareceu -- flag de runtime sem
+  ! registo -- e que um card ESPECIFICO nao fecha a classe, so' o caso. Aqui a
+  ! classe fecha: adicionar a proxima flag e' uma linha na tabela do chamador.
+  !
+  ! kind: 'r' compara como real (com tolerancia), 's' como texto.
+  ! O escritor nao precisa do kind: ele grava texto. O kind e' regra de
+  ! COMPARACAO, coisa do leitor. As duas assinaturas sao assimetricas de
+  ! proposito.
+  subroutine save_run_flags(w, n, keys, vals)
+    type(st_writer), intent(inout) :: w
+    integer, intent(in) :: n
+    character(*), intent(in) :: keys(:), vals(:)
+    integer :: i
+    do i = 1, n
+      call w%set_meta(trim(keys(i)), trim(vals(i)))
+    end do
+  end subroutine save_run_flags
+
+  ! Le as flags gravadas e compara com as esperadas. Sem arquivo nenhum (init
+  ! aleatorio) da' nota e segue: nada foi treinado, nao ha' o que comparar. Sem a
+  ! chave, mas COM arquivo, a resposta e' conhecida (o checkpoint e' de antes da
+  ! flag existir), entao o default do chamador vale e a divergencia e' fatal.
+  subroutine require_run_flags(wdir, n, keys, kinds, vals)
+    character(*), intent(in) :: wdir
+    integer, intent(in) :: n
+    character(*), intent(in) :: keys(:), kinds(:), vals(:)
     type(st_reader) :: r
     character(len=:), allocatable :: msg, val
-    character(len=16) :: got
-    integer :: stat
+    integer :: i, stat, ios
     logical :: found
+    real(wp) :: got_r
 
-    got = 'softmax'
-    found = .false.
     call r%open(trim(wdir)//'/'//ST_CKPT, stat, msg)
     if (stat /= st_ok) then
-      ! Sem arquivo nenhum: e' um init aleatorio, nada foi treinado, entao nao ha'
-      ! o que comparar. A nota aparece e o run segue. Sem isso, o PRIMEIRO braco
-      ! de relu nunca poderia comecar -- o mesmo ovo-e-galinha do cap.
       print '(2A)', '# no checkpoint metadata in ', trim(wdir)
-      print '(2A)', '# starting fresh with ', trim(want)
+      print '(2A)', '# starting fresh with the flags asked for'
       return
     end if
-    call r%meta('run.attn_fn', val, found)
+    do i = 1, n
+      call r%meta(trim(keys(i)), val, found)
+      if (.not. found) cycle          ! flag anterior ao checkpoint: default vale
+      if (trim(kinds(i)) == 's') then
+        if (trim(val) == trim(vals(i))) cycle
+      else
+        read (val, *, iostat=ios) got_r
+        if (ios /= 0) then
+          call die('flag '//trim(keys(i))//' em '//trim(wdir)//' nao e numero: "'//trim(val)//'"')
+        end if
+        if (abs(got_r - read_r(vals(i))) <= 1.0e-6_wp*max(1.0_wp, abs(read_r(vals(i))))) cycle
+      end if
+      print '(A)', 'FATAL: run flag mismatch'
+      print '(2A)', '  key:              ', trim(keys(i))
+      print '(2A)', '  checkpoint has:   ', trim(val)
+      print '(2A)', '  this run asks for:', trim(vals(i))
+      print '(2A)', '  checkpoint: ', trim(wdir)
+      print '(A)', '  a graph-changing flag changes the model, so the run stops here.'
+      call exit(1)
+    end do
     call r%close()
-    if (found) got = trim(val)
-    if (trim(got) == trim(want)) return
-    if (.not. found .and. trim(want) == 'relu') then
-      print '(2A)', '# no run.attn_fn recorded in ', trim(wdir)
-      print '(A)',  '# it predates relu, so it was trained with softmax; this run asks for relu'
-    end if
-    print '(A)', 'FATAL: attention function mismatch'
-    print '(2A)', '  the checkpoint was trained with: ', trim(got)
-    print '(2A)', '  this run asks for:               ', trim(want)
-    print '(2A)', '  checkpoint: ', trim(wdir)
-    print '(A)', '  a different attention changes the model, so the run stops here.'
-    print '(A)', '  pass --attn-fn with the recorded value to continue.'
-    call exit(1)
-  end subroutine require_run_attn_fn
+  end subroutine require_run_flags
+
+  real(wp) function read_r(s)
+    character(*), intent(in) :: s
+    read (s, *) read_r
+  end function read_r
 
   subroutine read_meta_i(r, key, val)
     type(st_reader), intent(in) :: r
