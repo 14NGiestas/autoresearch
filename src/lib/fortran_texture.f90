@@ -1,28 +1,29 @@
-! lib/fortran_texture.f90 — CARACTERIZACAO de texto em Fortran puro (sobre BYTES).
+! lib/fortran_texture.f90 — measure the texture of a text.
 !
-! Para que serve: o checkpoint se descreve sozinho. Em vez de descobrir depois
-! que um modelo gera salada, a textura entra no __metadata__ junto com arch,
-! energia e linhagem -- e "de antemao" a gente sabe o que tem em maos.
+! The module measures bytes. It does not decode the text first. A decode step
+! replaces a bad byte with a replacement character, and that changes the result.
+! One character is one byte. The function iachar gives the byte value.
 !
-! Definicao: tudo e' medido sobre BYTES (nao sobre texto decodificado). O modelo
-! emite bytes; decodificar antes de medir introduz juizo de valor (bytes invalidos
-! viram U+FFFD e o painel muda). Aqui: caractere = byte via iachar().
+! The scale has three steps:
+!   1. Byte floor. The text is a salad of bytes.
+!   2. Usable generator. The words and the punctuation are correct, and no loop
+!      repeats.
+!   3. Reasoner. The model corrects itself. The R1 "aha" moment is on this
+!      step. A 3M model with ctx 1024 cannot reach step 3. Step 2 is the target.
 !
-! A ESCADA (calibrada nos controles deste repo, ver test_texture.f90):
-!   1) chao de bytes -- salada; palavra_plausivel baixo, byte_alto alto
-!   2) gerador usavel -- palavras/pontuacao coerentes, sem laco
-!   3) raciocinador  -- revisao/auto-correcao (o "aha" do R1); fora do alcance
-!                       com 3M params / ctx 1024, mas o degrau 2 e' o alvo
+! The module reports these values:
+!   alpha              The part of the bytes that are ASCII letters.
+!   byte_alto          The part of the bytes with a value of 128 or more.
+!   palavra_plausivel  The part of the letter runs with 2 to 12 bytes.
+!   distinct_1/2/3     The type/token ratio of byte n-grams. A salad gives a
+!                      high value. A language repeats common pairs.
+!   maior_laco         The longest run of equal 8-byte n-grams.
+!   rep_frac           The part of the 8-byte n-grams that appear two times.
+! The last two values count only n-grams with a non-blank byte.
 !
-! Metricas:
-!   alpha              fracao de bytes que sao letra ASCII (A-Z, a-z)
-!   byte_alto          fracao de bytes >= 128 (fallback de byte dominando)
-!   palavra_plausivel  fracao dos runs de letras ASCII com 2..12 bytes
-!   distinct_1/2/3     type/token de n-gramas de BYTE (diversidade; em salada
-!                      e' ALTO porque nao ha a redundancia da lingua)
-!   maior_laco         maior n-grama de 8 bytes repetido em sequencia (so'
-!                      n-gramas com byte nao-branco)
-!   rep_frac           fracao dos 8-gramas nao-brancos que se repetem
+! The test test_texture.f90 holds the calibration. Real prose gives a
+! palavra_plausivel near 0.95 and a byte_alto near 0.005. A trained 3M model
+! gives 0.20 and 0.146. That is step 1.
 module fortran_texture_mod
   use, intrinsic :: iso_fortran_env, only: int64, real64
   implicit none
@@ -74,7 +75,7 @@ contains
     n = len(text)
     t%n = n
     if (n <= 0) then
-      t%estagio = 'vazio'
+      t%estagio = 'empty or too short'
       return
     end if
 
@@ -108,9 +109,9 @@ contains
     if (runs > 0) t%palavra_plausivel = real(plaus, real64)/real(runs, real64)
 
     ! ---- distinct-n sobre BYTES (hash simples + tabela de vistos) -------
-    ! Hashes em vez de armazenar os n-gramas: memoria O(1) e a comparacao de
-    ! tipo/token e' sobre o conjunto de hashes (colisao e' desprezivel para
-    ! este uso -- e' metrica, nao identificador).
+    ! Use hashes. Do not store the n-grams. Memory stays constant. A hash
+    ! collision is not a problem here, because this value is a metric and not an
+    ! identifier.
     call distinctn(text, 1, d1, s1)
     call distinctn(text, 2, d2, s2)
     call distinctn(text, 3, d3, s3)
@@ -132,9 +133,9 @@ contains
     end do
     ! Mesma licao do crash do repl: nada de guarda dentro de .and. (Fortran nao
     ! garante curto-circuito). Fronteira ESTRUTURAL.
-    ! Laco a partir de 2: assim nao existe k-1 no indice e nenhuma guarda
-    ! precisa ficar dentro de .and. (Fortran nao garante curto-circuito -- foi o
-    ! crash do repl) nem e' preciso convencer o -Wdo-subscript.
+    ! Start the loop at 2. Then the index k-1 always exists. No guard is
+    ! necessary, and no guard sits inside an .and. Fortran does not promise a
+    ! short circuit in .and. That fault stopped the repl.
     best = 0
     if (ng >= 1) then
       best = 1; curn = 1
@@ -228,22 +229,22 @@ contains
     type(texture_t), intent(in) :: t
     character(len=48) :: s
     if (t%n < 20) then
-      s = 'vazio/curto demais'
+      s = 'empty or too short'
     else if (t%palavra_plausivel < 0.50_real64 .or. t%byte_alto > 0.10_real64) then
-      s = '1) chao de bytes (salada)'
+      s = '1) byte floor (salad)'
     else if (t%palavra_plausivel < 0.80_real64 .or. t%maior_laco > 3 .or. &
              t%rep_frac > 0.30_real64) then
-      s = 'transicao: estrutura aparecendo'
+      s = 'transition: structure appears'
     else
-      s = '2) gerador usavel'
+      s = '2) usable generator'
     end if
   end function texture_stage
 
-  ! ---- linha JSON, para ir no card/metadata ----------------------------
-  ! Devolve STRING ALOCATAVEL em vez de escrever num dummy character(*): escrever
-  ! num deferred-length nao alocado da' "End of record" em runtime -- exatamente
-  ! a classe do bug que derrubou o repl (unescape_nl). Devolvendo, nao ha' como
-  ! errar o allocate.
+  ! ---- one JSON line, for the card and the metadata ----------------------
+  ! The function returns an allocatable string. It does not write into a
+  ! character(*) dummy. A write into an unallocated deferred-length string stops
+  ! the program with "End of record". The first version of the test hit this
+  ! fault.
   function texture_json(t, key) result(s)
     type(texture_t), intent(in) :: t
     character(*), intent(in), optional :: key

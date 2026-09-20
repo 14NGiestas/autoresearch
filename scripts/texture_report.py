@@ -91,12 +91,12 @@ def panel(text):
 # redundancia de lingua). Estagios, portanto, sao relativos a estes controles.
 STAGE = [
     # (condicao, rotulo)  -- ordem importa: primeiro o que reprova
-    (lambda p: p.get("n", 0) < 20, "vazio/curto demais"),
+    (lambda p: p.get("n", 0) < 20, "empty or too short"),
     (lambda p: p["palavra_plausivel"] < 0.50 or p["byte_alto"] > 0.10,
-     "1) chao de bytes (salada) -- palavra_plausivel < 0.50"),
+     "1) byte floor (salad) -- plausible_word < 0.50"),
     (lambda p: p["palavra_plausivel"] < 0.80 or p["maior_laco"] > 3 or p["rep_frac"] > 0.30,
-     "transicao: estrutura aparecendo (0.50-0.80), ainda com laco/ruido"),
-    (lambda p: True, "2) gerador usavel (palavras e pontuacao coerentes)"),
+     "transition: structure appears (0.50-0.80), a loop or noise remains"),
+    (lambda p: True, "2) usable generator (words and punctuation are correct)"),
 ]
 
 

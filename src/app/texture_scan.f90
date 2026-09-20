@@ -1,10 +1,10 @@
-! app/texture_scan.f90 — caracteriza um texto ARQUIVO com o painel em Fortran puro.
+! app/texture_scan.f90 — report the texture of a text file.
 !
-! Uso: texture_scan ARQ [--json] [--key texture]
-!   --json   imprime a linha JSON (a mesma que vai para o card/__metadata__)
+! Usage: texture_scan FILE [--json T] [--key texture]
+!   --json T  Print one JSON line. This line goes into the card and into the
+!             __metadata__ of a checkpoint.
 !
-! Existe para: (a) medir texto de qualquer origem sem depender de Python, e
-! (b) dar o mesmo numero que a caracterizacao do checkpoint vai gravar.
+! The app gives the same value as the checkpoint annotation will give.
 program texture_scan
   use, intrinsic :: iso_fortran_env, only: real64
   use fortran_texture_mod, only: texture_t, texture_panel, texture_json
@@ -17,11 +17,12 @@ program texture_scan
   logical :: as_json
 
   call set_args('--json F --key texture', help_text=[character(len=80) :: &
-      'NAME', '  texture_scan - textura de um arquivo (bytes), em Fortran puro', &
-      '', 'SYNOPSIS', '  texture_scan ARQ [--json T] [--key texture]', &
+      'NAME', '  texture_scan - the texture of one file, in pure Fortran', &
+      '', 'SYNOPSIS', '  texture_scan FILE [--json T] [--key texture]', &
       '', 'DESCRIPTION', &
-      '  Mede a ESCADA de geracao: 1) chao de bytes, 2) gerador usavel,', &
-      '  3) raciocinador. Tudo sobre BYTES (caractere = byte via iachar).'])
+      '  The app measures the three steps: 1. byte floor, 2. usable', &
+      '  generator, 3. reasoner. It measures bytes. One character is', &
+      '  one byte, and iachar gives the byte value.'])
   if (command_argument_count() < 1) then
     print '(A)', 'uso: texture_scan ARQ [--json T] [--key texture]'
     call exit(2)
@@ -44,14 +45,15 @@ program texture_scan
   if (as_json) then
     print '(A)', texture_json(t, trim(key))
   else
-    print '(A,I0,A,A)', '=== TEXTURA (', t%n, ' bytes) -> ', trim(t%estagio)
+    print '(A,I0,A,A)', '=== TEXTURE (', t%n, ' bytes) -> ', trim(t%estagio)
     print '(A,F7.4)', '  alpha              ', t%alpha
     print '(A,F7.4)', '  byte_alto          ', t%byte_alto
-    print '(A,I0)', '  palavras           ', t%palavras
-    print '(A,F7.4)', '  palavra_plausivel  ', t%palavra_plausivel
+    print '(A,I0)', '  words              ', t%palavras
+    print '(A,F7.4)', '  plausible_word     ', t%palavra_plausivel
     print '(A,F7.4,F7.4,F7.4)', '  distinct 1/2/3     ', t%distinct1, t%distinct2, t%distinct3
-    print '(A,I0,F7.4)', '  maior_laco/rep     ', t%maior_laco, t%rep_frac
-    print '(A)', '  controles deste repo: prosa real palavra_plausivel ~0.95 / byte_alto ~0.005;'
-    print '(A)', '  modelo 3M treinado ~0.20 / 0.146 (degrau 1).'
+    print '(A,I0,F7.4)', '  long_loop/rep      ', t%maior_laco, t%rep_frac
+    print '(A)', '  The controls of this repository: real prose gives'
+    print '(A)', '  palavra_plausivel near 0.95 and byte_alto near 0.005.'
+    print '(A)', '  A trained 3M model gives 0.20 and 0.146. That is step 1.'
   end if
 end program texture_scan

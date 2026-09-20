@@ -1,12 +1,13 @@
-! test_texture.f90 — invariantes do painel de textura (nao valores dourados).
+! test_texture.f90 — the invariants of the texture module.
 !
-! O que tem de valer em qualquer maquina:
-!   1. determinismo: mesmo texto -> mesmo painel;
-!   2. PROSA bate SALADA nos eixos que importam (palavra_plausivel para cima,
-!      byte_alto e distinct_2 para baixo) -- e o que faz a metrica servir;
-!   3. a escada classifica cada um no degrau certo;
-!   4. bordas: vazio, 1 byte, e texto so' de bytes altos nao quebram;
-!   5. o JSON tem as chaves e fecha.
+! The test holds no fixed value. It holds these rules:
+!   1. The module gives the same result for the same text.
+!   2. Real prose wins against a salad on the three important values. Prose has
+!      a higher palavra_plausivel, and a lower byte_alto and distinct_2.
+!   3. Each text falls on the correct step of the scale.
+!   4. An empty text, a one-byte text, and a text of high bytes do not stop the
+!      program.
+!   5. The JSON line holds the keys and ends with a brace.
 program test_texture
   use, intrinsic :: iso_fortran_env, only: real64
   use fortran_texture_mod, only: texture_t, texture_panel, texture_json
@@ -16,14 +17,14 @@ program test_texture
   character(len=:), allocatable :: prose, salad, jline
 
   nfail = 0
-  ! prosa (ASCII, com palavras e pontuacao) -- 3 blocos concatenados
+  ! Real prose with ASCII words and punctuation. Three blocks follow.
   prose = "A computacao e a ciencia que estuda processos que podem ser descritos por " // &
       "algoritmos. Um algoritmo e uma sequencia finita de instrucoes bem definidas, " // &
       "tipicamente usada para resolver uma classe de problemas. O modelo aprende com " // &
       "dados e ajusta seus pesos; o objetivo desta linha de trabalho e medir a " // &
       "eficiencia do treinamento e a textura do que o modelo gera, sem enganar a " // &
       "gente com numeros bonitos que nao significam nada na pratica do dia a dia."
-  ! salada: bytes altos, sem estrutura de palavra
+  ! A salad of bytes. It holds no word structure.
   salad = ""
   do i = 1, 120
     salad = salad // achar(160 + mod(i*7, 90)) // achar(190 + mod(i*11, 60))
@@ -52,9 +53,9 @@ program test_texture
   call check(index(jline, '"estagio"') > 0, 'json tem estagio')
   call check(jline(len_trim(jline):len_trim(jline)) == '}', 'json fecha')
 
-  write (*, '(A,F7.4,A,F7.4,A,A)') 'prosa: palavra_plausivel=', tp%palavra_plausivel, &
+  write (*, '(A,F7.4,A,F7.4,A,A)') 'prose: plausible_word=', tp%palavra_plausivel, &
       ' byte_alto=', tp%byte_alto, ' -> ', trim(tp%estagio)
-  write (*, '(A,F7.4,A,F7.4,A,A)') 'salada: palavra_plausivel=', ts%palavra_plausivel, &
+  write (*, '(A,F7.4,A,F7.4,A,A)') 'salad: plausible_word=', ts%palavra_plausivel, &
       ' byte_alto=', ts%byte_alto, ' -> ', trim(ts%estagio)
   if (nfail /= 0) error stop 'test_texture: FALHOU'
   write (*, '(A)') 'test_texture: OK'
