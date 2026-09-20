@@ -101,10 +101,37 @@ test time. Train with the cap to use the cap.
 An untrained checkpoint cannot show this. Its scores are about 1e-3, so even a
 cap of 0.001 changes nothing.
 
-## What remains
+## The run record, and the loud failure
 
-One item. The checkpoint card does not record the cap yet. The plan: write
-`run.logit_cap` into `__metadata__` at save time, and fail loud when a resumed
-checkpoint was trained with a different cap. Until that lands, a resume with a
-different cap changes the model's behavior in silence, which is the exact bug
-class the arch identity exists to prevent.
+A checkpoint records the cap it was trained with. The key is `run.logit_cap` in
+`__metadata__`, written at every save, and the card carries `"logit_cap"` too.
+
+On resume, `require_run_cap` compares the recorded value with the flag:
+
+| case | behavior |
+|---|---|
+| the key is present and differs | stop, with the two values and the file name |
+| the key is present and matches | continue |
+| the key is absent (an init, or an old checkpoint) | a note, then continue |
+
+The last row is a design correction. The first version failed when the key was
+absent, and that blocked the first capped run forever: no checkpoint had the key
+yet, so no run could create one. A note keeps the fact visible without the dead
+end.
+
+The comparison is on the cap only, and the tolerance is 1e-6 relative. A resume
+with a different cap changes the model, so it must not pass in silence. That is
+the bug class the arch identity already guards for shapes.
+
+Verified end to end on a real checkpoint:
+
+* train one step from a trained checkpoint with `--logit-cap 2`: the note
+  appears, the run proceeds, and the file records `run.logit_cap = 2.0`.
+* resume that file with `--logit-cap 0`: `FATAL: logit soft cap mismatch`, with
+  the recorded value, the asked value, and the file name.
+* resume it with `--logit-cap 2`: the run proceeds and the nll is the same
+  (4.67910), so the path is deterministic.
+
+The cap does not enter the arch identity. The identity describes the layout of
+the weights, and the cap changes no shape. It changes behavior, which is why it
+gets its own recorded field.

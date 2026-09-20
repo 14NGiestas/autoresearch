@@ -127,6 +127,15 @@ contains
     call w%set_meta_int(key, int(v, int64))
   end subroutine set_meta_i
 
+  ! A real under a metadata key. The value travels as a string, so the reader
+  ! parses it back -- the same path the integer keys already use.
+  subroutine set_meta_r(w, key, v)
+    type(st_writer), intent(inout) :: w
+    character(*), intent(in) :: key
+    real(wp), intent(in) :: v
+    call w%set_meta(key, json_real(v))
+  end subroutine set_meta_r
+
   subroutine load1(path, a)
     character(*), intent(in) :: path
     real(wp), allocatable, intent(out) :: a(:)
@@ -323,7 +332,7 @@ contains
   ! treina preenche depois; um numero inventado aqui viraria verdade no experimento.
   subroutine save_gpt_weights_st(wdir, n_layer, d_model, n_head, n_kv_head, &
       head_dim, vocab_size, ctx, bos, step, lr, tokens, rowsfile, &
-      wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2, energy)
+      wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2, energy, logit_cap)
     character(*), intent(in) :: wdir, rowsfile
     integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim
     integer, intent(in) :: vocab_size, ctx, bos, step
@@ -333,10 +342,12 @@ contains
     real(wp), intent(in) :: c_q(:), c_k(:), c_v(:)
     real(wp), intent(in) :: c_pr(:), c_fc(:), c_pr2(:)
     type(energy_interval_t), intent(in), optional :: energy
+    real(wp), intent(in), optional :: logit_cap
     type(st_writer) :: w
     character(len=:), allocatable :: msg, card, tname
     character(len=16) :: lstr
     integer :: ll, qsz, ksz, psz, fcsz, p2sz, stat
+    real(wp) :: cap
 
     qsz = n_head*head_dim*d_model
     ksz = n_kv_head*head_dim*d_model
@@ -374,9 +385,16 @@ contains
     call w%set_meta('arch.id', arch_id_of(arch_canonical_of(d_model, n_head, &
         n_kv_head, head_dim, n_layer, vocab_size, ctx, bos)))
     call set_meta_i(w, 'n_tensors', 2 + 6*n_layer)
+    ! The logit soft cap is a property of the RUN, not of the arch: it does not
+    ! change a shape. It is recorded so that a resume with a different cap fails
+    ! loud instead of changing the model in silence.
+    cap = 0.0_wp
+    if (present(logit_cap)) cap = logit_cap
+    call set_meta_r(w, 'run.logit_cap', cap)
     card = '{"steps":'//i2c(step)//',"lr":'//json_real(lr)// &
            ',"tokens":'//i8c(tokens)//',"rows_file":"'//json_escape(trim(rowsfile))// &
-           '","metrics":{}'//energy_card_json(energy)//'}'
+           '","logit_cap":'//json_real(cap)// &
+           ',"metrics":{}'//energy_card_json(energy)//'}'
     call w%set_meta('card', card)
     call set_meta_energy(w, energy)
 
@@ -632,6 +650,54 @@ contains
     end if
     write (*, '(2A)') '# arch lida de: ', trim(source)
   end subroutine read_arch_any
+
+  ! A checkpoint records the logit soft cap it was trained with. A resume with a
+  ! different cap changes the model in silence, so this stops the run instead.
+  ! An old checkpoint carries no such key: it was trained with the cap off, so a
+  ! run that asks for a cap above 0 is a mismatch too.
+  subroutine require_run_cap(wdir, want)
+    character(*), intent(in) :: wdir
+    real(wp), intent(in) :: want
+    type(st_reader) :: r
+    character(len=:), allocatable :: msg, val
+    integer :: stat, ios
+    logical :: found
+    real(wp) :: got, tol
+
+    got = 0.0_wp
+    found = .false.
+    call r%open(trim(wdir)//'/'//ST_CKPT, stat, msg)
+    if (stat == st_ok) then
+      call r%meta('run.logit_cap', val, found)
+      call r%close()
+      if (found) then
+        read (val, *, iostat=ios) got
+        if (ios /= 0) then
+          call die('run.logit_cap in '//trim(wdir)//'/'//ST_CKPT// &
+              ' is not a number: "'//trim(val)//'"')
+        end if
+      end if
+    end if
+    if (.not. found) then
+      ! No key: an init, or a checkpoint from before this key existed. Nothing
+      ! was recorded, so there is nothing to compare. A note, not a failure --
+      ! otherwise the first capped run could never start.
+      if (want > 0.0_wp) then
+        print '(2A)', '# no run.logit_cap recorded in ', trim(wdir)
+        print '(A,ES12.4)', '# starting with cap = ', want
+      end if
+      return
+    end if
+    tol = 1.0e-6_wp*max(1.0_wp, abs(want))
+    if (abs(got - want) <= tol) return
+    print '(A)', 'FATAL: logit soft cap mismatch'
+    print '(A,ES12.4)', '  the checkpoint was trained with cap = ', got
+    print '(A,ES12.4)', '  this run asks for cap = ', want
+    print '(2A)', '  checkpoint: ', trim(wdir)
+    print '(A)', '  a different cap changes the model, so the run stops here.'
+    print '(A)', '  pass --logit-cap with the recorded value to continue.'
+    call exit(1)
+  end subroutine require_run_cap
 
   subroutine read_meta_i(r, key, val)
     type(st_reader), intent(in) :: r

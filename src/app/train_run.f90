@@ -25,7 +25,7 @@ program train_run
   use fortran_energy_mod
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights, &
-      save_gpt_weights_st, verify_ckpt_dir
+      save_gpt_weights_st, verify_ckpt_dir, require_run_cap
   use fortran_chat_mod, only: write_template_txt
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
@@ -214,6 +214,9 @@ program train_run
   call load_gpt_weights(trim(wdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
       M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2)
   call require_arch(trim(wdir))
+  ! The cap belongs to the run. A resume with a different one would change the
+  ! model in silence, so this stops the run when the recorded value differs.
+  call require_run_cap(trim(wdir), logit_cap)
 
   call init_state(M, S)
   ! Optimizer carry across phases (Cognivolve): old checkpoints without
@@ -320,7 +323,8 @@ program train_run
       if (ckfmt == 'st' .or. ckfmt == 'both') then
         call save_gpt_weights_st(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
             TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
-            M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard)
+            M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard, &
+            logit_cap=logit_cap)
       end if
       call save_adam_state(trim(ckdir), S)
       if (use_muon) call save_muon_state(trim(ckdir), S)
@@ -382,7 +386,8 @@ program train_run
         if (ckfmt == 'st' .or. ckfmt == 'both') then
           call save_gpt_weights_st(trim(outdir) // "/best", N_LAYER, D, N_HEAD, &
               N_KV, HD, VV, TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
-              M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard)
+              M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard, &
+              logit_cap=logit_cap)
         end if
         call save_adam_state(trim(outdir) // "/best", S)
         if (use_muon) call save_muon_state(trim(outdir) // "/best", S)
