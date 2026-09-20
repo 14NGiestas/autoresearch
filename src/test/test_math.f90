@@ -14,7 +14,7 @@ program test_math
   use fortran_math_mod, only: fast_tanh, fast_softcap
   implicit none
   integer :: nfail, i
-  real(wp) :: x, cap, y
+  real(wp) :: x, y
   real(real64) :: xe, ex, e, worst, worst_at, wd, worst_d
 
   nfail = 0
