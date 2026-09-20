@@ -59,8 +59,17 @@ OURS = {
     "scal65_1k_curve (63 pts)": "/tmp/scal65_1k_curve.npy",
 }
 # o eixo TAMANHO, confundido com tokens (avaliado na cadeia canonica)
-SIZE_AXIS = [("d96", 2.75e6, 8.0e6, 4.542), ("d216", 9.3e6, 8.0e6, 4.496),
-             ("d360", 2.5e7, 2.46e7, 4.724)]
+# O eixo TAMANHO, com os valores CORRIGIDOS (halfbeast job 6192, 6 de 6).
+# Os antigos (d96 4,542 / d216 4,496 / d360 4,724) eram lixo do race de threads em
+# eval_bpb: eles davam NAO monotonico e sustentavam "o eixo tamanho nao melhora".
+# Os corretos sao monotonos. Mas ainda NAO sao uma serie controlada: os tres saem
+# de experimentos diferentes (o d360 e' do M25, lr 0.0003, 59889 passos). Por isso
+# ha' dois pontos por tamanho, e a faixa e' o que se pode afirmar.
+SIZE_AXIS = {
+    "d96":  [2.75e6, [(8.0e6, 3.009393), (8.0e6, 2.463537)]],
+    "d216": [9.3e6,  [(8.0e6, 2.090244), (8.0e6, 2.088113)]],
+    "d360": [2.5e7,  [(24.6e6, 1.940794), (28.7e6, 1.918593)]],
+}
 
 
 def invariance():
@@ -308,17 +317,23 @@ def main():
     ax[1, 0].set_title("C) o piso ESTA' fixado, e o deles fica fora")
     ax[1, 0].grid(alpha=0.3); ax[1, 0].legend(fontsize=7)
 
-    # D) o eixo tamanho, confundido
-    names = [s[0] for s in SIZE_AXIS]; bpbs = [s[3] for s in SIZE_AXIS]
-    toks = [s[2] for s in SIZE_AXIS]
-    ax[1, 1].plot(range(3), bpbs, "s-", color="darkgreen", ms=8)
-    for i2, (nm, b2, t2) in enumerate(zip(names, bpbs, toks)):
-        ax[1, 1].annotate(f"{nm}\n{t2/1e6:.1f}M tok", (i2, b2),
-                          textcoords="offset points", xytext=(0, 10),
+    # D) o eixo TAMANHO, com os valores corrigidos e o confundidor declarado
+    for i2, (nm, (params, pts)) in enumerate(SIZE_AXIS.items()):
+        for tok, bpb in pts:
+            ax[1, 1].plot([i2], [bpb], "o", ms=8, color="darkgreen")
+        ys = [b for _, b in pts]
+        ax[1, 1].plot([i2, i2], [min(ys), max(ys)], "-", color="darkgreen", lw=2)
+        ax[1, 1].annotate(f"{nm}\n{params/1e6:.1f}M par.", (i2, max(ys)),
+                          textcoords="offset points", xytext=(0, 12),
                           ha="center", fontsize=8)
-    ax[1, 1].set_xticks(range(3)); ax[1, 1].set_xticklabels(names)
-    ax[1, 1].set_ylabel("bpb")
-    ax[1, 1].set_title("D) eixo TAMANHO: nao monotonico, tokens desiguais")
+    ax[1, 1].annotate("série CONTROLADA rodando:\nd216 job 162, d360 job 6193\n"
+                      "(mesma receita, mesmos tokens)",
+                      (0.02, 0.06), xycoords="axes fraction", fontsize=7,
+                      color="steelblue")
+    ax[1, 1].set_xticks(range(len(SIZE_AXIS)))
+    ax[1, 1].set_xticklabels(list(SIZE_AXIS))
+    ax[1, 1].set_ylabel("bpb (corrigido, job 6192)")
+    ax[1, 1].set_title("D) TAMANHO: monotônico, mas ainda confundido")
     ax[1, 1].grid(alpha=0.3)
 
     fig.suptitle("Literatura contra os nossos dados. Piso E inclinacao estao "
