@@ -19,7 +19,7 @@
 set -u
 cd /home/pauli/autoresearch
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
-BUILD=/tmp/attnmat_build
+BUILD=${ATTN_BUILD:-/tmp/attn_build_test}   # reusa build existente: evita corrida de build
 echo "attnmat job=${SLURM_JOB_ID} $(date '+%F %H:%M:%S') load=$(cut -d' ' -f1 /proc/loadavg)"
 
 if [ ! -x "$(ls $BUILD/*/app/bench_attn 2>/dev/null | tail -1 || true)" ]; then
