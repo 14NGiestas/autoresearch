@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# bin/env_record -- uma linha com as variaveis que mudam uma medida de TEMPO.
+#
+# Por que existe: em 2026-09-20 descobrimos que o governor do CPU estava em
+# `powersave` e que NENHUM log do dia o registrava. Isso significa que nenhum
+# s/step absoluto do dia e' confiavel (nem os anteriores). A carga ja' tinha
+# custado tres medidas corrompidas antes; o governor e' a mesma classe de
+# variavel escondida, so' que ninguem tinha olhado.
+#
+# Regra que isto implementa:
+#   - bpb e' DETERMINISTICO: nao se invalida por tempo.
+#   - s/step so' compara na RAZAO entre bracos medidos juntos.
+#   - todo log de tempo grava: load, governor, temperatura e OMP.
+#
+# Uso: bin/env_record [rotulo]
+L=$(cut -d' ' -f1-3 /proc/loadavg)
+G=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "?")
+T="?"
+for f in /sys/class/hwmon/hwmon*/name; do
+  n=$(cat "$f" 2>/dev/null)
+  case "$n" in
+    k10temp|coretemp) p=$(dirname "$f")
+      T=$(cat "$p/temp1_input" 2>/dev/null | awk '{printf "%.1f C", $1/1000}') ;;
+  esac
+done
+echo "env${1:+ [$1]}: load=$L governor=$G cpu_temp=$T OMP=${OMP_NUM_THREADS:-unset} threads=$(nproc)"
