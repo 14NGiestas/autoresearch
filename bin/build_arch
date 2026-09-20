@@ -28,6 +28,17 @@ D=$1; H=$2; KV=$3; L=$4; V=$5; C=$6
 BD=${7:-/tmp/build_arch_d${1}_h${2}_kv${3}_l${4}_v${5}_c${6}}
 REL=""
 [ "${8:-}" = "--release" ] && REL="--profile release"
+# OTIMIZACAO. Medido em 2026-09-20 (bench_attn_split, mesmo binario): 10,8 ms com o
+# perfil default (debug = -O0) contra 4,4 ms com -O2, ou seja 2,4x. O projeto
+# treinou TODOS os runs ate' hoje sem otimizacao.
+#
+# Por que --flag e nao profile: o manifesto NAO aceita flags de compilador em
+# perfil (ver a nota em src/fpm.toml), e --profile (CLI) nao convive com
+# --features ("--profile and --features cannot be used together"), e a arch E' uma
+# feature. O --flag convive com --features, e o ultimo -O vence.
+# Sobrescreve:  OPT="-O3 -march=native" bin/build_arch ...
+OPT="${OPT:--O2}"
+OPTFLAG="--flag '$OPT'"
 
 case "$BD" in
   */src/build/*|src/build/*) echo "build_arch: recuse --build-dir dentro de src/build (arvore viva dos jobs)"; exit 2 ;;
@@ -39,12 +50,12 @@ esac
 # ([features].<nome>.preprocess.cpp.macros).
 TAG="arch_d${D}_h${H}_kv${KV}_l${L}_v${V}_c${C}"
 if grep -qE "^${TAG} *=" src/fpm.toml; then
-  MODE="--features $TAG"
+  MODE="--features $TAG $OPTFLAG"
   echo "[build_arch] feature declarada em src/fpm.toml: $TAG"
 else
   # Fallback: valor arbitrario nao declarado. --flag e' suportado pelo fpm e
   # vale para as dependencias tambem (macros ARCH_* so' sao lidas por nos).
-  MODE="--flag '-cpp -DARCH_D_MODEL=$D -DARCH_N_HEAD=$H -DARCH_N_KV=$KV -DARCH_N_LAYER=$L -DARCH_VOCAB=$V -DARCH_CTX=$C'"
+  MODE="--flag '-cpp -DARCH_D_MODEL=$D -DARCH_N_HEAD=$H -DARCH_N_KV=$KV -DARCH_N_LAYER=$L -DARCH_VOCAB=$V -DARCH_CTX=$C"
   echo "[build_arch] feature $TAG NAO declarada -> fallback --flag -D..."
   echo "[build_arch]   (para o caminho declarativo, adicione a feature em src/fpm.toml)"
 fi
