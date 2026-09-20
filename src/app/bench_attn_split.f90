@@ -16,6 +16,7 @@
 program bench_attn_split
   use iso_c_binding
   use, intrinsic :: iso_fortran_env, only: real64
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
   use fortran_kinds_mod, only: wp
   use fortran_blas_mod, only: sgemm
   use M_CLI2, only: set_args, iget
@@ -100,5 +101,5 @@ program bench_attn_split
   print '(A,F6.2)', "      razao (sgemm total)/(softmax) = ", (tg1 + tg2)/max(1e-9_real64, ts)
   ! consome o resultado para o compilador nao remover nada
   tmp = sum(y) + sum(S)
-  if (tmp /= tmp) print '(A)', "  (aviso: NaN)"
+  if (ieee_is_nan(tmp)) print '(A)', "  (aviso: NaN)"
 end program bench_attn_split

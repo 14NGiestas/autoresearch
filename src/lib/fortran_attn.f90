@@ -25,15 +25,21 @@ contains
   ! Causal scaled dot-product attention
   ! q, k, v: (B, T, H, D)  out: (B, T, H, D)
   ! cap > 0 applies the logit soft cap s = cap*tanh(s/cap) before the mask.
-  subroutine causal_attn(q, k, v, y, B, T, H, K_H, D, cap)
+  ! relu_attn replaces the softmax by relu(s)/T (softmax-free attention). The two
+  ! are mutually exclusive: use one or the other, never both.
+  subroutine causal_attn(q, k, v, y, B, T, H, K_H, D, cap, relu_attn)
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in)  :: q(:), k(:), v(:)
     real(wp), intent(out) :: y(:)
     real(wp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
     integer :: aa, bb, cc, ss, dd, kb, rep
     real(wp) :: scale, sm, inv, acc, cp
     real(wp) :: sc(T), m, val
+    logical :: relu_a
 
+    relu_a = .false.
+    if (present(relu_attn)) relu_a = relu_attn
     cp = 0.0_wp
     if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(D, wp))
@@ -52,14 +58,24 @@ contains
                          * k(((aa-1)*T + (ss-1))*K_H*D + (kb-1)*D + dd)
             end do
             sc(ss) = fast_softcap(acc*scale, cp)
-            if (sc(ss) > m) m = sc(ss)
+            ! ReLU-attention: relu(S)/T. Sem exp, sem max, sem soma de linha -- e
+            ! a normalizacao e' constante (1/T), entao nem precisa de reducao.
+            if (relu_a) then
+              if (sc(ss) < 0.0_wp) sc(ss) = 0.0_wp
+            else
+              if (sc(ss) > m) m = sc(ss)
+            end if
           end do
-          sm = 0.0_wp
-          do ss = 1, cc
-            sc(ss) = exp(sc(ss) - m)
-            sm = sm + sc(ss)
-          end do
-          inv = 1.0_wp / sm
+          if (relu_a) then
+            inv = 1.0_wp / real(cc, wp)
+          else
+            sm = 0.0_wp
+            do ss = 1, cc
+              sc(ss) = exp(sc(ss) - m)
+              sm = sm + sc(ss)
+            end do
+            inv = 1.0_wp / sm
+          end if
           do dd = 1, D
             acc = 0.0_wp
             do ss = 1, cc
