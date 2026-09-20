@@ -20,6 +20,8 @@
 # O dir de build e' privado: a arvore src/build e' a dos jobs vivos e nao se
 # toca nela (AGENTS.md regra 1). O --build-dir e' novo no driver, e com um dir
 # dedicado mais de um binario para o mesmo app e' ERRO, nao escolha.
+# Layout: o driver espera <root>/<tag>/.../app, entao o <tag> e' um nivel que o
+# chamador da'. O build tem que ser feito DENTRO dele (/tmp/size/bd/<tag>).
 set -u
 cd /home/pauli/autoresearch
 PY=.venv-numpy/bin/python3
@@ -32,6 +34,6 @@ $PY scripts/fedavg_rounds.py \
     --rows /tmp/mix/rows_f0.npy \
     --holdout /tmp/mix/rows_holdout.npy \
     --reset-moments --outer nesterov --outer-lr 0.7 \
-    --build-dir /tmp/size/build_d216 \
+    --build-dir /tmp/size/bd \
     --out /tmp/size/d216_t122
 echo "fim size216 $(date '+%F %H:%M:%S')"
