@@ -46,19 +46,65 @@ the capped value `s_capped` and use
 
 No second call to tanh is needed.
 
+## Where the cap is used
+
+The cap is in all eight attention kernels:
+
+| path | forward | backward |
+|---|---|---|
+| training, naive | `causal_attn` | `attn_bwd` |
+| training, BLAS | `attn_sgemm` | `attn_bwd_sgemm` |
+| document mask | `causal_attn_doc` | `attn_bwd_doc` |
+| inference | `attn_step`, `attn_chunk` | not needed |
+
+Every routine takes an OPTIONAL `cap` argument with a default of 0. No existing
+call site changed. With a cap of 0 the arithmetic is the same as before, because
+`fast_softcap(x, 0)` returns x and multiplying by 1.0 is exact.
+
+The BLAS backward needed no new scratch. `dP = dY V^T` does not depend on P, so
+it moved before the softmax, and `dSbuf` now holds the capped scores for the
+derivative.
+
+## How the gradient was verified
+
+The finite difference test in single precision does NOT decide. With a cap of 2
+it gives 3.02e-3 against a threshold of 3.0e-3, and a smaller step makes it
+worse (3.32e-3), because the floor is the roundoff of the step and not the
+curvature. So the threshold now comes from the measurement.
+
+The sharp test is a cross-check. The naive backward and the BLAS backward are
+two independent implementations of the same gradient, so they must agree:
+
+    |bwd blas - bwd naive| = 2.4e-06 with no cap, 1.2e-06 with cap 2
+
+That is the roundoff level of single precision. The capped gradient is right.
+
+## The run flag
+
+`train_run --logit-cap X` sets the cap for training and for the val probes.
+A cap of 0 (the default) means off. The value belongs to the run, not to the
+arch identity, because it does not change a shape.
+
+Verified on a trained checkpoint, where the scores are large enough to matter.
+One step, learning rate 0:
+
+| cap | nll |
+|---|---|
+| 0 | 4.11882 |
+| 2 | 4.67910 |
+| 0.1 | 4.76700 |
+
+The value moves the result, so the flag reaches the kernels. The cost is real
+and it is expected: a model trained with no cap suffers when a cap appears at
+test time. Train with the cap to use the cap.
+
+An untrained checkpoint cannot show this. Its scores are about 1e-3, so even a
+cap of 0.001 changes nothing.
+
 ## What remains
 
-The cap is not implemented in the attention kernels yet. The work is precise:
-
-* `causal_attn` and `attn_sgemm`: apply `fast_softcap(score, cap)` before the
-  mask. Both paths.
-* `attn_bwd` and `attn_bwd_sgemm`: keep the capped score in a small array, and
-  multiply the gradient of the score by `1 - (s_capped/cap)^2`. Both paths.
-* An optional argument `cap` in all four routines, with a default of 0. That
-  keeps every existing call site unchanged.
-* A finite-difference test with `cap > 0`, in `test_kernels.f90`. This is the
-  acceptance test. A new gradient without it is a belief.
-* A runtime flag `--logit-cap` in `train_run`, recorded in the checkpoint card as
-  `run.logit_cap`, and a loud failure when a resumed checkpoint was trained with
-  a different cap. The arch identity stays out of this: it describes the layout
-  of the weights, and the cap does not change a shape.
+One item. The checkpoint card does not record the cap yet. The plan: write
+`run.logit_cap` into `__metadata__` at save time, and fail loud when a resumed
+checkpoint was trained with a different cap. Until that lands, a resume with a
+different cap changes the model's behavior in silence, which is the exact bug
+class the arch identity exists to prevent.

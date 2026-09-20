@@ -70,6 +70,7 @@ program train_run
   integer :: ntrain, val_every, nval, keep_last, nprobe, nprobe_opt
   integer :: k, i, j, tstep, u, ios, r, nbad
   logical :: attn_blas, attn_qk, attn_qkph, anneal
+  real(sp) :: logit_cap
   character(len=8) :: ckfmt
   integer(int64) :: ck_tokens
   ! Energia auto-medida (fortran_energy): o card de cada save leva o delta exato
@@ -82,6 +83,7 @@ program train_run
   real(sp) :: theta, ang
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
+  logit_cap = 0.0_sp
   ntrain = 40; val_every = 5; nval = 8; keep_last = 2
   nprobe = 0
   bytesfile = ""
@@ -89,7 +91,7 @@ program train_run
   call set_args('--weights WEIGHTS --rows ROWS --out OUT --nsteps 20' // &
       ' --lr 0.0003 --t0 1 --log_every 1 --save_every 10' // &
       ' --start_row 0 --ntrain 40 --val_every 5 --nval 8 --keep_last 2' // &
-      ' --trn_probe 0 --attn naive --bytes BYTES' // &
+      ' --trn_probe 0 --attn naive --bytes BYTES --logit-cap 0' // &
       ' --opt adam --muon-lr 0.02 --ckpt-format st --anneal 0 --batch 1', &
       help_text=[character(len=80) :: &
       'NAME', &
@@ -97,6 +99,10 @@ program train_run
       'SYNOPSIS', &
       '  train_run --weights DIR --rows FILE --out DIR --nsteps N', &
       'OPTIONS', &
+      '  --logit-cap X  attention logit soft cap: s = X*tanh(s/X) before the', &
+      '                mask. 0 (default) = off. Wide heads (head_dim >= 128)', &
+      '                need a stabilizer; the field uses QK-Norm or this cap.', &
+      '                The value is part of the run, not of the arch identity.', &
       '  --attn naive  attention kernel: naive (default, the arithmetic every', &
       '                recorded run used), blas (attn_sgemm/attn_bwd_sgemm) or qkhop:', &
       '                ~13x faster at T=2048, agrees to ~1e-6, different', &
@@ -125,6 +131,7 @@ program train_run
   ntrain = iget('ntrain')
   nprobe_opt = iget('trn_probe')
   attn_blas = trim(sget('attn')) == 'blas'
+  logit_cap = rget('logit-cap')
   attn_qk = trim(sget('attn')) == 'qkhop'
   attn_qkph = trim(sget('attn')) == 'qkhop-ph'
   val_every = iget('val_every')
@@ -274,7 +281,7 @@ program train_run
       call exit(1)
     end if
     call train_step(idx, targets, ct, st, M, S, G, GR, C, tmp, nll, tstep, &
-        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas, attn_qk=attn_qk, attn_qkph=attn_qkph, &
+        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas, attn_qk=attn_qk, attn_qkph=attn_qkph, logit_cap=logit_cap, &
         use_muon=use_muon, lr_muon=muon_lr)
     if (mod(k, log_every) == 0 .or. k == nsteps) then
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &
@@ -460,9 +467,9 @@ contains
       call rope_4d(ko, ct, st, krot, B, TT, N_KV, HD)
       if (attn_blas) then
         call attn_sgemm(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD, &
-            tmp%satt)
+            tmp%satt, logit_cap)
       else
-        call causal_attn(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD)
+        call causal_attn(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD, logit_cap)
       end if
       call linear3d_sgemm(ao, M%p(ll*psz+1:), sub, B, TT, DD, DD)
       emd = emd + sub
