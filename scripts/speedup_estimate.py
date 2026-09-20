@@ -102,6 +102,11 @@ def main():
     ap.add_argument("--tokens-per-param", type=float, default=20.0)
     ap.add_argument("--months", type=float, default=6.0)
     ap.add_argument("--svg", default="/tmp/speedup_estimate.svg")
+    ap.add_argument("--threads", type=int, default=36,
+                    help="threads of the whole cluster: 16 (fermi) + 20 (halfbeast)")
+    ap.add_argument("--budgets", default="1,2,7,30,182",
+                    help="time budgets in days, comma separated")
+    ap.add_argument("--tok-per-param", type=float, default=20.0)
     a = ap.parse_args()
 
     print("=== ENTRADAS MEDIDAS (com a fonte)")
@@ -153,6 +158,37 @@ def main():
           % ("+ composicao (= hoje)", tf, acc * tf, years, nodes))
     print("\n  [fechamento] inicio %.1f nos -> hoje %.1f nos  =  ganho x%.0f"
           % (n_start, n_now, n_start / n_now))
+
+    # ---- The largest model for a given time, for any budget ----------------
+    # The budget of FLOPs fixes the largest model. A model of P parameters needs
+    # 120*P^2 FLOPs when it trains on 20 tokens for each parameter, because the
+    # cost of one token is 6*P and the token count is 20*P. The composition
+    # divides the token count, so it divides the budget.
+    #
+    # The rate per thread comes from the measured node rate: 7292 tokens per
+    # second on 8 cores at d96, which is 11.8 MFLOP for one token.
+    rate_thread = MEASURED["tok_s_node_4workers"] * MEASURED["flops_per_token_d96"] / 8.0
+    speed = MEASURED["arch_factor_d48"] * rate_thread
+    print("\n=== MAIOR MODELO POR ORCAMENTO DE TEMPO (%d threads = fermi 16 + halfbeast 20)"
+          % a.threads)
+    print("  %-10s %12s %14s %14s" % ("orcamento", "params max", "tokens", "FLOPs"))
+    for days in [float(x) for x in a.budgets.split(",")]:
+        secs = days * 86400.0
+        flops = speed * a.threads * secs
+        # token_equiv cuts the token count, so the same FLOPs buy a larger model
+        p_max = ((flops / tf) / (6.0 * a.tok_per_param)) ** 0.5
+        tokens = a.tok_per_param * p_max / tf
+        if days < 1.0:
+            label = "%.0f horas" % (days * 24.0)
+        else:
+            label = "%.0f dia%s" % (days, "" if days == 1 else "s")
+        print("  %-10s %11.1f M %13.2f B %12.1f EFLOP" % (label, p_max / 1e6, tokens / 1e9, flops / 1e18))
+    print("  premissas: 6*P FLOPs por token, %.0f tokens por param (Chinchilla), taxa medida"
+          % a.tok_per_param)
+    print("  de %.1f GFLOP/s por thread, fator de head_dim %.2f, e a composicao como"
+          % (rate_thread / 1e9, MEASURED["arch_factor_d48"]))
+    print("  tokens-equivalentes (medida a 3M: EXTRAPOLACAO nas escalas acima).")
+    print("  O estimador preve TAMANHO, nao qualidade: nao ha lei de escala nossa para bpb.")
 
     # ---- With the machines that we have -----------------------------------
     # Our hardware holds two machines. The estimate needs their thread count,
