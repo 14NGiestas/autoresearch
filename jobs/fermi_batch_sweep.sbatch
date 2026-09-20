@@ -44,9 +44,11 @@ nix develop .#cpu-only --command bash -c "cd src && fortran-fpm test --build-dir
 echo "=== SMOKE (6 passos, B=1) + CONTROLE DE NEUTRALIDADE"
 # O binario ANTIGO d96 da arvore viva (so' EXECUCAO: leitura, nada escrito la')
 # nao aceita --batch; o NOVO aceita. Tudo igual tem de dar os MESMOS nlls.
-bin/job_env --build-dir "src/build/arch_d96_h6_kv2_l12_v8192_c1024" "--rows:src/app/train_run.f90" >/dev/null || exit 2
-. "src/build/arch_d96_h6_kv2_l12_v8192_c1024/job_env.sh"
-OLD="$TRAIN_RUN"
+# NAO migrar esta linha. Ela le' a arvore viva de src/build, e so' LEITURA: o
+# binario VELHO e' o controle de neutralidade do smoke. O job_env construiria
+# dentro de src/build, que a regra 1 do AGENTS.md proibe.
+OLD=$(ls src/build/arch_d96_h6_kv2_l12_v8192_c1024/*/app/train_run 2>/dev/null | head -1)
+[ -n "$OLD" ] || { echo "FALHOU: binario antigo ausente em src/build"; exit 2; }
 BY="$HOME/.cache/autoresearch/tok_tables/token_bytes.txt"
 # nsteps/val_every/save_every ficam FORA do COMMON (cada rodada passa o seu:
 # flag duplicada no CLI e' ambiguidade que nao quero depurar num job)

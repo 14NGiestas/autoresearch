@@ -2,6 +2,11 @@
 # bin/job_env -- um lugar para o que TODO job precisa antes de rodar.
 #
 # Uso:  bin/job_env D H KV L V C BUILD_DIR [--commit SHA] [simbolo:arquivo ...]
+#       bin/job_env --build-dir DIR [--commit SHA] [simbolo:arquivo ...]
+#
+# No modo --build-dir, a arch sai do proprio nome do diretorio, que ja' a codifica:
+#   arch_d96_h6_kv2_l12_v8192_c1024 -> D=96 H=6 KV=2 L=12 V=8192 C=1024
+# Assim o job nao repete os parametros, e nao ha' como os dois discordarem.
 #
 # COM --commit: faz fetch do remoto local (~/autoresearch.git, que a fermi empurra
 # por ssh porque o halfbeast nao alcanca a fermi por causa do NAT) e faz checkout
@@ -21,8 +26,22 @@
 # Escreve $BUILD_DIR/job_env.sh, que o job carrega com `. "$BD/job_env.sh"`.
 # As variaveis sao TRAIN_RUN, EVAL_BPB e SRC_HASH.
 set -u
-[ "$#" -ge 7 ] || { echo "uso: bin/job_env D H KV L V C BUILD_DIR [simbolo:arquivo ...]"; exit 2; }
-D=$1; H=$2; KV=$3; L=$4; V=$5; C=$6; BD=$7; shift 7
+if [ "${1:-}" = "--build-dir" ]; then
+  BD=${2:-}; [ -n "$BD" ] || { echo "uso: bin/job_env --build-dir DIR"; exit 2; }
+  shift 2
+  N=$(basename "$BD")
+  D=$(printf '%s' "$N"  | sed -n 's/.*arch_d\([0-9]*\)_.*/\1/p')
+  H=$(printf '%s' "$N"  | sed -n 's/.*_h\([0-9]*\)_.*/\1/p')
+  KV=$(printf '%s' "$N" | sed -n 's/.*_kv\([0-9]*\)_.*/\1/p')
+  L=$(printf '%s' "$N"  | sed -n 's/.*_l\([0-9]*\)_.*/\1/p')
+  V=$(printf '%s' "$N"  | sed -n 's/.*_v\([0-9]*\)_.*/\1/p')
+  C=$(printf '%s' "$N"  | sed -n 's/.*_c\([0-9]*\).*/\1/p')
+  for X in D H KV L V C; do eval "Z=\$$X"
+    [ -n "$Z" ] || { echo "ARCH: nao li $X de '$N'"; exit 2; }; done
+else
+  [ "$#" -ge 7 ] || { echo "uso: bin/job_env D H KV L V C BUILD_DIR [simbolo:arquivo ...]"; exit 2; }
+  D=$1; H=$2; KV=$3; L=$4; V=$5; C=$6; BD=$7; shift 7
+fi
 cd "$(dirname "$0")/.." || exit 2
 
 # --commit SHA: fixa o commit antes de qualquer coisa
@@ -36,6 +55,16 @@ if [ -n "$WANT" ]; then
     echo "GIT: esta arvore nao e' um repo; --commit ignorado"; exit 2
   fi
 fi
+
+# 0. ARVORE PROIBIDA. A regra 1 do AGENTS.md: nunca escrever em src/build nem em
+# energy-fortran/build. Aqueles binarios sao dependencia de jobs agendados, e o
+# caminho e' resolvido so' no momento da execucao. Construir la' mata job na fila.
+case "$BD" in
+  src/build*|*/src/build*|energy-fortran/build*|*/energy-fortran/build*)
+    echo "RECUSO: $BD esta' na arvore PROIBIDA (AGENTS.md regra 1)."
+    echo "  Escolha outro build dir, por exemplo /tmp/<seu_nome>/bd."
+    exit 4;;
+esac
 
 # 1. PREFLIGHT
 for NEED in "$@"; do
