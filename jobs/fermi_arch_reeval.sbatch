@@ -18,13 +18,36 @@ export OMP_NUM_THREADS=4
 PY=.venv-numpy/bin/python3
 echo "archreeval job=${SLURM_JOB_ID} $(date '+%F %H:%M:%S')"
 printf "%-16s %-10s %-10s\n" "arm" "head_dim" "bpb"
+# Duas licoes que custaram o job 155 (2 de 6 bracos "eval failed"):
+
+#  1. NAO procurar binario por glob com `tail -1`. O glob build_h6_kv* casava
+#     com kv1 E kv2, e o ultimo alfabetico e' o kv2 -- entao os bracos kv=1
+#     foram avaliados com binario de kv=2 e o check de arch do loader abortou
+#     (com razao: a infraestrutura de identidade funcionou). O jeito certo e'
+#     LER o kv da propria checkpoint em arch.txt e pedir exatamente aquele.
+#  2. NAO engolir stderr com 2>/dev/null. A causa era uma linha de arch
+#     mismatch; escondida, virou "eval failed" e custou uma investigacao.
+
+N_OK=0; N_TOT=0
 for RUN in /tmp/aq/h*_s*/run/step_*; do
   [ -d "$RUN" ] || continue
+  N_TOT=$((N_TOT + 1))
   TAG=$(echo "$RUN" | sed 's|/tmp/aq/||; s|/run/.*||')
-  H=$(echo "$TAG" | sed 's|h\([0-9]*\)_.*|\1|')
-  EVB=$(ls /tmp/aq/build_h${H}_kv*/*/app/eval_bpb 2>/dev/null | tail -1)
-  [ -z "$EVB" ] && { printf "%-16s %-10s %-10s\n" "$TAG" "$((96/H))" "sem eval"; continue; }
-  B=$($PY scripts/eval_bpb_dir.py --eval "$EVB" --ckpt "$RUN" 2>/dev/null | tail -1)
-  printf "%-16s %-10s %-10s\n" "$TAG" "$((96/H))" "${B:-falhou}"
+  # o kv vem do PROPRIO checkpoint, nao de um glob
+  KVF=$(sed -n 's/.*n_kv *= *\([0-9]*\).*/\1/p' "$RUN/arch.txt" 2>/dev/null | head -1)
+  HF=$(sed -n 's/.*n_head *= *\([0-9]*\).*/\1/p' "$RUN/arch.txt" 2>/dev/null | head -1)
+  [ -z "$KVF" ] && { printf "%-16s %-10s %-10s\n" "$TAG" "?" "sem arch.txt"; continue; }
+  EVB=$(ls /tmp/aq/build_h${HF}_kv${KVF}/*/app/eval_bpb 2>/dev/null | tail -1)
+  [ -z "$EVB" ] && { printf "%-16s %-10s %-10s\n" "$TAG" "$((96/HF))" "sem binario eval"; continue; }
+  OUT=$($PY scripts/eval_bpb_dir.py --eval "$EVB" --ckpt "$RUN" 2>&1 | tail -1)
+  if [ -z "$OUT" ] || [ "${OUT#*[!0-9.]}" = "$OUT" ] && [ -n "${OUT//[0-9.]/}" ]; then
+    printf "%-16s %-10s %-10s\n" "$TAG" "$((96/HF))" "FALHOU: $OUT"
+  else
+    printf "%-16s %-10s %-10s\n" "$TAG" "$((96/HF))" "$OUT"
+    N_OK=$((N_OK + 1))
+  fi
 done
+# cobertura: uma tabela parcial nao pode passar por completa
+echo "cobertura: $N_OK de $N_TOT bracos avaliados"
+[ "$N_OK" -lt "$N_TOT" ] && { echo "INCOMPLETO: faltam $((N_TOT - N_OK))"; exit 4; }
 echo "fim archreeval $(date '+%F %H:%M:%S')"
