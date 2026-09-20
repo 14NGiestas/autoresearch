@@ -50,8 +50,21 @@ else
 fi
 echo "[build_arch] d=$D heads=$H kv=$KV layers=$L vocab=$V ctx=$C  (HD=$((D/H)))"
 echo "[build_arch] build: $BD"
-nix develop "${NIX_SHELL:-.#cpu-only}" --command bash -c \
-  "cd src && fortran-fpm build $REL $MODE --build-dir '$BD'" 2>&1 | tail -1 | sed 's/^/  /'
+# NAO esconder o erro com `| tail -1`. Foi assim que eu perdi tempo no
+# halfbeast: o build falhava (faltava a dependencia de caminho energy-fortran) e
+# o script so' dizia "nenhum dir app", sem causa. E pior: ele SEGUIA com codigo 0,
+# entao um build falho passava por sucesso. Agora: guarda a saida, e se o build
+# falhar, mostra as ultimas linhas do erro e sai 5.
+# `if ! ...` e' obrigatorio aqui: o script roda com set -e, entao uma atribuicao
+# que falha aborta ANTES da checagem (foi o que aconteceu na primeira tentativa:
+# rc=1 e nenhuma mensagem).
+if ! OUT=$(nix develop "${NIX_SHELL:-.#cpu-only}" --command bash -c \
+    "cd src && fortran-fpm build $REL $MODE --build-dir '$BD'" 2>&1); then
+  echo "[build_arch] BUILD FALHOU. Ultimas 12 linhas do erro:"
+  printf '%s\n' "$OUT" | tail -12 | sed 's/^/  /'
+  exit 5
+fi
+printf '%s\n' "$OUT" | tail -1 | sed 's/^/  /'
 
 # Publica os caminhos dos apps. O fpm guarda UMA configuracao por --build-dir
 # (passamos sempre um dir dedicado), entao "exatamente um diretorio de app" e' um
