@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # bin/job_env -- um lugar para o que TODO job precisa antes de rodar.
 #
-# Uso:  bin/job_env D H KV L V C BUILD_DIR [simbolo:arquivo ...]
+# Uso:  bin/job_env D H KV L V C BUILD_DIR [--commit SHA] [simbolo:arquivo ...]
+#
+# COM --commit: faz fetch do remoto local (~/autoresearch.git, que a fermi empurra
+# por ssh porque o halfbeast nao alcanca a fermi por causa do NAT) e faz checkout
+# do SHA pedido. Assim o job roda um commit EXATO e nao uma copia que envelheceu.
 #
 # O que ele faz, nesta ordem, e para alto em qualquer falha:
 #   1. PREFLIGHT: confere que a fonte tem os simbolos que o job usa. A copia de
@@ -21,6 +25,18 @@ set -u
 D=$1; H=$2; KV=$3; L=$4; V=$5; C=$6; BD=$7; shift 7
 cd "$(dirname "$0")/.." || exit 2
 
+# --commit SHA: fixa o commit antes de qualquer coisa
+WANT=""
+if [ "${1:-}" = "--commit" ]; then WANT=${2:-}; shift 2; fi
+if [ -n "$WANT" ]; then
+  if [ -d .git ]; then
+    git fetch -q "$(git config --get remote.hb.url || echo "$HOME/autoresearch.git")" 2>/dev/null || true
+    git checkout -q "$WANT" || { echo "GIT: nao consegui checkout $WANT"; exit 2; }
+  else
+    echo "GIT: esta arvore nao e' um repo; --commit ignorado"; exit 2
+  fi
+fi
+
 # 1. PREFLIGHT
 for NEED in "$@"; do
   PAT="${NEED%%:*}"; F="${NEED##*:}"
@@ -33,9 +49,13 @@ for NEED in "$@"; do
 done
 [ -x bin/build_arch ] || { echo "PREFLIGHT: bin/build_arch ausente"; exit 2; }
 
-# 2. HASH DA FONTE (sem depender de git)
-SRC_HASH=$(find src -type f \( -name '*.f90' -o -name '*.F90' -o -name '*.toml' \) \
-  -exec sha256sum {} + | sort -k2 | sha256sum | cut -c1-16)
+# 2. COMMIT: o sha do git quando ha' repo, senao um sha256 de src/
+if [ -d .git ]; then
+  SRC_HASH=$(git rev-parse --short=16 HEAD)
+else
+  SRC_HASH=$(find src -type f \( -name '*.f90' -o -name '*.F90' -o -name '*.toml' \) \
+    -exec sha256sum {} + | sort -k2 | sha256sum | cut -c1-16)
+fi
 
 # 3. BUILD
 LOG=$(bin/build_arch "$D" "$H" "$KV" "$L" "$V" "$C" "$BD" 2>&1) || {
