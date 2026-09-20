@@ -68,6 +68,7 @@ program test_kernels
   call test_qkhop_ph()
   call test_attn_sgemm()
   call test_attn_bwd_sgemm()
+  call test_attn_bwd_sgemm(2.0_sp)
   call test_corpus_golden()
   call test_arch()
   call test_valid_mask()
@@ -86,6 +87,7 @@ program test_kernels
   call test_rope_bwd()
   call test_xent()
   call test_attn_bwd()
+  call test_attn_bwd(2.0_sp)
   call test_relu2_bwd()
   call test_adamw()
   call test_muon_ns()
@@ -1086,7 +1088,7 @@ contains
   ! causal_attn, which is exactly what the analytic kernel must reproduce.
   ! Two cases: no GQA sharing (H == K_H, the tight-stride path) and a GQA
   ! group (H = 2*K_H) where dK/dV must accumulate across query heads.
-  subroutine test_attn_bwd_sgemm()
+  subroutine test_attn_bwd_sgemm(cap)
     integer, parameter :: B = 1, T = 4, DD = 4
     integer, parameter :: H = 4, KH = 2          ! rep = 2: GQA accumulation
     real(sp) :: q(B*T*H*DD), k(B*T*KH*DD), v(B*T*KH*DD), dy(B*T*H*DD)
@@ -1094,10 +1096,19 @@ contains
     real(sp) :: dq(B*T*H*DD), dk(B*T*KH*DD), dv(B*T*KH*DD)
     real(sp) :: Swork(T*T), dP(T*T), dS(T*T), dkv(2*T*KH*DD)
     real(sp), parameter :: HH = 1.0e-3_sp
-    real(sp) :: lp, lm, err, worst
+    real(sp) :: lp, lm, err, worst, hs, tol
+    real(sp) :: dq2(B*T*H*DD), dk2(B*T*KH*DD), dv2(B*T*KH*DD)
     integer :: i
+    real(sp), intent(in), optional :: cap
+    real(sp) :: cp
 
-    print '(A)', "=== test_attn_bwd_sgemm (finite differences, GQA H=4 K_H=2) ==="
+    cp = 0.0_sp
+    if (present(cap)) cp = cap
+    hs = HH
+    tol = 2.0e-3_sp
+    if (cp > 0.0_sp) tol = 4.0e-3_sp   ! piso de roundoff do FD em sp
+
+    print '(A,F6.2,A)', "=== test_attn_bwd_sgemm (FD, GQA H=4 K_H=2, cap=", cp, ") ==="
     call fill(q, B*T*H*DD, 0.5_sp)
     call fill(k, B*T*KH*DD, 0.5_sp)
     call fill(v, B*T*KH*DD, 0.5_sp)
@@ -1105,49 +1116,58 @@ contains
 
     dq = 0.0_sp; dk = 0.0_sp; dv = 0.0_sp
     call attn_bwd_sgemm(dy, q, k, v, dq, dk, dv, B, T, H, KH, DD, &
-        Swork, dP, dS, dkv)
+        Swork, dP, dS, dkv, cp)
 
     worst = 0.0_sp
     do i = 1, B*T*H*DD
-      qp = q; qp(i) = qp(i) + HH
-      call causal_attn(qp, k, v, y, B, T, H, KH, DD)
+      qp = q; qp(i) = qp(i) + hs
+      call causal_attn(qp, k, v, y, B, T, H, KH, DD, cp)
       lp = sum(dy*y)
-      qp = q; qp(i) = qp(i) - HH
-      call causal_attn(qp, k, v, y, B, T, H, KH, DD)
+      qp = q; qp(i) = qp(i) - hs
+      call causal_attn(qp, k, v, y, B, T, H, KH, DD, cp)
       lm = sum(dy*y)
-      err = abs((lp - lm)/(2.0_sp*HH) - dq(i))
+      err = abs((lp - lm)/(2.0_sp*hs) - dq(i))
       if (err > worst) worst = err
     end do
     print '(A,E10.3)', "  worst |dL/dq - dq| = ", worst
-    call check(worst < 2.0e-3_sp, "dQ matches finite differences")
+    call check(worst < tol, "dQ matches finite differences")
 
     worst = 0.0_sp
     do i = 1, B*T*KH*DD
-      kp = k; kp(i) = kp(i) + HH
-      call causal_attn(q, kp, v, y, B, T, H, KH, DD)
+      kp = k; kp(i) = kp(i) + hs
+      call causal_attn(q, kp, v, y, B, T, H, KH, DD, cp)
       lp = sum(dy*y)
-      kp = k; kp(i) = kp(i) - HH
-      call causal_attn(q, kp, v, y, B, T, H, KH, DD)
+      kp = k; kp(i) = kp(i) - hs
+      call causal_attn(q, kp, v, y, B, T, H, KH, DD, cp)
       lm = sum(dy*y)
-      err = abs((lp - lm)/(2.0_sp*HH) - dk(i))
+      err = abs((lp - lm)/(2.0_sp*hs) - dk(i))
       if (err > worst) worst = err
     end do
     print '(A,E10.3)', "  worst |dL/dk - dk| = ", worst
-    call check(worst < 2.0e-3_sp, "dK matches finite differences (GQA sum)")
+    call check(worst < tol, "dK matches finite differences (GQA sum)")
 
     worst = 0.0_sp
     do i = 1, B*T*KH*DD
-      vp = v; vp(i) = vp(i) + HH
-      call causal_attn(q, k, vp, y, B, T, H, KH, DD)
+      vp = v; vp(i) = vp(i) + hs
+      call causal_attn(q, k, vp, y, B, T, H, KH, DD, cp)
       lp = sum(dy*y)
-      vp = v; vp(i) = vp(i) - HH
-      call causal_attn(q, k, vp, y, B, T, H, KH, DD)
+      vp = v; vp(i) = vp(i) - hs
+      call causal_attn(q, k, vp, y, B, T, H, KH, DD, cp)
       lm = sum(dy*y)
-      err = abs((lp - lm)/(2.0_sp*HH) - dv(i))
+      err = abs((lp - lm)/(2.0_sp*hs) - dv(i))
       if (err > worst) worst = err
     end do
     print '(A,E10.3)', "  worst |dL/dv - dv| = ", worst
-    call check(worst < 2.0e-3_sp, "dV matches finite differences (GQA sum)")
+    call check(worst < tol, "dV matches finite differences (GQA sum)")
+
+    ! The sharp check: the naive backward and the BLAS backward are two
+    ! independent implementations of the same gradient, so they must agree,
+    ! cap included. This one has no finite-difference truncation error.
+    dq2 = 0.0_sp; dk2 = 0.0_sp; dv2 = 0.0_sp
+    call attn_bwd(dy, q, k, v, dq2, dk2, dv2, B, T, H, KH, DD, cp)
+    err = max(maxval(abs(dq - dq2)), max(maxval(abs(dk - dk2)), maxval(abs(dv - dv2))))
+    print '(A,E10.3)', "  |bwd blas - bwd naive| = ", err
+    call check(err < 1.0e-5_sp, "os dois backwards concordam (cap incluso)")
   end subroutine
 
   ! ------------------------------------------------------------------------
@@ -1764,7 +1784,7 @@ contains
 
   ! ------------------------------------------------------------------------
   ! attn_bwd (incl. GQA kv sharing) vs central FD of causal_attn.
-  subroutine test_attn_bwd()
+  subroutine test_attn_bwd(cap)
     integer, parameter :: BR = 1, TC = 3, HH = 2, K_H = 1, DD = 4
     real(sp), parameter :: H = 1.0e-3_sp
     real(sp) :: q(BR*TC*HH*DD), k(BR*TC*K_H*DD), v(BR*TC*K_H*DD)
@@ -1774,49 +1794,62 @@ contains
     real(sp) :: kp(BR*TC*K_H*DD), km(BR*TC*K_H*DD)
     real(sp) :: vp(BR*TC*K_H*DD), vm(BR*TC*K_H*DD)
     real(sp) :: yp(BR*TC*HH*DD), ym(BR*TC*HH*DD)
-    real(sp) :: e, max_err
+    real(sp) :: e, max_err, hs, tol
     integer :: i
+    real(sp), intent(in), optional :: cap
+    real(sp) :: cp
 
-    print '(A)', "=== test_attn_bwd (finite differences, GQA) ==="
+    cp = 0.0_sp
+    if (present(cap)) cp = cap
+    ! The finite difference here runs in single precision, so its floor is the
+    ! roundoff of the step, not the curvature. A smaller step makes it WORSE
+    ! (measured: 3.0e-3 at H=1e-3, 3.3e-3 at H/4). So the step stays, and the
+    ! tolerance follows the measurement. The sharp test of the capped gradient
+    ! is the cross-check in test_attn_bwd_sgemm, which has no finite difference.
+    hs = H
+    tol = 3.0e-3_sp
+    if (cp > 0.0_sp) tol = 6.0e-3_sp
+
+    print '(A,F6.2,A)', "=== test_attn_bwd (finite differences, GQA, cap=", cp, ") ==="
     call fill(q, BR*TC*HH*DD)
     call fill(k, BR*TC*K_H*DD)
     call fill(v, BR*TC*K_H*DD)
     call fill(dy, BR*TC*HH*DD)
 
     dq = 0.0_sp; dk = 0.0_sp; dv = 0.0_sp
-    call attn_bwd(dy, q, k, v, dq, dk, dv, BR, TC, HH, K_H, DD)
+    call attn_bwd(dy, q, k, v, dq, dk, dv, BR, TC, HH, K_H, DD, cp)
 
     max_err = 0.0_sp
     do i = 1, BR*TC*HH*DD
       qp = q; qm = q
-      qp(i) = qp(i) + H; qm(i) = qm(i) - H
-      call causal_attn(qp, k, v, yp, BR, TC, HH, K_H, DD)
-      call causal_attn(qm, k, v, ym, BR, TC, HH, K_H, DD)
-      e = abs(dq(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      qp(i) = qp(i) + hs; qm(i) = qm(i) - hs
+      call causal_attn(qp, k, v, yp, BR, TC, HH, K_H, DD, cp)
+      call causal_attn(qm, k, v, ym, BR, TC, HH, K_H, DD, cp)
+      e = abs(dq(i) - sum(dy*(yp-ym)) / (2.0_sp*hs))
       if (e > max_err) max_err = e
     end do
     print '(A,E10.3)', "  max err dq = ", max_err
-    call check(max_err < 3.0e-3_sp, "attn dq")
+    call check(max_err < tol, "attn dq")
 
     max_err = 0.0_sp
     do i = 1, BR*TC*K_H*DD
       kp = k; km = k
-      kp(i) = kp(i) + H; km(i) = km(i) - H
-      call causal_attn(q, kp, v, yp, BR, TC, HH, K_H, DD)
-      call causal_attn(q, km, v, ym, BR, TC, HH, K_H, DD)
-      e = abs(dk(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      kp(i) = kp(i) + hs; km(i) = km(i) - hs
+      call causal_attn(q, kp, v, yp, BR, TC, HH, K_H, DD, cp)
+      call causal_attn(q, km, v, ym, BR, TC, HH, K_H, DD, cp)
+      e = abs(dk(i) - sum(dy*(yp-ym)) / (2.0_sp*hs))
       if (e > max_err) max_err = e
     end do
     print '(A,E10.3)', "  max err dk = ", max_err
-    call check(max_err < 3.0e-3_sp, "attn dk")
+    call check(max_err < tol, "attn dk")
 
     max_err = 0.0_sp
     do i = 1, BR*TC*K_H*DD
       vp = v; vm = v
-      vp(i) = vp(i) + H; vm(i) = vm(i) - H
-      call causal_attn(q, k, vp, yp, BR, TC, HH, K_H, DD)
-      call causal_attn(q, k, vm, ym, BR, TC, HH, K_H, DD)
-      e = abs(dv(i) - sum(dy*(yp-ym)) / (2.0_sp*H))
+      vp(i) = vp(i) + hs; vm(i) = vm(i) - hs
+      call causal_attn(q, k, vp, yp, BR, TC, HH, K_H, DD, cp)
+      call causal_attn(q, k, vm, ym, BR, TC, HH, K_H, DD, cp)
+      e = abs(dv(i) - sum(dy*(yp-ym)) / (2.0_sp*hs))
       if (e > max_err) max_err = e
     end do
     print '(A,E10.3)', "  max err dv = ", max_err

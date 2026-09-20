@@ -18,19 +18,24 @@ module fortran_attn_mod
   use iso_c_binding
   use fortran_kinds_mod, only: wp
   use fortran_blas_mod, only: sgemm
+  use fortran_math_mod, only: fast_softcap, fast_softcap_deriv
   implicit none
 contains
 
   ! Causal scaled dot-product attention
   ! q, k, v: (B, T, H, D)  out: (B, T, H, D)
-  subroutine causal_attn(q, k, v, y, B, T, H, K_H, D)
+  ! cap > 0 applies the logit soft cap s = cap*tanh(s/cap) before the mask.
+  subroutine causal_attn(q, k, v, y, B, T, H, K_H, D, cap)
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in)  :: q(:), k(:), v(:)
     real(wp), intent(out) :: y(:)
+    real(wp), intent(in), optional :: cap
     integer :: aa, bb, cc, ss, dd, kb, rep
-    real(wp) :: scale, sm, inv, acc
+    real(wp) :: scale, sm, inv, acc, cp
     real(wp) :: sc(T), m, val
 
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(D, wp))
     rep = H / K_H   ! GQA group size: q head bb attends kv head (bb-1)/rep + 1
 
@@ -46,7 +51,7 @@ contains
               acc = acc + q(((aa-1)*T + (cc-1))*H*D + (bb-1)*D + dd) &
                          * k(((aa-1)*T + (ss-1))*K_H*D + (kb-1)*D + dd)
             end do
-            sc(ss) = acc * scale
+            sc(ss) = fast_softcap(acc*scale, cp)
             if (sc(ss) > m) m = sc(ss)
           end do
           sm = 0.0_wp
@@ -76,15 +81,18 @@ contains
   ! causal pairs are within-document). docstart is (B,T) flat, 1-based.
   ! With docstart == 1 everywhere this must equal causal_attn bit-exactly
   ! (same accumulation order), which is what test_causal_attn_doc asserts.
-  subroutine causal_attn_doc(q, k, v, y, B, T, H, K_H, D, docstart)
+  subroutine causal_attn_doc(q, k, v, y, B, T, H, K_H, D, docstart, cap)
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in)  :: q(:), k(:), v(:)
     integer(c_int), intent(in) :: docstart(:)
     real(wp), intent(out) :: y(:)
+    real(wp), intent(in), optional :: cap
     integer :: aa, bb, cc, ss, dd, kb, rep, s0
-    real(wp) :: scale, sm, inv, acc
+    real(wp) :: scale, sm, inv, acc, cp
     real(wp) :: sc(T), m
 
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(D, wp))
     rep = H / K_H
 
@@ -101,7 +109,7 @@ contains
               acc = acc + q(((aa-1)*T + (cc-1))*H*D + (bb-1)*D + dd) &
                          * k(((aa-1)*T + (ss-1))*K_H*D + (kb-1)*D + dd)
             end do
-            sc(ss) = acc * scale
+            sc(ss) = fast_softcap(acc*scale, cp)
             if (sc(ss) > m) m = sc(ss)
           end do
           sm = 0.0_wp
@@ -140,15 +148,18 @@ contains
   ! Per (batch, head): S is a (T,T) scratch the caller owns and we reuse.
   ! Summation order differs from causal_attn, so expect ~1e-6 drift, not bit
   ! equality (asserted in test_attn_sgemm).
-  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S)
+  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap)
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in)  :: q(:), k(:), v(:)
     real(wp), intent(out) :: y(:)
     real(wp), intent(inout) :: S(:)          ! (T,T) scratch
+    real(wp), intent(in), optional :: cap
     integer :: aa, bb, kb, rep, ii, jj
     integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
-    real(wp) :: scale, mx, sm, inv
+    real(wp) :: scale, mx, sm, inv, cp
 
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(D, wp))
     rep = H / K_H
 
@@ -167,6 +178,8 @@ contains
         do ii = 1, T
           mx = -huge(1.0_wp)
           do jj = 1, ii
+            ! cap before the mask: a masked position must not reach the softmax
+            S((ii-1)*T + jj) = fast_softcap(S((ii-1)*T + jj), cp)
             if (S((ii-1)*T + jj) > mx) mx = S((ii-1)*T + jj)
           end do
           sm = 0.0_wp
@@ -197,15 +210,18 @@ contains
   ! q: (B, H, D) current query (already RoPE'd)  K, V: (B, Tc, K_H, D)
   ! y: (B, H, D). No causal mask: the cache holds only past positions.
   ! Must match causal_attn's last row bit-exactly (same op order).
-  subroutine attn_step(q, K, V, y, BB, HH, K_HH, DD, TC)
+  subroutine attn_step(q, K, V, y, BB, HH, K_HH, DD, TC, cap)
     integer(c_int), intent(in) :: BB, HH, K_HH, DD, TC
     real(wp), intent(in)  :: q(:)
     real(wp), intent(in)  :: K(:), V(:)
     real(wp), intent(out) :: y(:)
+    real(wp), intent(in), optional :: cap
     integer :: ia, ib, ss, id, kb, rep
-    real(wp) :: scale, sm, inv, acc
+    real(wp) :: scale, sm, inv, acc, cp
     real(wp) :: sc(TC), m
 
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(DD, wp))
     rep = HH / K_HH
 
@@ -220,7 +236,7 @@ contains
             acc = acc + q(((ia-1)*HH + (ib-1))*DD + id) &
                        * K(((ia-1)*TC + (ss-1))*K_HH*DD + (kb-1)*DD + id)
           end do
-          sc(ss) = acc * scale
+          sc(ss) = fast_softcap(acc*scale, cp)
           if (sc(ss) > m) m = sc(ss)
         end do
         sm = 0.0_wp
@@ -253,15 +269,18 @@ contains
   !   TCPREV=0      -> causal_attn on the same rows (same op order)
   ! This is the prefill/spec-verify kernel: chunked passes replace one call
   ! per token, turning T=1 GEMVs into T=TB GEMMs at identical semantics.
-  subroutine attn_chunk(q, K, V, y, BB, HH, K_HH, DD, TC_PREV, TB)
+  subroutine attn_chunk(q, K, V, y, BB, HH, K_HH, DD, TC_PREV, TB, cap)
     integer(c_int), intent(in) :: BB, HH, K_HH, DD, TC_PREV, TB
     real(wp), intent(in)  :: q(:)
     real(wp), intent(in)  :: K(:), V(:)
     real(wp), intent(out) :: y(:)
+    real(wp), intent(in), optional :: cap
     integer :: ia, iq, ib, nvalid, ss, id, kb, rep
-    real(wp) :: scale, sm, inv, acc, m
+    real(wp) :: scale, sm, inv, acc, m, cp
     real(wp) :: sc(TC_PREV + TB)
 
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(DD, wp))
     rep = HH / K_HH
 
@@ -278,7 +297,7 @@ contains
               acc = acc + q(((ia-1)*TB + (iq-1))*HH*DD + (ib-1)*DD + id) &
                   * K(((ss-1)*K_HH + (kb-1))*DD + id)
             end do
-            sc(ss) = acc * scale
+            sc(ss) = fast_softcap(acc*scale, cp)
             if (sc(ss) > m) m = sc(ss)
           end do
           sm = 0.0_wp
@@ -340,21 +359,24 @@ contains
   !   dk_{i,d} += ds_i * q_d / sqrt(D)
   ! dq positions are unique per (b,h,t) (plain writes); kv heads are
   ! shared across each GQA group, so dk/dv use atomics.
-  subroutine attn_bwd(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD)
+  subroutine attn_bwd(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, cap)
     integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
     real(wp), intent(in)  :: dy(:)
     real(wp), intent(in)  :: q(:)
     real(wp), intent(in)  :: k(:), v(:)
     real(wp), intent(out) :: dq(:)
     real(wp), intent(inout) :: dk(:), dv(:)
+    real(wp), intent(in), optional :: cap
     integer :: ia, ib, ic, ss, id, kb, rep
-    real(wp) :: scale, sm, ssum, acc, ds
-    real(wp) :: sc(TT), dpv(TT), m
+    real(wp) :: scale, sm, ssum, acc, ds, cp
+    real(wp) :: sc(TT), dpv(TT), dcv(TT), m
 
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(DD, wp))
     rep = HH / K_HH
 
-    !$omp parallel do collapse(2) private(ia, ib, ic, ss, id, kb, sc, dpv, &
+    !$omp parallel do collapse(2) private(ia, ib, ic, ss, id, kb, sc, dpv, dcv, &
     !$omp& m, sm, ssum, acc, ds)
     do ia = 1, BB
       do ib = 1, HH
@@ -368,7 +390,9 @@ contains
               acc = acc + q(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) &
                          * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
             end do
-            sc(ss) = acc * scale
+            sc(ss) = fast_softcap(acc*scale, cp)
+            ! the score array becomes p below, so keep the cap derivative now
+            dcv(ss) = fast_softcap_deriv(sc(ss), cp)
             if (sc(ss) > m) m = sc(ss)
           end do
           sm = 0.0_wp
@@ -394,7 +418,7 @@ contains
           do id = 1, DD
             acc = 0.0_wp
             do ss = 1, ic
-              ds = sc(ss) * (dpv(ss) - ssum)
+              ds = sc(ss) * (dpv(ss) - ssum) * dcv(ss)
               acc = acc + ds * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
               !$omp atomic
               dk(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) = &
@@ -421,7 +445,7 @@ contains
   ! applies forward. With docstart == 1 everywhere this agrees with attn_bwd
   ! to ~1e-6 under -ffast-math (same codegen caveat as the forward pair:
   ! bit-exact without fast-math). FD-verified by test_attn_bwd_doc.
-  subroutine attn_bwd_doc(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, docstart)
+  subroutine attn_bwd_doc(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, docstart, cap)
     integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
     real(wp), intent(in)  :: dy(:)
     real(wp), intent(in)  :: q(:)
@@ -429,15 +453,18 @@ contains
     real(wp), intent(out) :: dq(:)
     real(wp), intent(inout) :: dk(:), dv(:)
     integer(c_int), intent(in) :: docstart(:)
+    real(wp), intent(in), optional :: cap
     integer :: ia, ib, ic, ss, id, kb, rep, s0
-    real(wp) :: scale, sm, ssum, acc, ds
-    real(wp) :: sc(TT), dpv(TT), m
+    real(wp) :: scale, sm, ssum, acc, ds, cp
+    real(wp) :: sc(TT), dpv(TT), dcv(TT), m
 
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(DD, wp))
     rep = HH / K_HH
 
     !$omp parallel do collapse(2) private(ia, ib, ic, ss, id, kb, s0, sc, dpv, &
-    !$omp& m, sm, ssum, acc, ds)
+    !$omp& dcv, m, sm, ssum, acc, ds)
     do ia = 1, BB
       do ib = 1, HH
         kb = (ib - 1) / rep + 1
@@ -451,7 +478,8 @@ contains
               acc = acc + q(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) &
                          * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
             end do
-            sc(ss) = acc * scale
+            sc(ss) = fast_softcap(acc*scale, cp)
+            dcv(ss) = fast_softcap_deriv(sc(ss), cp)
             if (sc(ss) > m) m = sc(ss)
           end do
           sm = 0.0_wp
@@ -477,7 +505,7 @@ contains
           do id = 1, DD
             acc = 0.0_wp
             do ss = s0, ic
-              ds = sc(ss) * (dpv(ss) - ssum)
+              ds = sc(ss) * (dpv(ss) - ssum) * dcv(ss)
               acc = acc + ds * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
               !$omp atomic
               dk(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) = &
@@ -545,16 +573,19 @@ contains
   ! out explicitly. Scratch (caller-owned, reused across layers):
   !   SP, dPbuf, dSbuf : (TT*TT), dkv: (2*TT*K_HH*DD) for the dK/dV accumulators.
   subroutine attn_bwd_sgemm(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, &
-       SP, dPbuf, dSbuf, dkv)
+       SP, dPbuf, dSbuf, dkv, cap)
     integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
     real(wp), intent(in)  :: dy(:), q(:), k(:), v(:)
     real(wp), intent(out) :: dq(:)
     real(wp), intent(inout) :: dk(:), dv(:)
     real(wp), intent(inout) :: SP(:), dPbuf(:), dSbuf(:), dkv(:)
+    real(wp), intent(in), optional :: cap
     integer :: ia, kb, ib, ii, jj
     integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
-    real(wp) :: scale, mx, sm, inv, rowsum
+    real(wp) :: scale, mx, sm, inv, rowsum, cp
 
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(DD, wp))
 
     do ia = 1, BB
@@ -567,7 +598,16 @@ contains
           end do
         end do
         do ib = (kb-1)*(HH/K_HH) + 1, kb*(HH/K_HH)
-          ! ---- P = softmax(scale*Q K^T) with the causal mask (row-major) ----
+          ! ---- dP = dY V^T ----  (independent of P: computed first, so that
+          ! dSbuf is free to hold the capped scores for the derivative below)
+          m = int(TT, c_int64_t); n = int(TT, c_int64_t); kk = int(DD, c_int64_t)
+          lda = int(K_HH*DD, c_int64_t); ldb = int(HH*DD, c_int64_t)
+          ldc = int(TT, c_int64_t)
+          call sgemm('T', 'N', m, n, kk, 1.0_wp, &
+               v((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, &
+               dy((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldb, &
+               0.0_wp, dPbuf, ldc)
+          ! ---- P = softmax(cap(scale*Q K^T)) with the causal mask (row-major) ----
           m = int(TT, c_int64_t); n = int(TT, c_int64_t); kk = int(DD, c_int64_t)
           lda = int(K_HH*DD, c_int64_t); ldb = int(HH*DD, c_int64_t)
           ldc = int(TT, c_int64_t)
@@ -578,6 +618,9 @@ contains
           do ii = 1, TT
             mx = -huge(1.0_wp)
             do jj = 1, ii
+              ! cap before the mask: a masked position must not reach the softmax
+              SP((ii-1)*TT + jj) = fast_softcap(SP((ii-1)*TT + jj), cp)
+              dSbuf((ii-1)*TT + jj) = SP((ii-1)*TT + jj)   ! kept for the derivative
               if (SP((ii-1)*TT + jj) > mx) mx = SP((ii-1)*TT + jj)
             end do
             sm = 0.0_wp
@@ -600,15 +643,7 @@ contains
           call sgemm('N', 'T', m, n, kk, 1.0_wp, &
                dy((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), lda, SP, ldb, &
                1.0_wp, dkv(TT*K_HH*DD + (kb-1)*DD + 1:), ldc)
-          ! ---- dP = dY V^T ----
-          m = int(TT, c_int64_t); n = int(TT, c_int64_t); kk = int(DD, c_int64_t)
-          lda = int(K_HH*DD, c_int64_t); ldb = int(HH*DD, c_int64_t)
-          ldc = int(TT, c_int64_t)
-          call sgemm('T', 'N', m, n, kk, 1.0_wp, &
-               v((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, &
-               dy((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldb, &
-               0.0_wp, dPbuf, ldc)
-          ! ---- softmax backward -> dS (masked), staged in dSbuf ----
+          ! ---- softmax backward -> dS (masked, with the cap derivative) ----
           do ii = 1, TT
             rowsum = 0.0_wp
             do jj = 1, ii
@@ -616,7 +651,8 @@ contains
             end do
             do jj = 1, ii
               dSbuf((ii-1)*TT + jj) = SP((ii-1)*TT + jj) &
-                  * (dPbuf((ii-1)*TT + jj) - rowsum)
+                  * (dPbuf((ii-1)*TT + jj) - rowsum) &
+                  * fast_softcap_deriv(dSbuf((ii-1)*TT + jj), cp)
             end do
             do jj = ii + 1, TT
               dSbuf((ii-1)*TT + jj) = 0.0_wp

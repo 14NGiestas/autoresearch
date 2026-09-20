@@ -23,7 +23,7 @@ module fortran_math_mod
   implicit none
   private
 
-  public :: fast_tanh, fast_softcap
+  public :: fast_tanh, fast_softcap, fast_softcap_deriv
 
   real(wp), parameter :: SAT = 5.0_wp
 
@@ -57,5 +57,20 @@ contains
       y = cap*fast_tanh(x/cap)
     end if
   end function fast_softcap
+
+  ! The derivative of the soft cap, given the CAPPED value s = cap*tanh(x/cap).
+  !   d/dx [cap*tanh(x/cap)] = 1 - tanh(x/cap)^2 = 1 - (s/cap)^2
+  ! The backward already holds the capped value, so no second tanh call is
+  ! needed. A cap of 0 or less gives 1, which leaves the gradient untouched.
+  elemental function fast_softcap_deriv(s_capped, cap) result(d)
+    real(wp), intent(in) :: s_capped, cap
+    real(wp) :: d, t
+    if (cap <= 0.0_wp) then
+      d = 1.0_wp
+    else
+      t = s_capped/cap
+      d = 1.0_wp - t*t
+    end if
+  end function fast_softcap_deriv
 
 end module fortran_math_mod
