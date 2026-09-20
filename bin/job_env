@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# bin/job_env -- um lugar para o que TODO job precisa antes de rodar.
+#
+# Uso:  bin/job_env D H KV L V C BUILD_DIR [simbolo:arquivo ...]
+#
+# O que ele faz, nesta ordem, e para alto em qualquer falha:
+#   1. PREFLIGHT: confere que a fonte tem os simbolos que o job usa. A copia de
+#      uma maquina remota envelhece em silencio, e um train_run velho imprime a
+#      tabela de argumentos e sai sem dizer por que.
+#   2. HASH DA FONTE: grava um sha256 do conteudo de src/. E' o "commit-especifico"
+#      que funciona aqui, porque nao ha' git clone nas maquinas remotas e o repo
+#      nao esta' publicado. Todo log passa a dizer QUAL fonte rodou.
+#   3. BUILD: chama bin/build_arch, que constroi com fpm e publica o caminho.
+#   4. CAMINHO: sai da linha publicada pelo builder. NUNCA de glob com tail -1,
+#      que foi o que quebrou o job 155.
+#
+# Escreve $BUILD_DIR/job_env.sh, que o job carrega com `. "$BD/job_env.sh"`.
+# As variaveis sao TRAIN_RUN, EVAL_BPB e SRC_HASH.
+set -u
+[ "$#" -ge 7 ] || { echo "uso: bin/job_env D H KV L V C BUILD_DIR [simbolo:arquivo ...]"; exit 2; }
+D=$1; H=$2; KV=$3; L=$4; V=$5; C=$6; BD=$7; shift 7
+cd "$(dirname "$0")/.." || exit 2
+
+# 1. PREFLIGHT
+for NEED in "$@"; do
+  PAT="${NEED%%:*}"; F="${NEED##*:}"
+  if [ ! -f "$F" ]; then echo "PREFLIGHT: $F nao existe"; exit 2; fi
+  if ! grep -q "$PAT" "$F"; then
+    echo "PREFLIGHT FALHOU: $F nao tem '$PAT'"
+    echo "  A fonte desta maquina esta' velha. Rode o rsync de src/ e bin/."
+    exit 2
+  fi
+done
+[ -x bin/build_arch ] || { echo "PREFLIGHT: bin/build_arch ausente"; exit 2; }
+
+# 2. HASH DA FONTE (sem depender de git)
+SRC_HASH=$(find src -type f \( -name '*.f90' -o -name '*.F90' -o -name '*.toml' \) \
+  -exec sha256sum {} + | sort -k2 | sha256sum | cut -c1-16)
+
+# 3. BUILD
+LOG=$(bin/build_arch "$D" "$H" "$KV" "$L" "$V" "$C" "$BD" 2>&1) || {
+  echo "$LOG" | tail -12; echo "BUILD FALHOU"; exit 3; }
+
+# 4. CAMINHO PUBLICADO
+TR=$(printf '%s\n' "$LOG" | sed -n 's/^\[build_arch\] app train_run //p')
+EV=$(printf '%s\n' "$LOG" | sed -n 's/^\[build_arch\] app eval_bpb //p')
+[ -n "$TR" ] || { echo "BUILD nao publicou train_run"; exit 3; }
+
+mkdir -p "$BD"
+{
+  echo "SRC_HASH=$SRC_HASH"
+  echo "TRAIN_RUN=$TR"
+  echo "EVAL_BPB=$EV"
+} > "$BD/job_env.sh"
+echo "SRC_HASH $SRC_HASH"
+echo "BIN train_run $TR"
+[ -n "$EV" ] && echo "BIN eval_bpb $EV"
+exit 0
