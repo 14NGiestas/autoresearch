@@ -33,6 +33,8 @@ import argparse
 import os
 import sys
 
+import numpy as np
+
 # ---------------------------------------------------------------- MEDIDO
 MEASURED = {
     "tok_s_1worker_omp8": 853.0,     # archhead/sweep: 1024 tokens / 1.20 s (1 worker)
@@ -158,6 +160,76 @@ def main():
           % ("+ composicao (= hoje)", tf, acc * tf, years, nodes))
     print("\n  [fechamento] inicio %.1f nos -> hoje %.1f nos  =  ganho x%.0f"
           % (n_start, n_now, n_start / n_now))
+
+    # ---- Quality: the slice that the data can hold --------------------------
+    # A quality manifold needs at least two independent axes. We have exactly one
+    # size (d96 = 2.75M) with a measured bpb: the scaling curves are all d96, and
+    # the d768 checkpoints hold 3 steps each (smoke tests, no quality). So this
+    # section fits the TOKENS axis only and reports the result as a band.
+    #
+    # The band is the honest form. Our own epochs experiment showed that alpha is
+    # not identifiable in this range: 1.5 decades of tokens with a jitter of
+    # 0.017 bpb. A single exponent would be a false precision.
+    def admissible(pts, t_ref, tol=0.02):
+        """The set of fits L = E + A*t^-alpha that the points admit.
+
+        For each floor E on a grid, and each alpha on a grid, A comes from a least
+        squares fit in log space. A fit is admissible when its largest relative
+        error stays under tol. The set of admissible fits gives the band: it is a
+        statement about what the data cannot tell apart, and not a measurement
+        error.
+        """
+        t = np.array([q[0] for q in pts], float)
+        l = np.array([q[1] for q in pts], float)
+        ok = np.isfinite(l)
+        t, l = t[ok], l[ok]
+        if len(t) < 8:
+            return []
+        out = []
+        for e in np.linspace(0.60 * l.min(), l.min() - 0.01, 25):
+            for al in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
+                r = l - e
+                if (r <= 0).any():
+                    continue
+                a = float(np.exp(np.mean(np.log(r) + al * np.log(t))))
+                pred = e + a * t ** (-al)
+                if np.max(np.abs(pred - l) / l) <= tol:
+                    out.append((e, al, float(e + a * t_ref ** (-al))))
+        return out
+
+    curves = []
+    for f in ("/tmp/scal_curve.npy", "/tmp/scal65_curve.npy", "/tmp/scal65_1k_curve.npy"):
+        try:
+            curves.append((os.path.basename(f), np.load(f)))
+        except OSError:
+            pass
+    if curves:
+        print("\n=== QUALIDADE (fatia d96; o eixo TAMANHO esta' vazio)")
+        print("  Cada curva e' um EXPERIMENTO distinto (niveis diferentes no mesmo")
+        print("  token count), entao o ajuste e' por curva. A faixa e' o conjunto de")
+        print("  leis que os dados admitem com erro <= 2%.")
+        for name, pts in curves:
+            n = len(pts)
+            line = []
+            for t_ref in (2e6, 1e7):
+                adm = admissible(pts, t_ref)
+                if adm:
+                    vals = [v for _, _, v in adm]
+                    line.append("%.1fM: %.3f-%.3f" % (t_ref / 1e6, min(vals), max(vals)))
+            if line:
+                print("  %-24s %2d pontos  %s" % (name, n, "  |  ".join(line)))
+            else:
+                print("  %-24s %2d pontos  sem ajuste admissivel (queda e plato, ou NaN)"
+                      % (name, n))
+        adm = admissible(curves[0][1], 1e7)
+        if adm:
+            alphas = sorted(set(al for _, al, _ in adm))
+            print("  (a curva de referencia admite alpha de %.1f a %.1f -- largura de"
+                  % (alphas[0], alphas[-1]))
+            print("   familia, nao erro de medida; jitter do holdout e' +-0.017)")
+        print("  Deslocamento medido (a receita, mesmo wall-clock): reset + outer = -0.168")
+        print("  bpb em 2 sorteios. O efeito de head_dim sai no job 154.")
+        print("  O eixo TAMANHO precisa de ~3 dias de fila para existir.")
 
     # ---- The largest model for a given time, for any budget ----------------
     # The budget of FLOPs fixes the largest model. A model of P parameters needs
