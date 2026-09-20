@@ -30,6 +30,7 @@ Este pacote é o `src/` (`src/fpm.toml`, fpm 0.13).
 | `fortran_sys.f90` | `mkdir_p`, `dir_exists`, `exit` |
 | `load_weights.f90` | checkpoints safetensors: pesos, estado do otimizador, metadata de arch, **card de energia** e linhagem |
 | `tokenizer_tables.f90`, `tokenizer_encode.f90` | BPE em Fortran puro (tabelas exportadas por `scripts/export_tokenizer.py`) |
+| `fortran_texture.f90` | **caracterização de textura em Fortran puro, sobre bytes**: alpha, byte_alto, palavra_plausivel, distinct-1/2/3, laço/rep + a ESCADA (chão de bytes → gerador usável → raciocinador) |
 
 ## Apps (`src/app/`)
 
@@ -93,6 +94,29 @@ em fila/execução vão usar (os binários são resolvidos no momento da execuç
 Dependências: `stdlib` (registry), `openmp`, `safetensors` (git, tag `v0.1.2`),
 `M_CLI2` (git, **commit** `0704ed3`: a tag V3.2.0 difere em 1109 linhas do que
 estava vendado), `fortran_energy` (path — vira git quando for publicado).
+
+## Textura: o checkpoint se descrevendo
+
+`fortran_texture_mod` mede a textura **sobre bytes** (caractere = byte via
+`iachar`; decodificar antes de medir introduz juízo de valor e muda o painel) e
+`app/texture_scan.f90` aplica a um arquivo:
+
+```bash
+bin/fbuild && ./build/*/app/texture_scan AMOSTRA.txt --json T --key texture
+```
+
+A régua é **calibrada nos controles deste repo** (ver `test_texture.f90`, que
+testa as invariantes): prosa real `palavra_plausivel` ~0,95 e `byte_alto` ~0,005;
+modelo 3M treinado (2,33 bpb) **0,20 e 0,146 → degrau 1 (chão de bytes)**.
+`distinct_2` é invertido (salada tem mais, porque não tem a redundância da
+língua), e `maior_laco`/`rep_frac` só contam n-gramas não-brancos (senão linha de
+separador de markdown vira "laço").
+
+A saída JSON é a mesma linha que deve ir para o `__metadata__` do checkpoint
+(`texture.*`), para o card dizer **de antemão** o que o modelo é. Integração
+pendente: o gerador hoje vive dentro de `app/repl.f90` (programa), então falta
+extrair a geração para um módulo e ter um app que amostra o próprio checkpoint e
+grava a textura no card.
 
 ## Identidade da arquitetura (P1/P2 feitos; P3/P4 pendentes)
 
