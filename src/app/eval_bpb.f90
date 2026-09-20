@@ -153,7 +153,7 @@ program eval_bpb
 
     ! per-position NLL in nats: logsumexp(logits) - logit[target].
     ! Rows are independent: parallel over batch, print serially in order.
-    !$omp parallel do private(r, tc, tgt, m, s, j) schedule(static)
+    !$omp parallel do private(r, tc, tgt, m, s, j, base) schedule(static)
     do r = 1, nb
       base = (r-1)*TT*VV
       do tc = 1, TT

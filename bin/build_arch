@@ -61,8 +61,12 @@ nix develop "${NIX_SHELL:-.#cpu-only}" --command bash -c \
 APPS=$(ls -d "$BD"/*/app 2>/dev/null | grep . || true)
 N=$(printf '%s' "$APPS" | grep -c . || true)
 if [ "$N" = "1" ]; then
-  for APP in arch_id train_run eval_bpb merge_ckpt; do
-    [ -x "$APPS/$APP" ] && echo "[build_arch] app $APP $APPS/$APP"
+  # Publica TODOS os executaveis do dir app, nao uma lista fixa: uma lista fixa
+  # esqueceu o repl, e esquecer e' a mesma doenca do glob (o consumidor adivinha).
+  for P in "$APPS"/*; do
+    [ -x "$P" ] || continue
+    case "$P" in *.o|*.mod|*.smod) continue ;; esac
+    echo "[build_arch] app $(basename "$P") $P"
   done
 elif [ "$N" = "0" ]; then
   echo "[build_arch] nenhum dir app em $BD (build falhou?)"
