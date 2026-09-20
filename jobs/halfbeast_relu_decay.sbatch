@@ -31,7 +31,7 @@ for FN in softmax relu; do
   echo "--- braco $FN"
   bin/env_record "antes de $FN"
   OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 OMP_DYNAMIC=FALSE \
-    "$TRAIN_RUN" --weights $D/init3m --rows $D/rows_f0.npy \
+    "$TRAIN_RUN" --weights $D/init3m --rows $D/rows_f0.npy --holdout $D/rows_holdout.npy \
     --out /tmp/decay/$FN --nsteps 900 --lr 6e-4 --ntrain 11797 --start_row 0 \
     --nval 5 --val_every 100 --trn_probe 200 --save_every 900 --keep_last 1 \
     --attn blas --batch 1 --bytes "$BY" --attn-fn $FN
