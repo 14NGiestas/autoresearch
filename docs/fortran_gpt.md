@@ -1,205 +1,195 @@
-# fortran_gpt — a biblioteca (o que tem dentro, como se usa)
+# fortran_gpt — the library
 
-Pilha de GPT em **Fortran puro, CPU-only, sem Python e sem torch** em nenhum
-caminho de execução: forward/backward, laço de treino, KV/generação,
-checkpoints safetensors e energia/CPU/IO **medidos pelo próprio processo**.
-Este pacote é o `src/` (`src/fpm.toml`, fpm 0.13).
+This package is a GPT stack in pure Fortran for a CPU. It holds no Python and no
+torch in any path of execution. It holds the forward pass, the backward pass, the
+training loop, the KV cache and generation, safetensors checkpoints, and energy,
+CPU, and IO measured by the process itself.
 
-## Módulos (`src/lib/`)
+The package is `src/`, with `src/fpm.toml` and fpm 0.13.
 
-| módulo | o que é |
+## Modules in `src/lib/`
+
+| module | what it does |
 |---|---|
-| `fortran_arch.f90` | **a arquitetura em um lugar só** (D_MODEL, N_HEAD, N_KV, HD, N_LAYER, VV, TT, BOS) + `write_arch_txt`/`read_arch_txt`/`require_arch`/`check_shape` |
-| `fortran_kinds.f90` | `wp = real32` (trocar para real64 num só lugar) |
-| `fortran_blas.f90` | interface BLAS (atenção: o OpenBLAS do nix é **ILP64**) |
-| `fortran_linear.f90` | `linear3d`, `wte_lookup` |
-| `fortran_rmsnorm.f90`, `fortran_rope.f90` | RMSNorm, RoPE |
-| `fortran_attn.f90` | atenção causal (naive + `sgemm`) |
-| `fortran_gpt.f90` | forward |
-| `fortran_backward.f90` | backward (gradientes) |
-| `fortran_train.f90` | passo de treino (fwd+bwd+update) e val bpb |
-| `fortran_adamw.f90`, `fortran_adam_state.f90` | AdamW e estado do otimizador (save/load) |
-| `fortran_muon.f90` | Muon (ortogonalização Newton–Schulz) |
-| `fortran_qkhop.f90` | QK-hop (experimentos de roteamento) |
-| `fortran_kv.f90` | cache KV, `gpt_step` (decode incremental) |
-| `fortran_spec.f90` | decode especulativo (drafter por lookup) |
-| `fortran_recurrent.f90` | passes recorrentes (`--loops`) |
-| `sample.f90` | amostragem (temperatura, top-k, penalidades) |
-| `fortran_data.f90` | leitura/batching de linhas |
-| `fortran_chat.f90` | template/formação de chat |
-| `fortran_sys.f90` | `mkdir_p`, `dir_exists`, `exit` |
-| `load_weights.f90` | checkpoints safetensors: pesos, estado do otimizador, metadata de arch, **card de energia** e linhagem |
-| `tokenizer_tables.f90`, `tokenizer_encode.f90` | BPE em Fortran puro (tabelas exportadas por `scripts/export_tokenizer.py`) |
-| `fortran_texture.f90` | **caracterização de textura em Fortran puro, sobre bytes**: alpha, byte_alto, palavra_plausivel, distinct-1/2/3, laço/rep + a ESCADA (chão de bytes → gerador usável → raciocinador) |
+| `fortran_arch.f90` | **the arch in one place**: D_MODEL, N_HEAD, N_KV, HD, N_LAYER, VV, TT, BOS, plus `write_arch_txt`, `read_arch_txt`, `require_arch`, `check_shape`, `arch_canonical`, and `arch_id` |
+| `fortran_kinds.f90` | `wp = real32`, and one line changes it to real64 |
+| `fortran_blas.f90` | the BLAS interface. The OpenBLAS of the nix store is **ILP64** |
+| `fortran_linear.f90` | `linear3d` and `wte_lookup` |
+| `fortran_rmsnorm.f90`, `fortran_rope.f90` | RMSNorm and RoPE |
+| `fortran_attn.f90` | causal attention, naive and with `sgemm` |
+| `fortran_gpt.f90` | the forward pass |
+| `fortran_backward.f90` | the backward pass |
+| `fortran_train.f90` | one training step, and the validation bpb |
+| `fortran_adamw.f90`, `fortran_adam_state.f90` | AdamW and the optimizer state |
+| `fortran_muon.f90` | Muon, with Newton-Schulz orthogonalization |
+| `fortran_qkhop.f90` | QK-hop, for the routing experiments |
+| `fortran_kv.f90` | the KV cache and `gpt_step`, for incremental decode |
+| `fortran_spec.f90` | speculative decode with a lookup drafter |
+| `fortran_recurrent.f90` | the recurrent passes, through `--loops` |
+| `sample.f90` | sampling: temperature, top-k, and penalties |
+| `fortran_data.f90` | the rows and the batches. It checks the header of an npy file |
+| `fortran_chat.f90` | the chat template |
+| `fortran_sys.f90` | `mkdir_p`, `dir_exists`, and `exit` |
+| `load_weights.f90` | safetensors checkpoints: weights, optimizer state, arch metadata, the energy card, the lineage, and `read_arch_any` |
+| `fortran_probe.f90` | **the machine probe**: bandwidth, latency, and joules for each memory level. It knows nothing about a model |
+| `fortran_texture.f90` | **the texture of a text, over bytes**: alpha, byte_alto, palavra_plausivel, distinct 1 to 3, loop and repetition, plus the three-step scale |
+| `tokenizer_tables.f90`, `tokenizer_encode.f90` | BPE in pure Fortran. `scripts/export_tokenizer.py` writes the tables |
 
-## Apps (`src/app/`)
+## Apps in `src/app/`
 
-| app | para que |
+| app | what it does |
 |---|---|
-| `train_run.f90` | o treino de verdade: passos, eval, checkpoints (safetensors/.npy), trilha de energia |
-| `train_1step.f90`, `train_loop.f90` | degraus menores de teste |
-| `eval_bpb.f90`, `bpb_agg.f90` | bpb na holdout / agregação |
-| `infer.f90`, `repl.f90`, `chat_text.f90` | geração: batch, REPL, chat |
-| `merge_ckpt.f90` | merge (com/sem seleção) de checkpoints |
-| `tier_probe.f90` | recomputar vs ler o KV — mede a fronteira de níveis de memória |
-| `bench_attn.f90`, `bench_batch.f90`, `bench_gemm.f90`, `spec_bench.f90` | benchmarks de kernel |
-| `tokdiff.f90` | diff de tokenizações |
+| `train_run.f90` | the real training: steps, validation, checkpoints, and the energy trace |
+| `train_1step.f90`, `train_loop.f90` | smaller steps for a test |
+| `eval_bpb.f90`, `bpb_agg.f90` | the bpb on a holdout, and its aggregation |
+| `infer.f90`, `repl.f90`, `chat_text.f90` | generation: batch, REPL, and chat |
+| `merge_ckpt.f90` | the merge of checkpoints, with or without selection |
+| `tier_probe.f90` | recompute against read of a KV window. Two modes: infer and train |
+| `arch_id.f90` | the identity of an arch: the canonical string and the id |
+| `texture_scan.f90` | the texture of one file, with a JSON line |
+| `bench_attn.f90`, `bench_batch.f90`, `bench_gemm.f90`, `bench_elem.f90`, `spec_bench.f90` | kernel benchmarks |
+| `tokdiff.f90` | the difference between two tokenizations |
 
-## Testes (`src/test/`)
+## Tests in `src/test/`
 
-| teste | o que garante |
+| test | what it holds |
 |---|---|
-| `test_kernels.f90` | cada kernel contra referência inline, incluindo gradiente por diferenças finitas |
-| `test_st_ckpt.f90` | round-trip safetensors + guardas de metadata (energia, linhagem, `self_measured`) |
-| `test_energy_tier.f90` | invariantes do instrumento: page cache não toca o disco (`read_bytes`≈0 no quente), `FADV_DONTNEED` funciona (frio = bytes do disco), banda quente ≥ 0,5× fria, latência por IO ≥ 2× sequencial, contabilidade de tokens |
+| `test_kernels.f90` | each kernel against an inline reference, and the gradients against finite differences |
+| `test_st_ckpt.f90` | the round trip of a safetensors checkpoint, and the metadata guards |
+| `test_energy_tier.f90` | the invariants of the energy probe: the page cache does not touch the disk, `FADV_DONTNEED` works, the warm bandwidth is at least half the cold one, and the latency for one IO is at least twice the sequential cost |
+| `test_arch_id.f90` | the identity of an arch: the same input gives the same id, one changed field gives a new id, and the known configurations do not collide |
+| `test_texture.f90` | the texture panel: prose beats a salad on the important values, the scale is correct, and an empty text does not stop the program |
 
 ```bash
-nix develop --command bash -c "cd src && fortran-fpm test"
-nix develop --command bash -c "cd src && fortran-fpm test test_energy_tier"   # um só
+nix develop .#cpu-only --command bash -c "cd src && fortran-fpm test"
+nix develop .#cpu-only --command bash -c "cd src && fortran-fpm test test_texture"
 ```
 
-## Build e gate
+## Build and gate
 
 ```bash
-bin/fbuild              # build normal (-Wall -Wextra -fcheck=all -fbacktrace)
-bin/fstrict             # GATE ESTRITO: -Werror, aplicado só no NOSSO código
-bin/fbuild --werror     # delega para bin/fstrict
+bin/fbuild              # a normal build
+bin/fstrict             # the strict gate. It applies -Werror, and only to us
+bin/fbuild --werror     # sends the work to bin/fstrict
 ```
 
-Shells do flake (nomes por **stack**; alias por **máquina**):
+`bin/fstrict` builds everything with the default flags, and then rebuilds **our
+sources only** with `-Werror`. The reason is the flag path. The `--flag` of fpm
+also reaches the dependencies, and stdlib alone reports `compare-reals` 104
+times, `conversion` 93 times, and `unused-dummy-argument` 20 times. A global
+`-Werror` would then need a long list of exceptions. That list would weaken the
+gate for the code that matters.
 
-| shell | o que tem | quando usar |
-|---|---|---|
-| `.#cpu-only` | gfortran + fpm + openblas + python (sem runtime de GPU) | todo trabalho Fortran |
-| `.#rocm` | cpu-only + rocmLibs + variáveis ROCm/HIP | só ferramenta de GPU (AMD) |
-| `.#default` | = `.#cpu-only` | entrar sem argumento não deve baixar GB de GPU |
-| `.#fermi` | = `.#rocm` | na fermi (GPU AMD gfx1100) |
-| `.#halfbeast` | = `.#cpu-only` | na halfbeast (Intel, sem GPU útil) |
-| `.#inference` | = `.#cpu-only` | nome antigo, mantido como alias |
+Use `--build-dir /tmp/...` to test without a change to a build tree that a
+running job uses. A job resolves its binary at the moment of the run.
 
-Os dois stacks usam o **mesmo nixpkgs rev** (flake.lock), então gfortran e
-OpenBLAS são as mesmas derivações em qualquer máquina — é isso que torna bpb e
-tok/s comparáveis entre fermi e halfbeast. O shell traz também o alias `fpm`
-(apontando para `fortran-fpm`).
+The dependencies are `stdlib` from the registry, `openmp`, `safetensors` from git
+at tag `v0.1.3`, `M_CLI2` from git at the commit `0704ed3`, and `fortran_energy`
+by path.
 
-`bin/fstrict` compila tudo com flags default e depois **recompila só os nossos
-fontes** com `-Werror`. Motivo: o `--flag` do fpm também vai para as dependências
-(stdlib emite `compare-reals` 104×, `conversion` 93×, `unused-dummy-argument`
-20×); um `-Werror` global exigiria uma lista de exceções que enfraqueceria o
-gate para o código que importa.
+## The arch: build any configuration without an edit
 
-Use `--build-dir /tmp/...` para verificar sem tocar uma árvore de build que jobs
-em fila/execução vão usar (os binários são resolvidos no momento da execução).
-
-Dependências: `stdlib` (registry), `openmp`, `safetensors` (git, tag `v0.1.2`),
-`M_CLI2` (git, **commit** `0704ed3`: a tag V3.2.0 difere em 1109 linhas do que
-estava vendado), `fortran_energy` (path — vira git quando for publicado).
-
-## Textura: o checkpoint se descrevendo
-
-`fortran_texture_mod` mede a textura **sobre bytes** (caractere = byte via
-`iachar`; decodificar antes de medir introduz juízo de valor e muda o painel) e
-`app/texture_scan.f90` aplica a um arquivo:
+The arch lives in `fortran_arch.f90` as `#define ARCH_*`. The file holds the
+canonical configuration of the repository. To build another arch, pass the
+defines. Do not edit the file.
 
 ```bash
-bin/fbuild && ./build/*/app/texture_scan AMOSTRA.txt --json T --key texture
+bin/build_arch 96 6 2 12 8192 1024 /tmp/b96
 ```
 
-A régua é **calibrada nos controles deste repo** (ver `test_texture.f90`, que
-testa as invariantes): prosa real `palavra_plausivel` ~0,95 e `byte_alto` ~0,005;
-modelo 3M treinado (2,33 bpb) **0,20 e 0,146 → degrau 1 (chão de bytes)**.
-`distinct_2` é invertido (salada tem mais, porque não tem a redundância da
-língua), e `maior_laco`/`rep_frac` só contam n-gramas não-brancos (senão linha de
-separador de markdown vira "laço").
+The script uses `--features` when the arch is declared in `src/fpm.toml`, and it
+falls back to `--flag -D...` when it is not. The binary then reports its own
+identity:
 
-A saída JSON é a mesma linha que deve ir para o `__metadata__` do checkpoint
-(`texture.*`), para o card dizer **de antemão** o que o modelo é. Integração
-pendente: o gerador hoje vive dentro de `app/repl.f90` (programa), então falta
-extrair a geração para um módulo e ter um app que amostra o próprio checkpoint e
-grava a textura no card.
+```
+bin/build_arch 96 6 2 12 8192 1024 /tmp/b96
+  ...
+  id ca674ae5302a6cc9
+```
 
-## Identidade da arquitetura (P1/P2 feitos; P3/P4 pendentes)
+That id is the same as the id of the checkpoints of the running experiments. The
+binary and the checkpoint agree, and a name of a directory no longer carries that
+information.
 
-**O problema (medido):** a verdade sobre a arch morava em **três lugares** — os
-`parameter` de `fortran_arch.f90` (o que o binário executa), o `__metadata__` do
-safetensors (já escrito: `arch.d_model` …) e o sidecar `arch.txt` — e o vínculo
-binário↔checkpoint era um **nome de pasta** (`arch_d96_h6_kv2_l12_v8192_c1024`,
-schema repetido em `fedavg_rounds.py`, `compose_grid.py` e `set_arch.sh`). Foi
-assim que a árvore ficou com a fonte em **d216** enquanto os experimentos em voo
-são **d96**, sem nada estrutural impedir.
+`bin/arch_check.sh` compares the Fortran id against the Python id for the same
+checkpoint. The two must agree, because two implementations of one rule need a
+test.
 
-**A identidade (agora):** derivada dos próprios parâmetros, sem nada a manter em
-sincronia.
+## The identity of an arch
 
-| peça | o que faz |
+The arch was in three places: the `parameter` values of `fortran_arch.f90`, the
+`__metadata__` of the safetensors file, and the `arch.txt` sidecar. The link
+between a binary and a checkpoint was a **name of a directory**. That fault put
+the source tree at d216 while the running experiments used d96.
+
+The package now holds these parts:
+
+| part | what it does |
 |---|---|
-| `fortran_arch_mod::arch_canonical()` | string canônica (ordem fixa, sem espaço) |
-| `fortran_arch_mod::arch_id()` | 16 dígitos hex: **identidade** para seleção/checagem |
-| `app/arch_id.f90` | `arch_id` = arch compilada; `arch_id --from DIR` = a do checkpoint |
-| `load_weights_mod::read_arch_any()` | leitor **único**: `__metadata__` primeiro, `arch.txt` como fallback |
-| `check_arch_selfconsistent()` | o checkpoint tem de ser consistente **consigo** (campos ↔ canônica ↔ id) |
-| `scripts/arch.py` | a mesma definição em Python (+ CLI) |
-| `bin/arch_check.sh` | **teste de concordância Fortran↔Python** nos dois portadores |
-| `test_arch_id.f90` | determinismo, sensibilidade campo a campo, não-colisão, forma |
+| `arch_canonical()` | one canonical string with a fixed order and no space |
+| `arch_id()` | 16 hex digits: the identity for a selection and a check |
+| `read_arch_any()` | one reader: the `__metadata__` first, and `arch.txt` after |
+| `check_arch_selfconsistent()` | the document must agree with itself: the fields, the canonical string, and the id |
+| `scripts/arch.py` | the same rule in Python, with a command line |
+| `bin/arch_check.sh` | the check of the agreement between Fortran and Python |
 
-O `arch.id` **não é criptográfico**: é rotação+xor sobre os bytes da canônica,
-escolhido porque (a) não depende de overflow de inteiro assinado (que a norma não
-define e o compilador pode explorar) e (b) tem implementação idêntica nos dois
-lados — o que é o que permite o teste de concordância. Ele só precisa não
-colidir entre configurações, e isso é testado.
+The id is not a cryptographic hash. It is a rotation and an exclusive or over the
+bytes of the canonical string. That choice has two reasons. It does not depend on
+the overflow of a signed integer, which the standard does not define. And it has
+the same short implementation in both languages, which makes the agreement test
+possible. The id only needs no collision between configurations, and
+`test_arch_id.f90` checks that.
 
-Exemplo (d96 dos experimentos em voo): `id = ca674ae5302a6cc9`. O binário da
-árvore hoje (d216) tem `bec469fb7c561d2c` — **a divergência virou duas
-identidades explícitas** em vez de um nome de pasta.
+Example: the d96 of the experiments gives `ca674ae5302a6cc9`. The source tree at
+d216 gives `bec469fb7c561d2c`.
 
-**Pendente:** P3 = selecionar binário por identidade (`build/arch_<id>`,
-`pick()`/`compose_grid.py` deixam de duplicar o schema do nome) e o driver
-conferir `arch_id`; P4 = aposentar o `arch.txt` (primeiro derivado, depois fora),
-com entrada no HEP.
+## The texture of a model
 
-## Retrato da arquitetura
-
-Um comando imprime como a arquitetura está **agora** — diagrama do bloco com as
-dimensões, tabela de tensores (shape e params), os derivados que decidem custo
-e a **identidade**:
+`fortran_texture_mod` measures a text **over bytes**. One character is one byte,
+and `iachar` gives the byte value. A decode step before the measurement replaces
+a bad byte with a replacement character, and that changes the result. The app
+`texture_scan.f90` applies the panel to one file.
 
 ```bash
-scripts/arch_view.py /tmp/mix/init3m --repo-default --svg /tmp/arch.svg
+./build/*/app/texture_scan SAMPLE.txt --json T --key texture
 ```
 
-Ele lê a arch do **checkpoint** (metadata primeiro, `arch.txt` depois) e, com
-`--repo-default`, compara com os `#define ARCH_*` do repo — imprimindo
-`>>> DIVERGENCIA` quando um build novo sairia para outra arquitetura. Foi
-precisamente essa a confusão d216/d96: agora ela aparece em uma linha em vez de
-esperar alguém conferir campo a campo.
+The scale has three steps. Step 1 is the byte floor, where the text is a salad.
+Step 2 is a usable generator, with correct words and no loop. Step 3 is a
+reasoner, where the model corrects itself. The R1 "aha" moment is step 3.
 
-Derivados que saem junto (e que decidem decisões): params, FLOPs/token (fwd e
-fwd+bwd), atenção/token, **KV B/token**, **ativação B/token** (o `allocate(C%…)`
-do `fortran_train.f90`), estado do otimizador (m,v) e o que um lote de T=1024
-ocupa. Com uma ressalva medida embutida no texto: **FLOPs ≠ custo na atenção** —
-no `tier_probe`, atenção custou 225 µs/token contra 83 µs/token das projeções
-com ~0,6× dos FLOPs (ela é dominada pelo tráfego da matriz T×T).
+The test holds the calibration. Real prose gives `palavra_plausivel` near 0.95
+and `byte_alto` near 0.005. A trained 3M model gives 0.20 and 0.146, which is
+step 1. So the first usable step has not arrived yet, and we can now detect the
+moment it does.
 
-## Convenções que evitam bug
+The JSON line is the same line that goes into the `__metadata__` of a checkpoint.
+The integration is open: the generator still lives inside `app/repl.f90`, which is
+a program. A module and an app that sample a checkpoint and write the texture
+into the card are the next step.
 
-1. **A arquitetura é uma só**: shapes em `fortran_arch_mod`, derivados, nunca
-   digitados. Trocar de tamanho é `scripts/set_arch.sh` (reescreve o módulo) —
-   a mudança aparece no diff.
-2. **Shape errado falha alto**: `require_arch`/`check_shape` existem por causa de
-   um caso real de lixo silencioso com binário/checkpoint incompatíveis.
-3. **Checkpoint carrega mais que pesos**: `arch.*`, `energy.J`,
-   `energy.self_measured` (a medida é do processo, não rateada por job),
-   `lineage.parent`.
-4. **Energia por fase**: `call energy_mark('nome', tokens=n)` no caminho quente;
-   a trilha vai para `energy_trace.csv` e o card do checkpoint leva o delta.
-5. `wp` é `real32`; BLAS é ILP64 (ver `fortran_blas.f90` antes de mexer).
+## Conventions that prevent a fault
 
-## Onde continuar
+1. **The arch is one source.** The shapes live in `fortran_arch_mod` as derived
+   values. A new size is `scripts/set_arch.sh`, or a define at the build.
+2. **A wrong shape stops the program.** `require_arch` and `check_shape` exist
+   because of a real case of silent garbage from a binary and a checkpoint of
+   different archs.
+3. **A checkpoint carries more than weights.** It carries `arch.*`,
+   `energy.J`, `energy.self_measured`, and `lineage.parent`.
+4. **Energy for each phase.** Call `energy_mark('name', tokens=n)` in the hot
+   path. The trace goes to `energy_trace.csv`, and the card of a checkpoint
+   carries the delta.
+5. **JSON goes through the package.** Use `json_num` and `json_escape` from
+   `safetensors_json`. A NaN becomes `null`, because JSON holds no NaN, and a
+   card with NaN is not readable.
+6. `wp` is `real32`. BLAS is ILP64. Read `fortran_blas.f90` before a change.
 
-- `docs/tier_probe.md` — recompute vs leitura de KV, medido (`hyp_2ac980`).
-- `docs/sync_composition.md` — o que custa sincronizar réplicas de treino.
-- `docs/mpi_ddp.md`, `docs/halfbeast.md` — multi-máquina e fila.
-- Lacunas conhecidas: `fortran_energy` ainda é dependência por caminho (a
-  publicação do `energy-fortran` está em andamento) e não há CI neste repositório
-  (ele depende das máquinas do lab); `safetensors-fortran` e `energy-fortran` têm
-  CI próprio.
+## Where to go next
+
+* `docs/tier_probe.md` — recompute against read, with numbers.
+* `docs/sync_composition.md` — the cost of a synchronization.
+* `docs/mpi_ddp.md` and `docs/halfbeast.md` — several machines and the queue.
+* `docs/writing.md` — the writing rules for this repository.
+* Open work: `fortran_energy` is still a path dependency, and this repository has
+  no CI, because it depends on the machines of the lab.
