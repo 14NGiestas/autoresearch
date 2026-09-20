@@ -34,7 +34,7 @@ EVB=$(bin/build_arch $D $H $KV $L 8192 1024 /tmp/c01b/bd/$ARCH 2>&1 \
   --vocab 8192 --ctx 1024 --seed 7
 # 3. o driver com a receita vencedora
 .venv-numpy/bin/python3 scripts/fedavg_rounds.py \
-  --regime federated --k 4 --tau 13480 --rounds 16 \
+  --regime federated --k 4 --tau 26880 --rounds 16 \
   --init /tmp/c01b/init --rows /tmp/mix/rows_f0.npy \
   --holdout /tmp/mix/rows_holdout.npy \
   --reset-moments --outer nesterov --outer-lr 0.7 \
