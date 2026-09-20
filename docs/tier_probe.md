@@ -1,101 +1,108 @@
-# tier_probe — recomputar vs guardar/ler (inferência e treino)
+# tier_probe — recompute against read, in inference and in training
 
-Instrumento: `src/app/tier_probe.f90` (dois modos, mesmo instrumento) sobre
-`src/lib/fortran_probe.f90` (probe da máquina, **sem nada de GPT**) e
-`energy-fortran` (J/tempo/CPU/IO **no processo**). Shapes do modelo vêm do
-`arch.txt` do checkpoint (`--ckpt`), não do `fortran_arch_mod`.
+The tool is `src/app/tier_probe.f90`. It has two modes and one instrument. The
+instrument is `src/lib/fortran_probe.f90`, which knows nothing about a model. The
+module `energy-fortran` measures joules, time, CPU, and IO inside the process.
+The arch of the model comes from the `arch.txt` of a checkpoint, and not from
+`fortran_arch_mod`.
 
-A tese: onde fica a fronteira "recomputar vs ler" **não é uma propriedade do
-algoritmo, é razão compute:IO da máquina**. O mesmo binário, em duas máquinas,
-dá fronteiras que diferem ~380×.
+The law: the boundary between recompute and read is a ratio of compute to IO. It
+is not a property of an algorithm. One binary on two machines gives two
+boundaries that differ by about 380 times.
 
-## Modo `infer` — janela de KV no decode
+## Mode `infer` — a window of KV in decode
 
-| nível / operação (1 token = 3 KB no d96) | fermi (NVMe, **ociosa**, medição 139) | halfbeast (HDD) |
+| level and operation (one token = 3 KB at d96) | fermi, NVMe, idle, run 139 | halfbeast, HDD |
 |---|---|---|
-| RAM sequencial (page cache) | **0,11–0,12 µs** (25–29 GB/s) | 0,375 µs |
-| RAM, 1 IO/token (aleatório) | **7,5–8,1 µs** | 15,6 µs |
-| disco sequencial | **1,2 µs** (2,5 GB/s) | 26,9 µs |
-| disco, 1 IO/token | **102–107 µs** | **9.732 µs** |
-| recomputar a janela (proj+atenção) | 81 / 128 / **257** µs/token (T=32/128/512) | 309 µs/token (T=512) |
-| **N\* (empata com ler token-a-token, frio)** | **66–94 tokens** | **18.984 tokens** |
+| RAM sequential, page cache | **0.11 to 0.12 us** (25 to 29 GB/s) | 0.375 us |
+| RAM, one IO per token, random | **7.5 to 8.1 us** | 15.6 us |
+| disk sequential | **1.2 us** (2.5 GB/s) | 26.9 us |
+| disk, one IO per token | **102 to 107 us** | **9732 us** |
+| recompute of the window, projections and attention | 81, 128, and 257 us per token at T=32, 128, and 512 | 309 us per token at T=512 |
+| **N\\*, where read and recompute are equal** | **66 to 94 tokens** | **18984 tokens** |
 
-(Os números da fermi na tabela são da medição limpa — job 139, máquina ociosa,
-5 repetições por célula. Sob contenção a banda quente caía para 9–22 GB/s e o
-N\* ia para ~50: medir máquina ocupada dá lixo, e o `probe_trust` reprova.)
+The fermi column comes from a clean measurement: run 139, an idle machine, and 5
+repetitions for each cell. Under load the warm bandwidth fell to 9 to 22 GB/s,
+and N\\* fell to about 50. A measurement on a busy machine is not a measurement,
+and `probe_trust` rejects it.
 
-- Contra **RAM**, ler ganha sempre (10–2000×).
-- Contra **disco token-a-token**, recomputar vence para janelas ≲ N\*; acima disso,
-  ler ganha (na halfbeast, recomputar 512 tokens = 158 ms contra 4,98 s lendo).
-- **Lote é a variável de controle**: lendo a janela em **um** IO, ler ganha por
-  **17,8×** (T=32), **63,5×** (T=128) e **178,8×** (T=512) na fermi, e ~4–7× na
-  halfbeast.
-- A **atenção** é O(N²) na janela (O(N) por token): recomputar piora conforme a
-  janela cresce.
+* Read wins against RAM in every case, by 10 to 2000 times.
+* Read wins against the disk in the one-IO-per-token case when the window is
+  larger than N\\*. On halfbeast, a recompute of 512 tokens costs 158 ms against
+  4.98 s for the read.
+* The batch is the control value. When one IO reads the whole window, the read
+  wins by **17.8 times** (T=32), **63.5 times** (T=128), and **178.8 times**
+  (T=512) on fermi, and by 4 to 7 times on halfbeast.
 
-A leitura do vídeo/paper de fronteira — "delete a memória local e recompute 128
-tokens" — é uma afirmação sobre a razão FLOPs/IO *do hardware deles*: uma GPU tem
-~100× os FLOPs de um core de CPU com a **mesma latência de NVMe**, o que empurra
-N\* de ~50 para a casa dos milhares e deixa 128 tokens trivialmente do lado do
-recompute.
+The video and the paper of the frontier say: delete the local memory and
+recompute 128 tokens. That sentence is a statement about the ratio of FLOPs to IO
+on their hardware. A GPU holds about 100 times the FLOPs of a CPU core with the
+same NVMe latency. That moves N\\* from about 50 to a few thousand, and 128
+tokens then falls on the recompute side.
 
-## Modo `train` — ativações e estado do otimizador
+## Mode `train` — activations and optimizer state
 
-O footprint de ativação **não é chutado**: vem do `allocate(C%…)` do
-`fortran_train.f90` — `C%e, C%xa, C%q, C%ao, C%e1, C%qr = 6·d_model`, `C%f = 4·d_model`
-(`dff = 4·DD`), `C%k, C%v, C%kr = 3·d_kv`. Nosso d96: **1.056 floats por camada por
-token (4.224 B)** → **50.688 B/token** no modelo todo (17× o KV), e um lote de 512
-tokens guarda **25,95 MB**.
+The activation footprint is measured, and not guessed. It comes from the
+`allocate(C%...)` calls in `fortran_train.f90`: `C%e, C%xa, C%q, C%ao, C%e1,
+C%qr` are 6 times `d_model`. `C%f` is 4 times `d_model`, because `dff = 4*DD`.
+`C%k, C%v, C%kr` are 3 times `d_kv`. At d96 that is 1056 floats for one layer and
+one token (4224 B), or **50688 B for one token** in the whole model. The KV of
+inference costs 3072 B for one token, so the activations are 17 times larger.
 
-| medido (d96, 2,75M params) | valor |
+| measured at d96, 2.75M params | value |
 |---|---|
-| recomputar 1 camada/token | 7,37 µs |
-| ler a ativação dela (seq) | RAM 0,31 µs · disco 1,93 µs |
-| **T\*** (leitura dispersa, 1 IO/token) | RAM 1,6 · disco 32,4 tokens |
-| estado do otimizador (m,v = 2P) | 22,02 MB |
-| offload de m,v 1×/passo | RAM 1,60 ms · disco 10,07 ms (forward do lote = 45,25 ms) |
+| recompute of one layer for one token | 7.37 us |
+| read of its activation, sequential | RAM 0.31 us, disk 1.93 us |
+| **T\\***, a scattered read of one IO per token | RAM 1.6 tokens, disk 32.4 tokens |
+| optimizer state, m and v | 22.02 MB |
+| offload of m and v, once per step | RAM 1.60 ms, disk 10.07 ms |
 
-Vereditos que saem direto dos números:
+The step takes 45.25 ms in this test.
 
-1. **Guardar ativação ganha de recomputar em todos os níveis** — o oposto da
-   inferência: aqui a memória é barata e o recompute caro (num core de CPU).
-   Ou seja: **não vale fazer activation checkpointing neste modelo/escala**; o
-   regime em que ele paga é o de ativações que não cabem na memória rápida — não
-   é o nosso.
-2. **Offload de m,v para disco custa ~22% de um passo** → manter em RAM, ou
-   encolher para bf16 (metade dos bytes), **ou não carregar entre syncs** — que é
-   exatamente a decisão que o braço C do experimento federado tomou pelo lado da
-   qualidade (−0,196 bpb). Dois caminhos independentes apontando a mesma escolha.
+Two results follow.
 
-## Sensores de energia: o limite honesto (corrigido)
+1. **Store the activation. Do not recompute it.** The store wins at every level.
+   Memory is cheap here and a CPU FLOP is expensive. Activation checkpointing
+   pays only when the activations do not fit in fast memory. Our activations do
+   fit. So we do not use it.
+2. **Do not offload m and v to the disk.** The offload costs about 22 percent of
+   a step. Keep them in RAM, or use bf16 for half the bytes, or do not carry them
+   between syncs. The last option is the one that arm C of the federated
+   experiment chose for quality, at 0.196 bpb.
 
-- **fermi**: `/sys/class/powercap/intel-rapl:0/energy_uj` é `-r-------- root root`
-  — sem privilégio **não se mede energia de CPU**. O único sensor legível é
-  `hwmon7 = amdgpu` (~50,14 W ociosos), e o app agora **avisa em voz alta** que
-  esse J é da GPU. Prova aritmética do que aconteceu: 56,8 J em 1,1008 s ≈ 51,6 W
-  = a potência ociosa da GPU.
-- **halfbeast**: `energy_uj` é `-r--r--r--` (i9-7900X, contador real) → é lá que
-  energia de CPU funciona. Números de energia **da CPU**: lendo do disco
-  aleatoriamente custa **1,36e-1 J/token** contra **1,19e-2 J/token** recomputando
-  → ler custa **11,5× mais energia** no regime disperso.
-- Corolário: `energy.J` de checkpoints treinados **na fermi** mede GPU ociosa, não
-  o treino. Energia só a partir da halfbeast (ou de um contador legível).
+## Energy sensors: the honest limit
 
-## Regras de honestidade embutidas no probe
+* **fermi**: `/sys/class/powercap/intel-rapl:0/energy_uj` is `-r-------- root
+  root`. A process without privilege cannot measure CPU energy. The only
+  readable sensor is `hwmon7 = amdgpu` at about 50.14 W idle. The app now warns
+  in capital letters that this joule value belongs to the GPU. The proof is
+  arithmetic: 56.8 J in 1.1008 s is 51.6 W, the idle power of the GPU.
+* **halfbeast**: `energy_uj` is `-r--r--r--` on an i9-7900X, and the value is
+  real. CPU energy works there. A random read from the disk costs **1.36e-1 J
+  for one token** against **1.19e-2 J for a recompute**. The read costs 11.5
+  times more energy in the scattered case.
+* Consequence: `energy.J` in a checkpoint trained on **fermi** measures an idle
+  GPU and not the training. Use halfbeast for energy, or a readable counter.
 
-- **frio verificado**: `read_bytes` do `/proc/self/io` tem que ficar ~0 no quente e
-  ≈ bytes no frio (`probe_trust`).
-- **mediana de N repetições + spread**, passada de aquecimento, `fsync` + 1 s de
-  quiescência depois de escrever (sem isso o writeback contamina e o spread passa
-  de 1000%).
-- **recusa a certificar** célula instável (ex.: com load 8,8 na fermi o rep1 deu
-  1,1 s contra 5 ms dos outros — desligamento de CPU); `PROBE_VERBOSE=1` imprime o
-  wall de cada repetição.
-- **contexto** registrado por célula: `cores_busy`, `cpu_pct`, `rd_MB`, `reps`.
-- `--json` anexa uma linha por célula (o número pode ser citado por um run).
+## The honesty rules inside the probe
 
-## Refs
+* **Cold is verified.** The counter `read_bytes` in `/proc/self/io` stays near 0
+  in the warm phase and reaches the byte count in the cold phase. `probe_trust`
+  reads that counter.
+* **Median of N repetitions, and the spread.** The probe warms the cache first.
+  It calls `fsync` and waits one second after a write. Without the wait, the
+  writeback lands in the warm cells and the spread goes above 1000 percent.
+* **The probe refuses to certify an unstable cell.** On fermi with a load of
+  8.8, one repetition took 1.1 s against 5 ms for the others. That is a CPU
+  deschedule, and the probe rejects the cell.
+* **The context goes with the number.** Each cell carries `cores_busy`,
+  `cpu_pct`, `rd_MB`, and `reps`. `PROBE_VERBOSE=1` prints the wall time of every
+  repetition.
+* `--json` appends one line for each cell, so a run can cite the number.
 
-- `hep/` — hipóteses `hyp_2ac980` (fronteira compute:IO) e `hyp_8f9016`
-  (saturação em K).
-- `docs/fortran_gpt.md` — a biblioteca; `docs/sync_composition.md` — composição.
+## References
+
+* `hep/` — `hyp_2ac980` (the compute-to-IO boundary) and `hyp_8f9016` (the
+  saturation in K).
+* `docs/fortran_gpt.md` — the library. `docs/sync_composition.md` — composition.
+* `docs/writing.md` — the writing rules for this repository.
