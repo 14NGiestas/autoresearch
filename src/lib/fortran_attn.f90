@@ -67,7 +67,10 @@ contains
             end if
           end do
           if (relu_a) then
-            inv = 1.0_wp / real(cc, wp)
+            ! Normaliza por T (a sequencia inteira), NAO pelo comprimento da
+            ! linha causal. O backward usa TT, e os dois tem que casar: foi o
+            ! teste de FD que expos a inconsistencia (dq errado por 1,2).
+            inv = 1.0_wp / real(T, wp)
           else
             sm = 0.0_wp
             do ss = 1, cc
@@ -375,7 +378,7 @@ contains
   !   dk_{i,d} += ds_i * q_d / sqrt(D)
   ! dq positions are unique per (b,h,t) (plain writes); kv heads are
   ! shared across each GQA group, so dk/dv use atomics.
-  subroutine attn_bwd(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, cap)
+  subroutine attn_bwd(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, cap, relu_attn)
     integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
     real(wp), intent(in)  :: dy(:)
     real(wp), intent(in)  :: q(:)
@@ -383,10 +386,14 @@ contains
     real(wp), intent(out) :: dq(:)
     real(wp), intent(inout) :: dk(:), dv(:)
     real(wp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
     integer :: ia, ib, ic, ss, id, kb, rep
     real(wp) :: scale, sm, ssum, acc, ds, cp
     real(wp) :: sc(TT), dpv(TT), dcv(TT), m
+    logical :: relu_a
 
+    relu_a = .false.
+    if (present(relu_attn)) relu_a = relu_attn
     cp = 0.0_wp
     if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(DD, wp))
@@ -407,10 +414,22 @@ contains
                          * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
             end do
             sc(ss) = fast_softcap(acc*scale, cp)
-            ! the score array becomes p below, so keep the cap derivative now
-            dcv(ss) = fast_softcap_deriv(sc(ss), cp)
-            if (sc(ss) > m) m = sc(ss)
+            ! the score array becomes p below, so keep the derivative now.
+            ! ReLU-attention: dS = (S>0) * dP / T, entao dcv guarda a mascara com
+            ! o 1/T junto, e o ds la' embaixo nao precisa nem de P nem de ssum.
+            if (relu_a) then
+              dcv(ss) = merge(1.0_wp/real(TT, wp), 0.0_wp, sc(ss) > 0.0_wp)
+              if (sc(ss) < 0.0_wp) sc(ss) = 0.0_wp
+            else
+              dcv(ss) = fast_softcap_deriv(sc(ss), cp)
+              if (sc(ss) > m) m = sc(ss)
+            end if
           end do
+          if (relu_a) then
+            do ss = 1, ic
+              sc(ss) = sc(ss) / real(TT, wp)      ! P = relu(S)/T
+            end do
+          else
           sm = 0.0_wp
           do ss = 1, ic
             sc(ss) = exp(sc(ss) - m)
@@ -419,6 +438,7 @@ contains
           do ss = 1, ic
             sc(ss) = sc(ss) / sm
           end do
+          end if
           ! dp_i = dy . v_i  (reused as dpv), S = sum dp*p
           ssum = 0.0_wp
           do ss = 1, ic
@@ -434,7 +454,11 @@ contains
           do id = 1, DD
             acc = 0.0_wp
             do ss = 1, ic
-              ds = sc(ss) * (dpv(ss) - ssum) * dcv(ss)
+              if (relu_a) then
+                ds = dpv(ss) * dcv(ss)
+              else
+                ds = sc(ss) * (dpv(ss) - ssum) * dcv(ss)
+              end if
               acc = acc + ds * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
               !$omp atomic
               dk(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) = &
