@@ -45,7 +45,11 @@ import numpy as np
 CHIN_E, CHIN_A, CHIN_ALPHA = 1.6934, 406.4, 0.3392      # arXiv:2203.15556
 CHIN_B, CHIN_BETA = 410.7, 0.2849                       # arXiv:2203.15556
 KAP_NC, KAP_ALPHA_N = 8.8e13, 0.076                     # arXiv:2001.08361
-BYTES_PER_TOKEN = 4.0    # ESTIMATIVA do tokenizer deles; declarada no grafico
+# Bytes por token. O NOSSO e' MEDIDO (2,528 nos rows, contra 4,963 de media do
+# vocabulario: usamos tokens curtos). O DELES e' DESCONHECIDO, e e' por isso que
+# o NIVEL nao compara limpo: para converter a lei para bpb eu teria que adivinhar
+# o tokenizer deles. A INCLINACAO nao sofre disso -- ver `invariance()` abaixo.
+BYTES_PER_TOKEN = 2.528  # medido nos nossos rows (nao e' o deles)
 LN2 = np.log(2.0)
 
 # ---- os nossos dados (d96, tres corridas distintas)
@@ -57,6 +61,30 @@ OURS = {
 # o eixo TAMANHO, confundido com tokens (avaliado na cadeia canonica)
 SIZE_AXIS = [("d96", 2.75e6, 8.0e6, 4.542), ("d216", 9.3e6, 8.0e6, 4.496),
              ("d360", 2.5e7, 2.46e7, 4.724)]
+
+
+def invariance():
+    """O expoente nao depende da conversao. Demonstracao, nao afirmacao.
+
+    bpb = nats / (ln2 * B) e' uma mudanca MULTIPLICATIVA do eixo y, e um fator
+    multiplicativo nao muda o expoente de uma lei de potencia. Convertendo a lei
+    a 2, 4 e 8 bytes/token o beta ajustado tem que sair o mesmo.
+    """
+    print("  demonstracao: o expoente e' invariante a conversao")
+    d = np.logspace(9, 12, 200)
+    for n in (1e8,):
+        nats = CHIN_E + CHIN_A/n**CHIN_ALPHA + CHIN_B/d**CHIN_BETA
+        for b in (2.0, 4.0, 8.0):
+            y = nats/(LN2*b)
+            best = None
+            for beta in np.linspace(0.05, 0.9, 600):
+                X = np.vstack([np.ones_like(d), d**-beta]).T
+                c, *_ = np.linalg.lstsq(X, y, rcond=None)
+                e = float(np.max(np.abs(X @ c - y)))
+                if best is None or e < best[0]:
+                    best = (e, beta)
+            print(f"    {b:.0f} B/tok -> beta = {best[1]:.4f}  (erro {best[0]:.2e})")
+    print("    mesma coluna: a inclinacao compara sem conversao.")
 
 
 def chinchilla_bpb(n, d):
@@ -96,6 +124,8 @@ def main():
     print("  (ela preve pior do que conseguimos). Isso nao e' vitoria: a lei nao")
     print("  foi ajustada aqui, e o nosso texto nao e' o do Pile. O que e'")
     print("  comparavel entre nos e a lei e' a INCLINACAO em tokens, nao o nivel.")
+    print()
+    invariance()
 
     # ---- o ajuste da nossa propria curva (para comparar inclinacoes)
     print()
