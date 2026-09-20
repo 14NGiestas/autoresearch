@@ -25,7 +25,7 @@ program train_run
   use fortran_energy_mod
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights, &
-      save_gpt_weights_st, verify_ckpt_dir, require_run_cap
+      save_gpt_weights_st, verify_ckpt_dir, require_run_cap, require_run_attn_fn
   use fortran_chat_mod, only: write_template_txt
   use fortran_arch_mod, only: A_D => D_MODEL, A_HEAD => N_HEAD, A_KV => N_KV, &
       A_HD => HD, A_LAYER => N_LAYER, A_VOCAB => VV, A_CTX => TT, A_BOS => BOS, &
@@ -71,6 +71,8 @@ program train_run
   integer :: k, i, j, tstep, u, ios, r, nbad
   logical :: attn_blas, attn_qk, attn_qkph, anneal
   real(sp) :: logit_cap
+  character(len=16) :: attn_fn
+  logical :: relu_attn
   character(len=8) :: ckfmt
   integer(int64) :: ck_tokens
   ! Energia auto-medida (fortran_energy): o card de cada save leva o delta exato
@@ -84,6 +86,8 @@ program train_run
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
   logit_cap = 0.0_sp
+  attn_fn = 'softmax'
+  relu_attn = .false.
   ntrain = 40; val_every = 5; nval = 8; keep_last = 2
   nprobe = 0
   bytesfile = ""
@@ -91,7 +95,7 @@ program train_run
   call set_args('--weights WEIGHTS --rows ROWS --out OUT --nsteps 20' // &
       ' --lr 0.0003 --t0 1 --log_every 1 --save_every 10' // &
       ' --start_row 0 --ntrain 40 --val_every 5 --nval 8 --keep_last 2' // &
-      ' --trn_probe 0 --attn naive --bytes BYTES --logit-cap 0' // &
+      ' --trn_probe 0 --attn naive --bytes BYTES --logit-cap 0 --attn-fn softmax' // &
       ' --opt adam --muon-lr 0.02 --ckpt-format st --anneal 0 --batch 1', &
       help_text=[character(len=80) :: &
       'NAME', &
@@ -99,6 +103,9 @@ program train_run
       'SYNOPSIS', &
       '  train_run --weights DIR --rows FILE --out DIR --nsteps N', &
       'OPTIONS', &
+      '  --attn-fn F    softmax (default) or relu. relu replaces the softmax by', &
+      '                relu(s)/T: no exp, no row reduction. It is recorded in', &
+      '                the card, and a resume with a different one stops.', &
       '  --logit-cap X  attention logit soft cap: s = X*tanh(s/X) before the', &
       '                mask. 0 (default) = off. Wide heads (head_dim >= 128)', &
       '                need a stabilizer; the field uses QK-Norm or this cap.', &
@@ -132,6 +139,12 @@ program train_run
   nprobe_opt = iget('trn_probe')
   attn_blas = trim(sget('attn')) == 'blas'
   logit_cap = rget('logit-cap')
+  attn_fn = sget('attn-fn')
+  relu_attn = trim(attn_fn) == 'relu'
+  if (trim(attn_fn) /= 'softmax' .and. trim(attn_fn) /= 'relu') then
+    print '(2A)', 'FATAL: --attn-fn tem que ser softmax ou relu, nao "', trim(attn_fn)//'"'
+    call exit(1)
+  end if
   attn_qk = trim(sget('attn')) == 'qkhop'
   attn_qkph = trim(sget('attn')) == 'qkhop-ph'
   val_every = iget('val_every')
@@ -217,6 +230,7 @@ program train_run
   ! The cap belongs to the run. A resume with a different one would change the
   ! model in silence, so this stops the run when the recorded value differs.
   call require_run_cap(trim(wdir), logit_cap)
+  call require_run_attn_fn(trim(wdir), trim(attn_fn))
 
   call init_state(M, S)
   ! Optimizer carry across phases (Cognivolve): old checkpoints without
@@ -284,7 +298,7 @@ program train_run
       call exit(1)
     end if
     call train_step(idx, targets, ct, st, M, S, G, GR, C, tmp, nll, tstep, &
-        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas, attn_qk=attn_qk, attn_qkph=attn_qkph, logit_cap=logit_cap, &
+        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas, attn_qk=attn_qk, attn_qkph=attn_qkph, logit_cap=logit_cap, relu_attn=relu_attn, &
         use_muon=use_muon, lr_muon=muon_lr)
     if (mod(k, log_every) == 0 .or. k == nsteps) then
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &
@@ -324,7 +338,7 @@ program train_run
         call save_gpt_weights_st(trim(ckdir), N_LAYER, D, N_HEAD, N_KV, HD, VV, &
             TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
             M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard, &
-            logit_cap=logit_cap)
+            logit_cap=logit_cap, attn_fn=trim(attn_fn))
       end if
       call save_adam_state(trim(ckdir), S)
       if (use_muon) call save_muon_state(trim(ckdir), S)
@@ -387,7 +401,7 @@ program train_run
           call save_gpt_weights_st(trim(outdir) // "/best", N_LAYER, D, N_HEAD, &
               N_KV, HD, VV, TT, A_BOS, tstep, lr_eff, ck_tokens, trim(rowsfile), &
               M%wte, M%lm, M%q, M%k, M%v, M%p, M%fc, M%p2, energy=ecard, &
-              logit_cap=logit_cap)
+              logit_cap=logit_cap, attn_fn=trim(attn_fn))
         end if
         call save_adam_state(trim(outdir) // "/best", S)
         if (use_muon) call save_muon_state(trim(outdir) // "/best", S)
@@ -472,9 +486,9 @@ contains
       call rope_4d(ko, ct, st, krot, B, TT, N_KV, HD)
       if (attn_blas) then
         call attn_sgemm(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD, &
-            tmp%satt, logit_cap)
+            tmp%satt, logit_cap, relu_attn)
       else
-        call causal_attn(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD, logit_cap)
+        call causal_attn(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD, logit_cap, relu_attn)
       end if
       call linear3d_sgemm(ao, M%p(ll*psz+1:), sub, B, TT, DD, DD)
       emd = emd + sub

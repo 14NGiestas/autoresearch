@@ -332,7 +332,7 @@ contains
   ! treina preenche depois; um numero inventado aqui viraria verdade no experimento.
   subroutine save_gpt_weights_st(wdir, n_layer, d_model, n_head, n_kv_head, &
       head_dim, vocab_size, ctx, bos, step, lr, tokens, rowsfile, &
-      wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2, energy, logit_cap)
+      wte, lm_head, c_q, c_k, c_v, c_pr, c_fc, c_pr2, energy, logit_cap, attn_fn)
     character(*), intent(in) :: wdir, rowsfile
     integer, intent(in) :: n_layer, d_model, n_head, n_kv_head, head_dim
     integer, intent(in) :: vocab_size, ctx, bos, step
@@ -343,11 +343,13 @@ contains
     real(wp), intent(in) :: c_pr(:), c_fc(:), c_pr2(:)
     type(energy_interval_t), intent(in), optional :: energy
     real(wp), intent(in), optional :: logit_cap
+    character(*), intent(in), optional :: attn_fn
     type(st_writer) :: w
     character(len=:), allocatable :: msg, card, tname
     character(len=16) :: lstr
     integer :: ll, qsz, ksz, psz, fcsz, p2sz, stat
     real(wp) :: cap
+    character(len=16) :: fn
 
     qsz = n_head*head_dim*d_model
     ksz = n_kv_head*head_dim*d_model
@@ -391,9 +393,16 @@ contains
     cap = 0.0_wp
     if (present(logit_cap)) cap = logit_cap
     call set_meta_r(w, 'run.logit_cap', cap)
+    ! A funcao de atencao e' um argumento de RUNTIME que muda a SEMANTICA sem
+    ! mudar forma nenhuma: exatamente o caso do cap. Entao ela vai para o card
+    ! e e' conferida na retomada, senao carregar um checkpoint de softmax num
+    ! binario que roda relu muda o modelo em silencio.
+    fn = 'softmax'
+    if (present(attn_fn)) fn = attn_fn
+    call w%set_meta('run.attn_fn', trim(fn))
     card = '{"steps":'//i2c(step)//',"lr":'//json_real(lr)// &
            ',"tokens":'//i8c(tokens)//',"rows_file":"'//json_escape(trim(rowsfile))// &
-           '","logit_cap":'//json_real(cap)// &
+           ',"logit_cap":'//json_real(cap)//',"attn_fn":"'//json_escape(trim(fn))//'"'// &
            ',"metrics":{}'//energy_card_json(energy)//'}'
     call w%set_meta('card', card)
     call set_meta_energy(w, energy)
@@ -698,6 +707,45 @@ contains
     print '(A)', '  pass --logit-cap with the recorded value to continue.'
     call exit(1)
   end subroutine require_run_cap
+
+  ! A funcao de atencao do checkpoint tem que casar com a da flag. Para um
+  ! checkpoint ANTIGO nao ha' chave, e ai' a resposta e' conhecida: softmax,
+  ! porque relu nao existia. Entao o default e' provado, nao suposto.
+  subroutine require_run_attn_fn(wdir, want)
+    character(*), intent(in) :: wdir, want
+    type(st_reader) :: r
+    character(len=:), allocatable :: msg, val
+    character(len=16) :: got
+    integer :: stat
+    logical :: found
+
+    got = 'softmax'
+    found = .false.
+    call r%open(trim(wdir)//'/'//ST_CKPT, stat, msg)
+    if (stat /= st_ok) then
+      ! Sem arquivo nenhum: e' um init aleatorio, nada foi treinado, entao nao ha'
+      ! o que comparar. A nota aparece e o run segue. Sem isso, o PRIMEIRO braco
+      ! de relu nunca poderia comecar -- o mesmo ovo-e-galinha do cap.
+      print '(2A)', '# no checkpoint metadata in ', trim(wdir)
+      print '(2A)', '# starting fresh with ', trim(want)
+      return
+    end if
+    call r%meta('run.attn_fn', val, found)
+    call r%close()
+    if (found) got = trim(val)
+    if (trim(got) == trim(want)) return
+    if (.not. found .and. trim(want) == 'relu') then
+      print '(2A)', '# no run.attn_fn recorded in ', trim(wdir)
+      print '(A)',  '# it predates relu, so it was trained with softmax; this run asks for relu'
+    end if
+    print '(A)', 'FATAL: attention function mismatch'
+    print '(2A)', '  the checkpoint was trained with: ', trim(got)
+    print '(2A)', '  this run asks for:               ', trim(want)
+    print '(2A)', '  checkpoint: ', trim(wdir)
+    print '(A)', '  a different attention changes the model, so the run stops here.'
+    print '(A)', '  pass --attn-fn with the recorded value to continue.'
+    call exit(1)
+  end subroutine require_run_attn_fn
 
   subroutine read_meta_i(r, key, val)
     type(st_reader), intent(in) :: r
