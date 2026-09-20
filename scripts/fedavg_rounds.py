@@ -50,8 +50,14 @@ def sh(cmd, log, env=None):
                        env=env or dict(os.environ))
 
 
-def pick(app, ref):
-    """binario do build cuja arch casa com o arch.txt da referencia."""
+def pick(app, ref, build_dir=None):
+    """binario do build cuja arch casa com o arch.txt da referencia.
+
+    Sem build_dir, o comportamento historico fica: procura em src/build e pega o
+    mais NOVO por mtime. Isso e' uma escolha, nao um lookup -- e a mesma classe do
+    glob com tail -1 que quebrou o job 155. Com --build-dir (um dir dedicado),
+    mais de um match e' ERRO, porque um dir dedicado tem UMA configuracao.
+    """
     kv = {}
     with open(os.path.join(ref, "arch.txt")) as fh:
         for line in fh:
@@ -60,10 +66,14 @@ def pick(app, ref):
                 kv[k.strip()] = v.strip().split()[0]
     tag = "arch_d{}_h{}_kv{}_l{}_v{}_c{}".format(
         kv["d_model"], kv["n_head"], kv["n_kv"], kv["n_layer"], kv["vocab"], kv["ctx"])
-    c = sorted(glob.glob(os.path.join(REPO, "src/build", tag, "*", "app", app)),
+    root = build_dir or os.path.join(REPO, "src", "build")
+    c = sorted(glob.glob(os.path.join(root, tag, "*", "app", app)),
                key=os.path.getmtime)
     if not c:
-        sys.exit(f"{app} nao buildado para {tag}")
+        sys.exit(f"{app} nao buildado para {tag} em {root}")
+    if build_dir and len(c) > 1:
+        sys.exit("AMBIGUO: %d binarios de %s para %s em %s:\n  %s"
+                 % (len(c), app, tag, root, "\n  ".join(c)))
     return c[-1]
 
 
@@ -170,6 +180,9 @@ def main():
     ap.add_argument("--rows", default="/tmp/mix/rows_f0.npy")
     ap.add_argument("--holdout", default="/tmp/mix/rows_holdout.npy")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--build-dir", default=None,
+                    help="dir dos binarios (default src/build, o historico). Com "
+                         "um dir dedicado, mais de um match e' ERRO.")
     ap.add_argument("--anneal", action="store_true")
     ap.add_argument("--reset-moments", action="store_true",
                     help="descarta o estado do Adam na media (isola warm-restart do efeito do outer)")
@@ -196,8 +209,8 @@ def main():
     RESET_MOMENTS = a.reset_moments
     CARRY_OUTER_STATE = a.carry_outer_state
     CARRY_PER_WORKER = a.carry_per_worker
-    train = pick("train_run", a.init)
-    evb = pick("eval_bpb", a.init)
+    train = pick("train_run", a.init, a.build_dir)
+    evb = pick("eval_bpb", a.init, a.build_dir)
     hold = np.load(a.holdout, mmap_mode="r")
     os.makedirs(a.out, exist_ok=True)
     env = dict(os.environ, OMP_NUM_THREADS="8", OPENBLAS_NUM_THREADS="8",
