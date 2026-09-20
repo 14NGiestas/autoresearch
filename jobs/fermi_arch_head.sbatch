@@ -43,8 +43,10 @@ for V in "6 2" "3 1" "2 1"; do
   if [ -z "${ID:-}" ]; then
     echo "  H=$H kv=$KV: BUILD FALHOU (ver $BD.buildlog)"; sed -n '$p' "$BD.buildlog" | sed 's/^/    /'; continue
   fi
-  BIN=$(ls $BD/*/app/train_run 2>/dev/null | tail -1)
-  EVB=$(ls $BD/*/app/eval_bpb 2>/dev/null | tail -1)
+  bin/job_env --build-dir "$BD" "--rows:src/app/train_run.f90" >/dev/null || exit 2
+  . "$BD/job_env.sh"
+  BIN="$TRAIN_RUN"
+  EVB="$EVAL_BPB"
   [ -z "$BIN" ] && { echo "  H=$H: train_run ausente"; continue; }
   T0=$(date +%s.%N)
   $BIN --weights "$OUT" --rows $ROWS --out "$OUT/run" --nsteps $NST --lr 6e-4 \

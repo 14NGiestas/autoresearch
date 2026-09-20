@@ -41,7 +41,9 @@ done
 printf "%-8s %-8s %-10s %-10s %-12s\n" "cap" "tanh" "wall_s" "s/step" "nll"
 run () {  # cap mode
   local CAP=$1 MODE=$2
-  local BIN=$(ls /tmp/sscap/ab_$MODE/*/app/train_run | tail -1)
+  bin/job_env --build-dir "/tmp/sscap/ab_$MODE" "--rows:src/app/train_run.f90" >/dev/null || exit 2
+  . "/tmp/sscap/ab_$MODE/job_env.sh"
+  local BIN="$TRAIN_RUN"
   local T0=$(date +%s.%N)
   local OUT=$($BIN --weights $CK --rows /tmp/mix/rows_f0.npy --out /tmp/sscap/tb_${MODE}_$CAP \
       --nsteps $STEPS --lr 0 --ntrain 11797 --start_row 0 --nval 1 --val_every 9999999 \

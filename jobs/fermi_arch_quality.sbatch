@@ -37,8 +37,10 @@ run_arm () {   # heads kv seed
   if [ ! -x "$(ls $BD/*/app/train_run 2>/dev/null | tail -1 || true)" ]; then
     bin/build_arch 96 "$H" "$KV" 12 8192 1024 "$BD" > "$BD.log" 2>&1 || { echo "  $TAG: build falhou"; return; }
   fi
-  local BIN=$(ls $BD/*/app/train_run | tail -1)
-  local EVB=$(ls $BD/*/app/eval_bpb | tail -1)
+  bin/job_env --build-dir "$BD" "--rows:src/app/train_run.f90" >/dev/null || exit 2
+  . "$BD/job_env.sh"
+  local BIN="$TRAIN_RUN"
+  local EVB="$EVAL_BPB"
   local RPL=$(ls $BD/*/app/repl | tail -1)
   local T0=$(date +%s.%N)
   $BIN --weights "$OUT" --rows $ROWS --out "$OUT/run" --nsteps $STEPS --lr 6e-4 \

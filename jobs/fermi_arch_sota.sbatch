@@ -36,7 +36,9 @@ arm () {  # d heads kv
   if [ -z "$(ls $BD/*/app/train_run 2>/dev/null | tail -1)" ]; then
     bin/build_arch "$D" "$H" "$KV" 12 8192 1024 "$BD" > "$BD.log" 2>&1 || { echo "  $TAG: build falhou"; tail -2 "$BD.log"; return; }
   fi
-  local BIN=$(ls $BD/*/app/train_run | tail -1)
+  bin/job_env --build-dir "$BD" "--rows:src/app/train_run.f90" >/dev/null || exit 2
+  . "$BD/job_env.sh"
+  local BIN="$TRAIN_RUN"
   local T0=$(date +%s.%N)
   $BIN --weights "$OUT" --rows $ROWS --out "$OUT/run" --nsteps $STEPS --lr 6e-4 \
       --ntrain 11797 --start_row 0 --nval 1 --val_every 9999999 --trn_probe 1 \

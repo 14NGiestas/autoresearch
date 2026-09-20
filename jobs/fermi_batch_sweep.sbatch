@@ -24,8 +24,10 @@ D=96; H=6; KV=2; L=12; V=8192; C=1024
 echo "bsweep job=${SLURM_JOB_ID} $(date '+%F %H:%M:%S')  load=$(cut -d' ' -f1 /proc/loadavg)"
 echo "=== construindo a arch d96 pelo caminho DECLARATIVO (--features)"
 bin/build_arch $D $H $KV $L $V $C "$BUILD" 2>&1 | sed 's/^/  /'
-TRAIN=$(ls $BUILD/*/app/train_run | tail -1)
-EVAL=$(ls $BUILD/*/app/eval_bpb | tail -1)
+bin/job_env --build-dir "$BUILD" "--rows:src/app/train_run.f90" >/dev/null || exit 2
+. "$BUILD/job_env.sh"
+TRAIN="$TRAIN_RUN"
+EVAL="$EVAL_BPB"
 echo "  train=$TRAIN"; echo "  eval=$EVAL"
 
 echo "=== SWEEP ($(date '+%H:%M:%S')) -- ociosidade garantida pelo wait_idle do script"
@@ -42,7 +44,9 @@ nix develop .#cpu-only --command bash -c "cd src && fortran-fpm test --build-dir
 echo "=== SMOKE (6 passos, B=1) + CONTROLE DE NEUTRALIDADE"
 # O binario ANTIGO d96 da arvore viva (so' EXECUCAO: leitura, nada escrito la')
 # nao aceita --batch; o NOVO aceita. Tudo igual tem de dar os MESMOS nlls.
-OLD=$(ls src/build/arch_d96_h6_kv2_l12_v8192_c1024/*/app/train_run | tail -1)
+bin/job_env --build-dir "src/build/arch_d96_h6_kv2_l12_v8192_c1024" "--rows:src/app/train_run.f90" >/dev/null || exit 2
+. "src/build/arch_d96_h6_kv2_l12_v8192_c1024/job_env.sh"
+OLD="$TRAIN_RUN"
 BY="$HOME/.cache/autoresearch/tok_tables/token_bytes.txt"
 # nsteps/val_every/save_every ficam FORA do COMMON (cada rodada passa o seu:
 # flag duplicada no CLI e' ambiguidade que nao quero depurar num job)
