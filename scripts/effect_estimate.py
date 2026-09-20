@@ -84,6 +84,70 @@ def main():
     print("  medida:   ja' implicita -- nenhuma chamada e' feita.")
     print()
 
+    # ---- caso 3: quanto o fast_tanh encurta os DIAS ate 1B / 0.5B
+    # Usa as constantes do proprio estimador (importadas), para nao digitar nada.
+    import speedup_estimate as SE
+    rate_thread = (SE.MEASURED["tok_s_node_4workers"] *
+                   SE.MEASURED["flops_per_token_d96"] / 8.0)
+    arch = SE.MEASURED["arch_factor_d48"]          # 2.44: o fator de head_dim
+    thr = 36.0                                     # fermi 16 + halfbeast 20
+
+    def days(params, speed, tpp=20.0):
+        """t(P) = 6*tpp*P^2 / (speed*threads*rate). Linear em 1/speed.
+
+        ATENCAO: o absoluto desta formula NAO bate com o script canonico
+        (speedup_estimate.py imprime 18,1 anos por no' para 1B com d48; aqui da'
+        1470 dias = 4,0 anos). A razao entre regimes -- que e' o que a pergunta
+        pede -- e' imune, porque os dois lados usam a mesma formula. O absoluto
+        fica registrado como PENDENTE de reconciliacao, e nao como resposta."""
+        flops = 6.0 * tpp * params * params
+        return flops / (speed * thr * rate_thread) / 86400.0
+
+    print("=" * 76)
+    print("CASO 3: quanto o fast_tanh encurta os DIAS ate 1B e 0.5B?")
+    print("=" * 76)
+    print("  modelo: t(P) = 6*tpp*P^2 / (speed*threads*rate)   ->   t ~ 1/speed")
+    print("  constantes do estimador: arch d48 = %.2f, rate = %.3f GFLOP/s/thread,"
+          % (arch, rate_thread / 1e9))
+    print("  threads = %.0f, tokens/param = 20 (Chinchilla)" % thr)
+    print()
+    print(f"  {'regime':<30} {'speed':>7} {'dias 1B':>9} {'dias 0,5B':>10}")
+    rows = [("hoje: sem cap (d48)", arch, 1.0),
+            ("cap + fast_tanh", arch, 1.0 / 1.04),
+            ("cap + tanh libm", arch, 1.0 / 1.42)]
+    got = {}
+    for name, a, f in rows:
+        d1, d2 = days(1e9, a * f), days(5e8, a * f)
+        got[name] = (d1, d2)
+        print(f"  {name:<30} {a*f:>7.2f} {d1:>9.0f} {d2:>10.0f}")
+    b1, b2 = got["hoje: sem cap (d48)"]
+    f1, f2 = got["cap + fast_tanh"]
+    e1, e2 = got["cap + tanh libm"]
+    print()
+    print(f"  o fast_tanh contra o libm, no mesmo regime com cap:")
+    print(f"    razao de velocidade {1.42/1.04:.2f}x -> encurta {100*(1-f1/e1):.0f}% dos dias")
+    print(f"    1B: {e1:.0f} -> {f1:.0f} dias (poupa {e1-f1:.0f} dias = {(e1-f1)/30.44:.1f} meses)")
+    print(f"    0,5B: {e2:.0f} -> {f2:.0f} dias (poupa {e2-f2:.0f} dias = {(e2-f2)/30.44:.1f} meses)")
+    print()
+    print(f"  e a leitura que importa: speed entra LINEAR nos dias, mas RAIZ no")
+    print(f"  tamanho (P ~ sqrt(speed)). Por isso o fast_tanh encurta 27% dos dias")
+    print(f"  e aumenta o modelo so sqrt(1.37) = {1.37**0.5:.2f}x.")
+    print(f"  PENDENTE: o absoluto acima (1B hoje = {b1:.0f} dias = {b1/365.25:.1f} anos) nao")
+    print(f"  bate com o script canonico, que imprime 18,1 anos por no' com d48 para 1B.")
+    print(f"  Sao 3 numeros meus em desacordo (709 citado antes, {b1:.0f} desta formula, 6610")
+    print(f"  do canonico). A RAZAO entre regimes nao depende disso. O absoluto depende,")
+    print(f"  e fica marcado para reconciliar. Foi o orcamento de erro que expos isso.")
+    print()
+    need = b1 / 182.0
+    print(f"  corolario: para 1B em 6 meses seriam necessarios {need:.1f}x de velocidade")
+    print(f"  sobre hoje; {need:.1f}x de velocidade dao um modelo {need**0.5:.1f}x maior,")
+    print(f"  ou seja {244.8*need**0.5:.0f} M em 182 dias, nao 1B. Velocidade sozinha nao chega.")
+    print()
+    print("  falsifica: se a medida do job 157 mostrar que o fast_tanh nao muda o")
+    print("             passo, entao ele encurta 0 dias e este caso inteiro cai.")
+    print("  medida:   (vazio -- job 157 na fila)")
+    print()
+
     print("=" * 76)
     print("ERRO DAS NOSSAS PREVISOES (a coluna que da' sentido a este script)")
     print("=" * 76)
