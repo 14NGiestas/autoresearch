@@ -21,6 +21,10 @@ contains
     integer, intent(out) :: n_out
     character(len=:), allocatable :: pre, post, sys_part, t2
     integer :: at, k, ii
+    if (len_trim(tmpl) == 0) then
+      print '(A)', 'apply_template: template vazio -- passe --template com {prompt} ou use o default'
+      call exit(1)
+    end if
     allocate(character(len=len_trim(tmpl)) :: t2)
     t2 = trim(tmpl)
     call unescape_nl(t2)
@@ -30,6 +34,12 @@ contains
       sys_part = ""
     end if
     at = index(t2, "{prompt}")
+    if (at == 0 .and. len_trim(sys) == 0) then
+      ! Sem {prompt} e sem system: o prompt entraria colado no template sem
+      ! separador. Falhar alto e' melhor que gerar texto de um prompt malformado.
+      print '(A)', 'apply_template: template sem {prompt} (o prompt nao tem onde entrar)'
+      call exit(1)
+    end if
     if (at > 0) then
       pre = sys_part // t2(1:at-1)
       post = t2(at+8:)
@@ -51,20 +61,41 @@ contains
     end do
   end subroutine apply_template
 
+  ! Desfaz "\n" e "\t" literais no template.
+  !
+  ! BUG que estava aqui: os literais eram escritos "\\" (duas barras) porque o
+  ! autor pensou em escaping de C -- mas Fortran NAO tem escape em literal de
+  ! caractere: "\\" e' uma string de DOIS caracteres, e comparar com a fatia de
+  ! 1 caractere s(i:i) faz o compilador preencher com branco, entao a comparacao
+  ! NUNCA era verdadeira e o unescape nunca acontecia (silenciosamente).
+  ! Correto e' o literal de UMA barra. E guarda contra s vazio/nao alocado.
   subroutine unescape_nl(s)
     character(len=:), allocatable, intent(inout) :: s
     character(len=:), allocatable :: r
     integer :: i, j
-    allocate(character(len=len(s)) :: r)
+    if (.not. allocated(s)) return
+    if (len(s) == 0) return
+    allocate (character(len=len(s)) :: r)
     j = 0; i = 1
+    ! ATENCAO: Fortran NAO garante curto-circuito em `.and.`. A versao anterior
+    ! tinha a guarda no MEIO da condicao (s(i:i)=='\' .and. i<len(s) .and.
+    ! s(i+1:i+1)=='n') e o terceiro operando era avaliado mesmo com a guarda
+    ! falsa -> "Substring out of bounds" quando i == len(s). Foi o crash do repl,
+    ! pego pelo -fcheck=all. Aqui a fronteira e' ESTRUTURAL: ifs aninhados, nada
+    ! depende de ordem de avaliacao.
     do while (i <= len(s))
-      if (s(i:i) == "\\" .and. i < len(s) .and. s(i+1:i+1) == "n") then
-        j = j + 1; r(j:j) = char(10); i = i + 2
-      else if (s(i:i) == "\\" .and. i < len(s) .and. s(i+1:i+1) == "t") then
-        j = j + 1; r(j:j) = char(9); i = i + 2
-      else
-        j = j + 1; r(j:j) = s(i:i); i = i + 1
+      if (s(i:i) == '\') then
+        if (i < len(s)) then
+          if (s(i+1:i+1) == 'n') then
+            j = j + 1; r(j:j) = char(10); i = i + 2
+            cycle
+          else if (s(i+1:i+1) == 't') then
+            j = j + 1; r(j:j) = char(9); i = i + 2
+            cycle
+          end if
+        end if
       end if
+      j = j + 1; r(j:j) = s(i:i); i = i + 1
     end do
     s = r(1:j)
   end subroutine unescape_nl
