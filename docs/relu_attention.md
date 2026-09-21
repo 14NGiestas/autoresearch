@@ -48,7 +48,50 @@ killed at 2300 steps by the 2-hour limit. The relu is faster. The measurement is
 dirty, because the two jobs shared the machine. A clean measurement needs a
 dedicated run.
 
+## The cost against the benefit, stated safely
+
+The relu costs 0.156 bpb at 2300 steps. The relu is faster, because it finished
+2929 steps while the softmax was killed at 2300 under the same contention. The
+speed ratio is dirty, and this run does not measure it.
+
+A claim about equal wall-clock needs two premises. The first premise is that the
+speed ratio holds. The second premise is that the gap grows without limit. This
+run does not show either one.
+
+The safe claim is this. At this scale, and at this length, the relu does not
+pay. The extrapolation to long runs stays open. The literature suggests the gap
+may stabilize, because the curve of the relu still falls.
+
+## The normalization of this model
+
+This model uses RMSNorm, not LayerNorm. The literature that reports a relu win
+uses models with no normalization at all. This model sits in a third cell, so
+the clean claims of that literature do not cover this measurement.
+
+The attention here uses the divide-by-T convention, which is the convention of
+the Wortsman result in vision. The relu still loses in this language model.
+
+## What the literature separates
+
+Wortsman, the Softplus paper and FLARE replace the softmax in the attention.
+The NYU paper and ReLU's Revival replace the MLP activation, which is GELU
+against ReLU. Those are different comparisons. Only the first group bears on
+this measurement.
+
+The Softplus ablation reports a loss gap of +0.049. FLARE reports that training
+a relu from scratch is 59 percent slower. Both readings match the growing gap
+measured here.
+
+No paper in this survey reports bpb for relu against softmax in a language
+model. That survey is the work of the reviewer, not of this run.
+
 ## What the next step needs
 
 The softmax arm needs a longer wall-clock limit. Two hours does not hold 2929
 steps at 4 threads. Use three hours, or more threads.
+
+The clean question for the size axis is a d360 with the head_dim controlled. Job
+6204 runs exactly that: the same recipe, the same data, the same seed and the
+same init template, with ten heads instead of six. The head_dim becomes 36,
+which is the head_dim of the d216 point. Only then does the size axis get a
+clean answer.
