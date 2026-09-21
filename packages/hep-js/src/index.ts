@@ -85,7 +85,7 @@ export class HEP {
   propose(statement: string, prior: number, mechanism = "de-novo", parents: string[] = [], testable?: string): string {
     if (!VALID_MECH.has(mechanism as never)) throw new Error(`mechanism must be one of ${[...VALID_MECH].join(", ")}`);
     const id = hid();
-    this.append("propose", { hyp: id, statement, prior: Number(prior), mechanism, parents, testable_observable: testable, state: "proposed" });
+    this.append("propose", { hyp: id, statement, prior: Number(prior), mechanism, parents, testable_observable: testable ?? "", state: "proposed" });
     // alias for paper name
     return id;
   }

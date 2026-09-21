@@ -29,7 +29,12 @@ function arg(name: string): string | undefined {
 function flag(name: string): boolean { return process.argv.includes(`--${name}`); }
 
 const cmd = process.argv[2];
-const h = new HEP();
+// O CAMINHO DO REGISTRO E' HONRADO EM TODOS OS SUBCOMANDOS. Antes, so' o `tree`
+// lia --registry; os outros usavam o default em silencio, entao um
+// --registry debug/... escrevia no registro da ciencia sem avisar. Uma escrita
+// silenciosa no alvo errado e' a mesma classe do glob com tail -1: o consumidor
+// adivinha, e o erro aparece longe da causa.
+const h = new HEP(arg("registry") ?? `${process.cwd()}/hep/registry.jsonl`);
 
 if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { help(); process.exit(0); }
 
