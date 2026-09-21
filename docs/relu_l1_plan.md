@@ -226,3 +226,43 @@ instead of guessing at it.
 
 The diff of the failing port is saved at /tmp/port_l1.patch, so the rebuild is
 instant next time. That was the process lesson from the previous attempt.
+
+## Found it: a scalar that outlives its row. dQ is fixed.
+
+The instrument found the cause, and it is not the formula.
+
+Printing sm, inv and the row's values at the point where they are PRODUCED, and
+not where they are consumed, showed the sums are correct and vary per row:
+
+    PROD ii=1  sm=0.0000  SP(1)=0.0000  SP(2)=0.4093
+    PROD ii=2  sm=0.4315  SP(1)=0.0000  SP(2)=0.4315
+    PROD ii=3  sm=0.6366  SP(1)=0.0000  SP(2)=0.4559
+    PROD ii=4  sm=0.8409  SP(1)=0.0000  SP(2)=0.5484
+
+And the consumer printed sm=0.8409 for ii=1. That is row four's value. So the
+inv and sm are SCALARS, computed in the first loop and read in a second loop that
+runs after it, and they outlive their row.
+
+That is why /T survives: inv is 1/T, the same for every row. It is why the
+softmax survives: it recomputes its rowsum inside the second loop. And it is why
+L1 failed: it inherited the last row's inv.
+
+The fix is to recompute the row inside the dS loop, from dSbuf, which holds the
+signed score of every row.
+
+    dQ, L1: 0.542 before  ->  0.240E-03 now, which passes
+
+The fact that fixed the reading: the SP slices are disjoint, (ii-1)*TT+jj, so SP
+does hold the P of every row. What died was only the scalars.
+
+## What is still wrong
+
+dK and dV still fail in L1, at 0.508 and 2.29, while dQ passes. Both dK and dV
+accumulate over the GQA group, and both read SP for P, while dQ reads dSbuf and
+is a plain write. In /T all three pass, so the accumulation itself is right.
+
+The next hypothesis is the accumulation path, not the formula and not the
+scalars: check what dV's gemm reads for P and what dK's gemm reads for dS, and
+whether either reads anything left over from the first loop.
+
+The patch with the dQ fix applied is saved at /tmp/port_l1_v2.patch.
