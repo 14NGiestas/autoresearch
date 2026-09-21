@@ -494,6 +494,58 @@ para o no remoto: num `-verbose` apareceram token de API e chave de terminal
 indo para o halfbeast. Nenhum script deste repo usa `-envall`/`-genvall`; os
 wrappers de cross-node fixam a lista acima.
 
+### Os dois bugs que custaram a tarde (e que so' aparecem uma vez)
+
+**1. Dentro do SLURM o hydra escolhe o bootstrap `slurm` (srun), nao o ssh.** Com
+`mpirun` rodando dentro de um job, o hydra auto-seleciona o bootstrap `slurm` e:
+
+- tenta lancar pela **alocacao** do job, nao pela lista `-hosts`:
+  `srun: jobid 133: nodes(1): 'fermi'` + `srun: error: Only allocated 1 nodes
+  asked for 2` — ou seja, ele **nem tentou ssh**, e um worker no halfbeast e' impossivel
+  por esse caminho;
+- e, com `-launcher-exec` apontando para o wrapper de tunel, **passa os argumentos
+  de srun** (`--nodes`, `--ntasks`) para o launcher, que os repassa ao ssh:
+  `unknown option -- -` + usage do ssh. Foi assim que se descobriu (o wrapper agora
+  loga o argv que recebe em `/tmp/ddp/wrapper_argv.log`).
+
+**Conserto:** forcar o bootstrap externo —
+
+```
+export HYDRA_BOOTSTRAP=ssh
+export HYDRA_LAUNCHER=ssh
+export HYDRA_LAUNCHER_EXEC=/tmp/ddp/crossnode_sshwrap.sh
+```
+
+So' com isso o caminho do ssh (e dos tuneis) e' usado, e o comando que o hydra
+monta passa a ser o documentado em `external_common_launch.c`:
+`ssh -x [EXTRA_ARGS] <user@host> "<proxy>" --control-port <IP>:<PORT> ... <proxy-id>`.
+
+**2. O PROPRIO `mpiexec.hydra` le `MPIR_CVAR_CH3_PORT_RANGE`.** Exportar os
+`MPIR_CVAR_*` no ambiente do job (em vez de passa-los so' aos ranks) faz o hydra
+tentar criar a **porta de PMI** na mesma faixa fixa que os tuneis ja' ocupam:
+`HYDU_sock_listen: no port to bind` + `unable to create PMI port` — e nenhum run
+sobe. Prova: `strings mpiexec.hydra | grep -E "MPIR_CVAR|PORT_RANGE"` mostra
+`MPIR_CVAR_CH3_PORT_RANGE`, `MPICH_CH3_PORT_RANGE`, `MPIEXEC_PORT_RANGE`,
+`MPIR_CVAR_NEMESIS_TCP_NETWORK_IFACE`. **Conserto:** os CVARs vao **so' para os
+ranks**, via `-env` do mpirun (`-env MPIR_CVAR_CH3_INTERFACE_HOSTNAME 127.0.0.1
+-env MPIR_CVAR_CH3_PORT_RANGE 9340:9359 ...`), e o `unset` e' defensivo no setup.
+
+### Falha silenciosa e' REQUISITO de projeto, nao cuidado
+
+Quatro jobs do cross-node morreram "sem medicao" (114, 123, 130, 133) sempre pela
+mesma classe: o script seguia depois de um run falhar e imprimia zeros/logs que
+pareciam resultado. O conjunto minimo, agora obrigatorio em qualquer script de
+teste deste repo:
+
+1. **nenhum caminho opcional segue em frente**: se nenhuma receita de controle
+   funciona, `exit 3` na hora — nada abaixo roda com um comando vazio;
+2. **o resumo nunca imprime numero de run falhado** (`FALHOU (sem medicao)`, nao
+   `0,0 tok/s`);
+3. **rc contado por run** e o job sai != 0 se qualquer um falhou;
+4. **staging verificado nos DOIS lados** (o rank 0 roda local: `init/` local
+   faltando deu `load failed (missing or empty file)` no job 133) com abort se
+   qualquer lado tiver menos arquivos do que o esperado.
+
 **Estados de dados:** o binario, a sonda, `rows.npy`, `init/` (pesos + adam) e
 `token_bytes.txt` ficam em `/tmp/ddp` nos DOIS nos (excecao consciente a regra de
 `/tmp`: e' so' o launcher). O checkpoint do run sai no no do rank 0.

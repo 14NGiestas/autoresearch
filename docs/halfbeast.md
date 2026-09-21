@@ -64,6 +64,13 @@ bin/hb.sh logs [N]                    # últimos logs dos jobs
   diretório contra checkpoint meio-salvo com `[ -f "$d/model.safetensors" ] ||
   continue` (um diretório de job morto passa no glob, existe, e não tem
   checkpoint dentro).
+- **MPI cross-node a partir de dentro de um job Slurm**: o hydra auto-escolhe o
+  bootstrap `slurm`/srun, então ele tenta lançar pela ALOCAÇÃO (`srun: error:
+  Only allocated 1 nodes asked for 2`) e nem tenta ssh; com `-launcher-exec`, ele
+  passa argumentos de srun ao launcher (`unknown option -- -` no ssh). E exportar
+  `MPIR_CVAR_*` no ambiente do job faz o próprio `mpiexec.hydra` tentar a porta de
+  PMI na faixa reservada aos túneis (`no port to bind`). Receita e evidência:
+  `docs/mpi_ddp.md` §7b.
 - **Idempotência se mede por COMPLETUDE, não por existência**: `[ -s saida ]`
   (existe e não-vazio) **aceita arquivo meio-escrito** — um eval interrompido no
   meio deixa o ponto ruim permanente na curva, e o re-run o pula para sempre.
