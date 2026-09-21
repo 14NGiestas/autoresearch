@@ -270,3 +270,50 @@ An earlier check of the wrong kind, recorded because it looked right: the test
 was run at shapes I chose, 768 by 3072, and not at the shapes of the model, 96
 by 288 and 32 by 96. The shim was correct at all of them, but the check should
 have started with the model's shapes.
+
+## The backward: dx verified, dw isolated, and a measured power caveat
+
+The dispatch of both backward GEMMs was wired, and the result exploded: NaN at
+step 4, and adam_v, the square of the gradient, at 5.3e+21 at step 1. That is not
+a small error. That is a wrong tensor.
+
+The bisect settled it. With only gpu_bwd_dx on the GPU, the largest tensor
+difference after one step is 4.657e-10, identical to the forward-only case. So
+the dx path is correct, to roundoff.
+
+The dw path is the wrong one, and the kernel is not the suspect. gpu/shim_test.c
+checks all three calls against a serial loop at the shapes of the model, 96 by
+288 and 32 by 96, and it passes, dw included. So the defect is in the dispatch,
+or in the arguments that the caller passes.
+
+The suspicion to test first: the CPU computes both GEMMs with beta zero, and dw
+is dy transposed times x with A=x (lda=IF), B=dy (ldb=OF) and C=dw (ldc=IF). The
+shim does exactly that. What remains is the caller. If the model calls
+linear3d_bwd_sgemm more than once for the same dw, beta zero overwrites instead
+of accumulating, and the two paths diverge. That is a hypothesis, and the next
+run should check it before anything is changed.
+
+The tree is left in the verified state: forward and dx on the GPU, dw on the
+CPU, with a comment that says why. A half path that is silent is worse than a
+half path that is declared.
+
+## The GPU does not sweat, and that is measured
+
+The question was whether the iGPU is really doing the work. The amdgpu sensor
+answers it.
+
+| state | mean power | peak |
+|---|---|---|
+| idle | 42.2 W | 63.1 W |
+| during the benchmark | 37.8 W | 65.1 W |
+
+The mean during the benchmark is lower than at idle, and the peak is the same.
+The kernels last three to five milliseconds and the gaps last about fifty, so
+the power manager of the APU never notices. The rates of 1030 to 1518 GFLOP/s
+are therefore burst rates, one kernel at a time. The peak of 2348 needs a
+sustained load and full memory bandwidth, which only a whole step on the GPU
+would give.
+
+There is a second reading, and it matters more. The power is near 40 W in both
+cases, so the host side, the synchronous copies included, dominates the time.
+That is where an end-to-end gain can die.

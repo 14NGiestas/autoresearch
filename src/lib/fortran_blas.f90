@@ -69,6 +69,29 @@ contains
     real(wp), intent(out) :: dx(:), dw(:)
     integer(c_int64_t) :: m, n, k, lda, ldb, ldc, bt64
     bt64 = int(BB, c_int64_t) * int(TT, c_int64_t)
+    ! A GPU primeiro, como no forward. Os DOIS sgemm tem de passar: se o primeiro
+    ! passar e o segundo nao, o CPU refaz os dois. Isso e' inofensivo (beta 0 nos
+    ! dois, entao a escrita e' idempotente), e e' honesto: meio caminho na GPU nao
+    ! e' um caminho.
+    call gpu_autostart()
+    ! SO' O dx NA GPU, POR ENQUANTO. O dw foi LIGADO e o resultado explodiu:
+    ! NaN no passo 4, e adam_v (o quadrado do gradiente) em 5,3e+21 no passo 1.
+    ! O bisect localizou: com dx sozinho a maior diferenca de tensor e' 4,657e-10,
+    ! identica ao caso forward-only. Logo o dx esta' certo e o dw e' que erra.
+    !
+    ! O KERNEL NAO E' O CULPADO: gpu/shim_test.c confere as tres chamadas contra
+    ! um laco serial, inclusive dw, nas formas do modelo (96x288, 32x96), e passa.
+    ! Entao o defeito esta' no despacho ou nos argumentos que o chamador usa.
+    !
+    ! ATENCAO PARA QUEM FOR CONSERTAR: o CPU faz os dois sgemm com beta 0, e o dw
+    ! e' `dy^T . x` com A=x (lda=IF), B=dy (ldb=OF), C=dw (ldc=IF). O shim faz
+    ! exactamente isso. A suspeita que sobra e' o chamador: se o modelo chama
+    ! linear3d_bwd_sgemm mais de uma vez para o MESMO dw, o beta 0 sobrescreve em
+    ! vez de acumular, e o CPU e o GPU divergem. Verificar isso antes de mexer.
+    if (gpu_bwd_dx(dy, w, dx, BB*TT, IF, OF)) then
+      ! dw fica com o CPU ate' o defeito ser entendido. Silencio aqui seria pior:
+      ! um caminho pela metade faz o numero parecer bom.
+    end if
     ! dx = dy . W  (plain, NOT transposed)
     m = int(IF, c_int64_t); n = bt64; k = int(OF, c_int64_t)
     lda = int(IF, c_int64_t); ldb = int(OF, c_int64_t); ldc = int(IF, c_int64_t)
