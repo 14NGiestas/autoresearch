@@ -72,7 +72,7 @@ program train_run
   logical :: attn_blas, attn_qk, attn_qkph, anneal
   real(sp) :: logit_cap
   character(len=16) :: attn_fn
-  logical :: relu_attn
+  logical :: relu_attn, relu_l1
   integer, parameter :: N_FLAGS = 2
   character(len=32) :: f_keys(N_FLAGS), f_kinds(N_FLAGS), f_vals(N_FLAGS)
   character(len=32) :: capstr
@@ -91,6 +91,7 @@ program train_run
   logit_cap = 0.0_sp
   attn_fn = 'softmax'
   relu_attn = .false.
+  relu_l1 = .false.
   ntrain = 40; val_every = 5; nval = 8; keep_last = 2
   nprobe = 0
   bytesfile = ""
@@ -143,8 +144,10 @@ program train_run
   attn_blas = trim(sget('attn')) == 'blas'
   logit_cap = rget('logit-cap')
   attn_fn = sget('attn-fn')
-  relu_attn = trim(attn_fn) == 'relu'
-  if (trim(attn_fn) /= 'softmax' .and. trim(attn_fn) /= 'relu') then
+  relu_attn = trim(attn_fn) == 'relu' .or. trim(attn_fn) == 'relu_l1'
+  relu_l1 = trim(attn_fn) == 'relu_l1'
+  if (trim(attn_fn) /= 'softmax' .and. trim(attn_fn) /= 'relu' .and. &
+      trim(attn_fn) /= 'relu_l1') then
     print '(2A)', 'FATAL: --attn-fn tem que ser softmax ou relu, nao "', trim(attn_fn)//'"'
     call exit(1)
   end if
@@ -304,7 +307,7 @@ program train_run
       call exit(1)
     end if
     call train_step(idx, targets, ct, st, M, S, G, GR, C, tmp, nll, tstep, &
-        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas, attn_qk=attn_qk, attn_qkph=attn_qkph, logit_cap=logit_cap, relu_attn=relu_attn, &
+        lr_eff, 0.9_sp, 0.999_sp, 1.0e-8_sp, 0.0_sp, attn_blas=attn_blas, attn_qk=attn_qk, attn_qkph=attn_qkph, logit_cap=logit_cap, relu_attn=relu_attn, relu_l1=relu_l1, &
         use_muon=use_muon, lr_muon=muon_lr)
     if (mod(k, log_every) == 0 .or. k == nsteps) then
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &
@@ -492,9 +495,9 @@ contains
       call rope_4d(ko, ct, st, krot, B, TT, N_KV, HD)
       if (attn_blas) then
         call attn_sgemm(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD, &
-            tmp%satt, logit_cap, relu_attn)
+            tmp%satt, logit_cap, relu_attn, relu_l1=relu_l1)
       else
-        call causal_attn(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD, logit_cap, relu_attn)
+        call causal_attn(qrot, krot, vo, ao, B, TT, N_HEAD, N_KV, HD, logit_cap, relu_attn, relu_l1=relu_l1)
       end if
       call linear3d_sgemm(ao, M%p(ll*psz+1:), sub, B, TT, DD, DD)
       emd = emd + sub

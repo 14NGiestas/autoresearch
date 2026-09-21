@@ -186,11 +186,13 @@ contains
   end subroutine free_temp
 
   subroutine forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, attn_blas, attn_qk, &
-      attn_qkph, logit_cap, relu_attn)
+      attn_qkph, logit_cap, relu_attn, relu_l1)
     logical, intent(in), optional :: attn_blas, attn_qk, attn_qkph
     real(wp), intent(in), optional :: logit_cap
     logical, intent(in), optional :: relu_attn
-    logical :: useblas, useqk, useqkph, relu_a
+    ! relu_l1: relu normalizado pela soma do relu da linha (L1). Implica relu.
+    logical, intent(in), optional :: relu_l1
+    logical :: useblas, useqk, useqkph, relu_a, l1_a
     real(wp) :: cp
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
@@ -244,6 +246,9 @@ contains
       if (present(logit_cap)) cp = logit_cap
     relu_a = .false.
     if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
       if (present(attn_blas)) then
         useblas = attn_blas
       else
@@ -265,10 +270,10 @@ contains
             G%nh, G%nkv, G%hd)
       else if (useblas) then
         call attn_sgemm(tmp%qrot, tmp%krot, tmp%vo, tmp%ao, G%B, G%T, &
-            G%nh, G%nkv, G%hd, tmp%satt, cp, relu_a)
+            G%nh, G%nkv, G%hd, tmp%satt, cp, relu_a, relu_l1=relu_l1)
       else
         call causal_attn(tmp%qrot, tmp%krot, tmp%vo, tmp%ao, G%B, G%T, &
-            G%nh, G%nkv, G%hd, cp, relu_a)
+            G%nh, G%nkv, G%hd, cp, relu_a, relu_l1=relu_l1)
       end if
       C%ao(ll*BT*DD+1:(ll+1)*BT*DD) = tmp%ao
       call linear3d_sgemm(tmp%ao, M%p(ll*psz+1:), tmp%sub, G%B, G%T, DD, DD)
@@ -314,11 +319,13 @@ contains
   ! r = relu(f) is recomputed from saved f. dk/dv zeroed per layer
   ! (attn_bwd accumulates inout). GR arrays zeroed up front.
   subroutine compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, &
-      attn_blas, attn_qk, attn_qkph, logit_cap, relu_attn)
+      attn_blas, attn_qk, attn_qkph, logit_cap, relu_attn, relu_l1)
     logical, intent(in), optional :: attn_blas, attn_qk, attn_qkph
     real(wp), intent(in), optional :: logit_cap
     logical, intent(in), optional :: relu_attn
-    logical :: useblas, useqk, useqkph, relu_a
+    ! relu_l1: relu normalizado pela soma do relu da linha (L1). Implica relu.
+    logical, intent(in), optional :: relu_l1
+    logical :: useblas, useqk, useqkph, relu_a, l1_a
     real(wp) :: cp
     integer(c_int), intent(in) :: idx(:), targets(:)
     real(wp), intent(in) :: cos(:), sin(:)
@@ -390,6 +397,9 @@ contains
       if (present(logit_cap)) cp = logit_cap
     relu_a = .false.
     if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
       if (present(attn_blas)) then
         useblas = attn_blas
       else
@@ -417,7 +427,7 @@ contains
         call attn_bwd_sgemm(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
             C%v(ll*BT*kvd+1:), tmp%dq, tmp%dk, tmp%dv, &
             G%B, G%T, G%nh, G%nkv, G%hd, tmp%satt, tmp%dPbuf, tmp%dSbuf, &
-            tmp%dkv, cp, relu_a)
+            tmp%dkv, cp, relu_a, relu_l1=relu_l1)
       else
         call attn_bwd(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
             C%v(ll*BT*kvd+1:), tmp%dq, tmp%dk, tmp%dv, &
@@ -570,11 +580,12 @@ contains
   ! train_1step/train_loop/tests keep compiling unchanged (Adam default).
   subroutine train_step(idx, targets, cos, sin, M, S, G, GR, C, tmp, &
       nll, tstep, lr, b1, b2, beps, wd, attn_blas, use_muon, lr_muon, attn_qk, attn_qkph, &
-      logit_cap, relu_attn)
+      logit_cap, relu_attn, relu_l1)
     logical, intent(in), optional :: attn_blas, use_muon, attn_qk, attn_qkph
     real(wp), intent(in), optional :: lr_muon, logit_cap
     logical, intent(in), optional :: relu_attn
-    logical :: useblas, m_opt, useqk, useqkph
+    logical, intent(in), optional :: relu_l1
+    logical :: useblas, m_opt, useqk, useqkph, l1_a
     real(wp) :: lr_mu, cp
     logical :: relu_a
     integer(c_int), intent(in) :: idx(:), targets(:)
@@ -602,8 +613,11 @@ contains
     if (present(logit_cap)) cp = logit_cap
     relu_a = .false.
     if (present(relu_attn)) relu_a = relu_attn
-    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas, useqk, useqkph, cp, relu_a)
-    call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas, useqk, useqkph, cp, relu_a)
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
+    call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas, useqk, useqkph, cp, relu_a, relu_l1=relu_l1)
+    call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas, useqk, useqkph, cp, relu_a, relu_l1=relu_l1)
     call apply_update(M, S, GR, tstep, lr, b1, b2, beps, wd, m_opt, lr_mu, G)
   end subroutine train_step
 
