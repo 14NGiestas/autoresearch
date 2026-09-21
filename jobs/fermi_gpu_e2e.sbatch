@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -J gpue2e
-#SBATCH -c 8
+#SBATCH -c 4
 #SBATCH -t 03:00:00
 #SBATCH -o /home/pauli/autoresearch/logs/gpue2e_%j.log
 # End-to-end no formato do C-0.1B (d768), onde a GPU ganha.
@@ -42,7 +42,7 @@ for M in cpu gpu; do
   echo "########## $M"
   bin/env_record "antes de $M"
   T0=$(date +%s.%N)
-  AUTORESEARCH_BLAS=$M OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FALSE \
+  AUTORESEARCH_BLAS=$M OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 OMP_DYNAMIC=FALSE \
     $B --weights $INIT --rows $ROWS --out /tmp/z768_$M \
     --nsteps $N --lr 6e-4 --ntrain 11797 --start_row 0 \
     --attn blas --batch 1 --bytes $BY 2>&1 | grep -E "^step (1|10|50|100) |FATAL" | head -6
