@@ -317,3 +317,45 @@ would give.
 There is a second reading, and it matters more. The power is near 40 W in both
 cases, so the host side, the synchronous copies included, dominates the time.
 That is where an end-to-end gain can die.
+
+## The dw bug: a use-after-free, found by bisect and fixed
+
+The wiring of both backward GEMMs exploded: NaN at step 4, and adam_v, the square
+of the gradient, at 5.3e+21 at step 1.
+
+The bisect put dx on the GPU alone, and the largest tensor difference came back
+at 4.657e-10, identical to the forward-only case. So dx was correct and dw was
+wrong.
+
+The kernel was never the suspect. shim_test.c checks all three calls against a
+serial loop and passed, dw included. The defect was in the shim's memory
+management.
+
+The weight cache used the activation slot pool. Registering a second weight
+freed the buffer of the first, and the cache kept pointing at freed memory. That
+is a use-after-free, and it explains a number like 5.3e+21.
+
+The reason the test missed it is the lesson: each run of shim_test tested one
+shape, so it registered exactly one weight. The case that mattered, two weights in
+one process, was never exercised. The test now has that case, and it fails on the
+old code and passes on the new.
+
+After the fix, all three calls on the GPU give a largest tensor difference of
+4.424e-09 at step 1, which is single precision roundoff.
+
+## The GPU loses at the model's own size
+
+The same bench, at the shapes of the d96 model instead of the C-0.1B shapes:
+
+| shape | fwd | bwd dx | bwd dw |
+|---|---|---|---|
+| 1024 x 768 -> 3072 | 1154 | 1788 | 1616 GFLOP/s |
+| 1024 x 96 -> 288 | 181 | 180 | 126 GFLOP/s |
+
+At the model's size the GPU is slower than the CPU, which reaches about 500
+GFLOP/s. The transfer and the synchronization cost per call are fixed, and at
+these sizes they dominate.
+
+So the GPU is not a general win. It is a win at large shapes, which is where the
+ladder says the value is. A run at d96 would measure the overhead and not the
+GPU.

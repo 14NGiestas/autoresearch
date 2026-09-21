@@ -46,10 +46,40 @@ static int check_small(void) {
   return bad ? 1 : 0;
 }
 
+// DOIS PESOS NO MESMO PROCESSO. Este e' o caso que faltava, e o unico que expoe o
+// use-after-free em que o peso usava o pool de ativacao: registrar o segundo peso
+// libertava o buffer do primeiro. Uma corrida com um peso so' nunca ve isso.
+static int check_two_weights(void) {
+  int64_t BT = 8;
+  int64_t IF1 = 5, OF1 = 3, IF2 = 4, OF2 = 7;
+  float x1[40], w1[15], y1[24], x2[32], w2[28], y2[56];
+  unsigned s = 3;
+  for (int i = 0; i < 40; i++) x1[i] = frand(&s);
+  for (int i = 0; i < 15; i++) w1[i] = frand(&s);
+  for (int i = 0; i < 32; i++) x2[i] = frand(&s);
+  for (int i = 0; i < 28; i++) w2[i] = frand(&s);
+  if (gpublas_sgemm_fwd(x1, w1, BT, y1, IF1, OF1)) return printf("  w1 rc!=0\n"), 1;
+  if (gpublas_sgemm_fwd(x2, w2, BT, y2, IF2, OF2)) return printf("  w2 rc!=0\n"), 1;
+  int bad = 0;
+  for (int64_t b = 0; b < BT; b++) for (int64_t o = 0; o < OF1; o++) {
+    float a = 0; for (int64_t i = 0; i < IF1; i++) a += x1[b*IF1+i]*w1[o*IF1+i];
+    if (fabsf(a - y1[b*OF1+o]) > 1e-4f) bad++;
+  }
+  for (int64_t b = 0; b < BT; b++) for (int64_t o = 0; o < OF2; o++) {
+    float a = 0; for (int64_t i = 0; i < IF2; i++) a += x2[b*IF2+i]*w2[o*IF2+i];
+    if (fabsf(a - y2[b*OF2+o]) > 1e-4f) bad++;
+  }
+  printf("  dois pesos: %d errados (o segundo registro nao pode estragar o primeiro)\n", bad);
+  return bad ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
   printf("=== forma pequena, contra laco serial:\n");
   if (check_small()) { printf("  ERRO: as tres nao batem\n"); return 2; }
-  printf("  todas batem\n\n");
+  printf("  todas batem\n");
+  printf("=== dois pesos no mesmo processo:\n");
+  if (check_two_weights()) { printf("  ERRO: use-after-free no cache de pesos\n"); return 3; }
+  printf("\n");
 
   int64_t BT=1024, IF=768, OF=3072;
   if (argc>3){ BT=atoll(argv[1]); IF=atoll(argv[2]); OF=atoll(argv[3]); }

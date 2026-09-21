@@ -54,10 +54,15 @@ static float* weight(const float* w, int64_t IF, int64_t OF) {
   if (NW >= MAXW) return NULL;
   if (ensure() != 0) return NULL;
   size_t n = (size_t)IF * (size_t)OF;
-  float* d = buff(0, 0, n);
-  if (!d) return NULL;
+  // O PESO TEM BUFFER PROPRIO, e nunca passa pelo pool de slots. Usar o pool aqui
+  // foi um use-after-free: registrar um segundo peso LIBERTAVA o buffer do
+  // primeiro, e o cache continuava a apontar para memoria libertada. O resultado
+  // foi adam_v em 5,3e+21. O pool serve para ativacao transitoria, nao para o que
+  // vive a corrida inteira.
+  float* d = NULL;
+  if (hipMalloc((void**)&d, n * 4) != hipSuccess) return NULL;
   // Sem CHK aqui: CHK devolve -5, e esta funcao devolve float*.
-  if (hipMemcpy(d, w, n * 4, hipMemcpyHostToDevice) != hipSuccess) return NULL;
+  if (hipMemcpy(d, w, n * 4, hipMemcpyHostToDevice) != hipSuccess) { (void)hipFree(d); return NULL; }
   W[NW].host = w; W[NW].dev = d; W[NW].IF = IF; W[NW].OF = OF; NW++;
   return d;
 }
