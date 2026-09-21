@@ -68,6 +68,22 @@ case "$BD" in
     exit 4;;
 esac
 
+# A CAMADA DO TAG. O driver (fedavg_rounds.pick) procura
+#   $BD/<tag>/<hash>/app/<app>
+# e o build_arch constroi direto em $BD/<hash>/app/. Entao o build dir PRECISA
+# terminar no tag da arch. Sem isso o binario existe e o driver nao o encontra, e
+# a mensagem que aparece e' "train_run nao buildado para arch_...", que aponta para
+# o lugar errado. Verificado em 2026-09-21, e o custo foi um job inteiro perdido.
+TAG="arch_d${D}_h${H}_kv${KV}_l${L}_v${V}_c${C}"
+case "$BD" in
+  */"$TAG"|"$TAG") : ;;
+  *) echo "BUILD DIR SEM O TAG DA ARCH."
+     echo "  recebido: $BD"
+     echo "  o driver procura em: $BD/$TAG/<hash>/app/"
+     echo "  use:      $BD/$TAG"
+     exit 2;;
+esac
+
 # 1. PREFLIGHT
 for NEED in "$@"; do
   PAT="${NEED%%:*}"; F="${NEED##*:}"
