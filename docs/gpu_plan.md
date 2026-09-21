@@ -114,3 +114,44 @@ the day: a number without its conditions is not a number.
 Wire the shim behind the two subroutines of fortran_blas.f90, behind a run flag,
 in the style of --attn-fn. Then the end-to-end run, same seed, same rows, and
 compare the loss and the tokens per second.
+
+## Step one, finished: the three calls, correct and fast
+
+The shim compiles as C++ and publishes a C ABI with extern "C". That matters
+because hip_runtime.h is C++ only, while rocBLAS alone compiles as C. The test
+stays in C.
+
+All three calls are checked against a serial loop on a small shape, with the
+standard of the house, an exact error:
+
+    fwd:     0 of 20 wrong
+    bwd dx:  verified
+    bwd dw:  verified
+
+The build has zero warnings and zero errors.
+
+| call | ms | GFLOP/s | against the CPU 299 |
+|---|---|---|---|
+| fwd | 4.186 | 1154 | 3.9x |
+| bwd dx | 2.702 | 1788 | 6.0x |
+| bwd dw | 2.990 | 1616 | 5.4x |
+
+The backward is where the GPU is strongest, at 69 to 76 percent of the 2348
+peak, and the backward is two thirds of the training compute. So the effective
+kernel ratio is about five, above the 3.7 of the forward alone.
+
+Two defects found by the way, both mine, both recorded.
+
+The first is a design bug: the buffer pool returned the first buffer that fitted,
+so an input and an output could share it. The fix is explicit slots.
+
+The second is a lesson about editing: a regex patch mangled this file, and I
+rewrote it instead of patching it further. That is the same class as the jobs
+migration earlier on the same day, where the pattern matched and the meaning
+broke. Twice is enough to make it a rule: rewrite, do not patch.
+
+## What is next
+
+The Fortran bind(C) wrapper over these three calls, behind a run flag in the
+style of --attn-fn. Then the end-to-end run, same seed and same rows, comparing
+the loss and the tokens per second.
