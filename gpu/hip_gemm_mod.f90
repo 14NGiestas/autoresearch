@@ -18,9 +18,11 @@ module hip_gemm_mod
   use iso_c_binding
   use hipfort
   use hipfort_rocblas
+  use omp_lib, only: omp_get_thread_num, omp_get_max_threads
   implicit none
   private
   public :: gemm_f32, mfi_handles_init, mfi_handles_done, mfi_gpu, mfi_cpu, mfi_use_gpu
+  public :: mfi_handle_para_thread
 
   ! O estado do modulo, no espirito do cublas_wrap.c do MFI.
   type(c_ptr), allocatable, save :: g_handles(:)
@@ -39,7 +41,11 @@ contains
       return
     end if
     nt = 1
-    if (present(nthreads)) nt = max(1, nthreads)
+    if (present(nthreads)) then
+      nt = max(1, nthreads)
+    else
+      nt = max(1, omp_get_max_threads())
+    end if
     allocate (g_handles(nt))
     do i = 1, nt
       ierr = rocblas_create_handle(g_handles(i))
@@ -74,6 +80,16 @@ contains
   logical function mfi_use_gpu() result(r)
     r = (g_active == 1)
   end function mfi_use_gpu
+
+  ! O handle da THREAD ACTUAL, como o mfi_cublas_handle_get do MFI.
+  ! E' a licao que faltava: um handle partilhado serializa as chamadas quando o
+  ! host corre com OpenMP.
+  integer function mfi_handle_para_thread() result(k)
+    integer :: t
+    if (g_ready /= 1) call mfi_handles_init()
+    t = omp_get_thread_num() + 1
+    k = min(max(t, 1), size(g_handles))
+  end function mfi_handle_para_thread
 
   ! c(m,n) = a . b, com o lda, o ldb e o ldc tirados das formas.
   ! transa/transb aceitam 'N' e 'T', como no MFI.
@@ -121,9 +137,9 @@ contains
       end if
       opb = rocblas_operation_transpose
     end if
-    if (g_ready /= 1) call mfi_handles_init(1)
+    if (g_ready /= 1) call mfi_handles_init()
     g_calls = g_calls + 1
-    ierr = rocblas_sgemm(g_handles(1), opa, opb, m, n, k, al, &
+    ierr = rocblas_sgemm(g_handles(mfi_handle_para_thread()), opa, opb, m, n, k, al, &
         c_loc(a), int(size(a, 1), c_int), &
         c_loc(b), int(size(b, 1), c_int), &
         be, c_loc(c), int(size(c, 1), c_int))
