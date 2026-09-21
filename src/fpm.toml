@@ -23,6 +23,16 @@ cpp.suffixes = ["f90"]
 # Isto e' documentacao + ergonomia, nao a verdade: a verdade e' o que foi
 # compilado, e o binario se identifica sozinho (arch_id deriva dos parametros).
 [features]
+# GPU: o caminho rocBLAS do BLAS. O arquivo e' src/lib/gpu_shim.cpp, e ele
+# compila nos DOIS casos, porque o caminho GPU esta' sob a macro ARCH_GPU e o
+# outro ramo e' C++ puro. Por isso ele pode viver dentro do pacote, e o build
+# CPU-only (e o fpm test) nao precisa de ROCm.
+#
+# Aqui fica o que NAO depende da maquina: a macro e o NOME da biblioteca. Os
+# caminhos de include e de link vem do ambiente, porque sao caminhos do nix
+# store, e caminho de store dentro do repositorio envelhece. bin/build_gpu os monta.
+gpu.flags = "-O2"
+gpu.preprocess.cpp.macros = ["ARCH_GPU"]
 arch_d96_h6_kv2_l12_v8192_c1024 = { flags = "-O2", preprocess = { cpp = { macros = [
   "ARCH_D_MODEL=96", "ARCH_N_HEAD=6", "ARCH_N_KV=2", "ARCH_N_LAYER=12",
   "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }
