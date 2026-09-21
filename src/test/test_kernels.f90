@@ -60,6 +60,7 @@ program test_kernels
   call test_rope_4d()
   call test_relu2()
   call test_causal_attn()
+  call test_causal_attn(relu_attn=.true.)
   call test_causal_attn_gqa()
   call test_causal_attn_doc()
   call test_attn_bwd_doc()
@@ -363,19 +364,25 @@ contains
   end subroutine
 
   ! ------------------------------------------------------------------------
-  subroutine test_causal_attn()
+  subroutine test_causal_attn(cap, relu_attn)
     integer, parameter :: BR = 1, TC = 3, HH = 1, K_H = 1, DD = 4
+    real(sp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
+    logical :: relu
     real(sp) :: q(BR*TC*HH*DD), k(BR*TC*K_H*DD), v(BR*TC*K_H*DD)
     real(sp) :: y(BR*TC*HH*DD), yref(BR*TC*HH*DD)
     real(sp) :: sc(TC), m, sm, scale, acc, e, max_err
     integer :: a, b, c, s, d, q1, k1, v1
 
     print '(A)', "=== test_causal_attn ==="
+    relu = .false.
+    if (present(relu_attn)) relu = relu_attn
+    if (relu) print '(A)', "  (variante relu: relu(s)/T)"
     call fill(q, BR*TC*HH*DD)
     call fill(k, BR*TC*K_H*DD)
     call fill(v, BR*TC*K_H*DD)
 
-    call causal_attn(q, k, v, y, BR, TC, HH, K_H, DD)
+    call causal_attn(q, k, v, y, BR, TC, HH, K_H, DD, cap, relu_attn)
 
     scale = 1.0_sp / sqrt(real(DD, sp))
 
@@ -391,16 +398,29 @@ contains
               acc = acc + q(q1) * k(k1)
             end do
             sc(s) = acc * scale
-            if (sc(s) > m) m = sc(s)
+            if (.not. relu) then
+              if (sc(s) > m) m = sc(s)
+            end if
           end do
-          sm = 0.0_sp
-          do s = 1, c
-            sc(s) = exp(sc(s) - m)
-            sm = sm + sc(s)
-          end do
-          do s = 1, c
-            sc(s) = sc(s) / sm
-          end do
+          if (relu) then
+            ! A REFERENCIA DO RELU, independente do kernel. Ele normaliza por T,
+            ! a sequencia INTEIRA, e nao pelo comprimento causal: o backward usa
+            ! TT e os dois tem de casar. O porteiro de FD expos isso, com o dq
+            ! errado por 1,2. Esta referencia guarda o mesmo contrato.
+            do s = 1, c
+              if (sc(s) < 0.0_sp) sc(s) = 0.0_sp
+              sc(s) = sc(s) / real(TC, sp)
+            end do
+          else
+            sm = 0.0_sp
+            do s = 1, c
+              sc(s) = exp(sc(s) - m)
+              sm = sm + sc(s)
+            end do
+            do s = 1, c
+              sc(s) = sc(s) / sm
+            end do
+          end if
           do d = 1, DD
             acc = 0.0_sp
             do s = 1, c
