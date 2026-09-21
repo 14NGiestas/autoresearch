@@ -25,17 +25,19 @@ static int check_small(void) {
   for(int i=0;i<28;i++) w[i]=frand(&s);
   for(int i=0;i<20;i++) dy[i]=frand(&s);
   int bad=0;
-  if (gpublas_sgemm_fwd(x,w,BT,y,IF,OF)) return printf("  fwd rc!=0\n"), 1;
+  if (gpublas_sgemm_fwd(x,w,BT,y,IF,OF)) return printf("  fwd rc=%d\n", gpublas_sgemm_fwd(x,w,BT,y,IF,OF)), 1;
   for(int64_t b=0;b<BT;b++) for(int64_t o=0;o<OF;o++){
     float a=0; for(int64_t i=0;i<IF;i++) a+=x[b*IF+i]*w[o*IF+i];
     if (fabsf(a-y[b*OF+o])>1e-4f) bad++; }
   printf("  fwd:     %d de %lld errados\n", bad, (long long)(BT*OF));
-  if (gpublas_sgemm_bwd_dx(dy,w,BT,dx,IF,OF)) return printf("  dx rc!=0\n"), 1;
+  { int32_t r2 = gpublas_sgemm_bwd_dx(dy,w,BT,dx,IF,OF);
+    if (r2) { printf("  dx rc=%d\n", r2); return 1; } }
   for(int64_t b=0;b<BT;b++) for(int64_t i=0;i<IF;i++){
     float a=0; for(int64_t o=0;o<OF;o++) a+=dy[b*OF+o]*w[o*IF+i];
     if (fabsf(a-dx[b*IF+i])>1e-4f) bad++; }
   printf("  bwd dx:  verificado\n");
-  if (gpublas_sgemm_bwd_dw(dy,x,BT,dw,IF,OF)) return printf("  dw rc!=0\n"), 1;
+  { int32_t r3 = gpublas_sgemm_bwd_dw(dy,x,BT,dw,IF,OF);
+    if (r3) { printf("  dw rc=%d\n", r3); return 1; } }
   for(int64_t o=0;o<OF;o++) for(int64_t i=0;i<IF;i++){
     float a=0; for(int64_t b=0;b<BT;b++) a+=dy[b*OF+o]*x[b*IF+i];
     if (fabsf(a-dw[o*IF+i])>1e-4f) bad++; }

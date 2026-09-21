@@ -227,3 +227,46 @@ What lives where:
 The feature uses the dotted form, because a TOML inline table cannot span lines,
 and it does not carry build.link, because build is an exclusive section and the
 manifest already sets [build] link = ["openblas"].
+
+## The forward is correct to roundoff, and the criterion had to change
+
+The dispatch is wired: linear3d_sgemm asks the GPU first, and falls back to
+OpenBLAS when the GPU is off. The backward is not wired yet.
+
+The end-to-end test at the d96 shape, five steps:
+
+| step | CPU | GPU |
+|---|---|---|
+| 1 | 9.02792 | 9.02792 |
+| 2 | 9.00960 | 9.01677 |
+| 5 | 8.97616 | 9.02247 |
+
+Step 1 is identical to the last digit. Step 1 measures the loss before any
+update, so the forward pass on the GPU is exact.
+
+Steps 2 to 5 diverge. The first reading is a wrong backward. The measurement
+says otherwise. Both paths were run for one step with the checkpoint saved, and
+the two checkpoints were compared tensor by tensor. The largest difference in
+any tensor is 4.657e-10, which is 1.9e-07 relative. That is single precision
+roundoff, nothing more. The cause is the summation order of rocBLAS against
+OpenBLAS, which is a legitimate difference between two libraries.
+
+So the divergence at step 5 is chaotic amplification of a 1e-7 perturbation.
+Training is a chaotic system, and this is the same phenomenon already measured
+on this project: the plateau scatter of two identical arms is 0.01 to 0.02 bpb.
+
+The practical consequence is that the criterion had to change. "The loss must
+not move" was right for the -O2 replication, because that was the same library
+and the same order. It is too strict across two libraries. The right criterion
+is the statistical quality at equal steps, compared against the plateau scatter
+of 0.01 to 0.02 bpb, and the tokens per second.
+
+A second lesson, and a good one: the shim is now gated, so a test compiled
+without -DARCH_GPU runs the stub and returns -100. My first test build forgot
+the macro, and the failure said exactly that, because the stub says so. A
+failure that names itself saves the search.
+
+An earlier check of the wrong kind, recorded because it looked right: the test
+was run at shapes I chose, 768 by 3072, and not at the shapes of the model, 96
+by 288 and 32 by 96. The shim was correct at all of them, but the check should
+have started with the model's shapes.

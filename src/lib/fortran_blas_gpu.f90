@@ -22,8 +22,9 @@ module fortran_blas_gpu_mod
   private
 
   logical :: gpu_on = .false.
-  public :: gpu_available, gpu_enable, gpu_disable, gpu_is_on
-  public :: gpu_count
+  logical :: gpu_tried = .false.
+  public :: gpu_available, gpu_enable, gpu_disable, gpu_is_on, gpu_autostart
+  public :: gpu_count, gpu_fwd, gpu_bwd_dx, gpu_bwd_dw
 
 #ifdef ARCH_GPU
   interface
@@ -90,6 +91,26 @@ contains
   subroutine gpu_disable()
     gpu_on = .false.
   end subroutine gpu_disable
+
+  ! LIGA PELO AMBIENTE, UMA VEZ SO'. AUTORESEARCH_BLAS=gpu liga; cpu (ou vazio)
+  ! mantem desligado. Se pedirem gpu num binario sem GPU, e' ERRO do chamador, e
+  ! nao queda silenciosa para o CPU: uma queda calada esconde a causa e faz o
+  ! numero parecer bom.
+  subroutine gpu_autostart()
+    character(len=16) :: v
+    logical :: ok, asked
+    if (gpu_tried) return
+    gpu_tried = .true.
+    call get_environment_variable('AUTORESEARCH_BLAS', v)
+    asked = (trim(adjustl(v)) == 'gpu')
+    if (.not. asked) return
+    call gpu_enable(ok)
+    if (.not. ok) then
+      write (*, '(A)') 'FATAL: AUTORESEARCH_BLAS=gpu, mas este binario nao tem GPU.'
+      write (*, '(A)') '  Construa com bin/build_gpu, ou use AUTORESEARCH_BLAS=cpu.'
+      error stop 7
+    end if
+  end subroutine gpu_autostart
 
   logical function gpu_is_on()
     gpu_is_on = gpu_on

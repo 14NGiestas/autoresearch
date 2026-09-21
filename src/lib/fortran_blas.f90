@@ -18,6 +18,7 @@
 module fortran_blas_mod
   use iso_c_binding, only: c_int64_t
   use fortran_kinds_mod, only: wp
+  use fortran_blas_gpu_mod, only: gpu_fwd, gpu_bwd_dx, gpu_bwd_dw, gpu_autostart
   implicit none
 
   interface
@@ -40,6 +41,11 @@ contains
     real(wp), intent(in)  :: x(:), w(:)
     real(wp), intent(out) :: y(:)
     integer(c_int64_t) :: m, n, k, lda, ldb, ldc
+    ! A GPU primeiro, se estiver ligada. gpu_fwd devolve .false. quando nao esta',
+    ! e entao o caminho do OpenBLAS segue. Os dois caminhos ficam vivos: o CPU e'
+    ! a referencia de correcao, e a comparacao e' a medicao.
+    call gpu_autostart()
+    if (gpu_fwd(x, w, y, BB*TT, IF, OF)) return
     m = int(OF, c_int64_t)
     n = int(BB, c_int64_t) * int(TT, c_int64_t)
     k = int(IF, c_int64_t)
