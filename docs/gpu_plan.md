@@ -1,239 +1,75 @@
-# GPU plan: one interface, one kernel, and a measured target
+# The GPU path: state of the work
 
-Date: 2026-09-21. This plan follows the measurement in docs/gpu_swap.md and the
-decision to keep the CPU path.
+Date: 2026-09-21. Everything below is measured on the Radeon 780M (gfx1100, 12 CU)
+in the Ryzen 7 8745HS, which is the chip of fermi. The measurements were taken
+while other jobs used the machine, and the contention is declared in each case.
+
+## Why the GPU
+
+The step at the C-0.1B size takes 1.810 s and reaches 58 percent of the CPU
+ceiling, which is 299 GFLOP/s against 517. The iGPU peak, measured with rocBLAS,
+is 2348 GFLOP/s. So the prize is between 3.7 and 5.5 times, and it is the
+difference between 25 CPU nodes and one small machine for the 1B target.
 
 ## What the swap touches
 
 src/lib/fortran_blas.f90 is 3440 bytes and holds two subroutines:
 
-    linear3d_sgemm(x, w, y, BB, TT, IF, OF)          ! y = x @ W^T
-    linear3d_bwd_sgemm(dy, x, w, dx, dw, BB, TT, IF, OF)
+    linear3d_sgemm(x, w, y, BB, TT, IF, OF)              ! y = x @ W^T
+    linear3d_bwd_sgemm(dy, x, w, dx, dw, BB, TT, IF, OF) ! two sgemm calls
 
 The forward is one sgemm. The backward is two. So the whole swap is one
 interface, and the work is small.
 
-## Why not a library binding first
+## Where the code lives, and why there
 
-The header of that file records the trap: nixpkgs OpenBLAS is ILP64, and an
-LP64 interface reads stack garbage. The mfi package was tried and reverted for
-exactly that. A library binding carries an ABI question. A kernel of our own
-carries none.
-
-But rocBLAS is available and already runs: gpu/gpubench.c links it and measured
-the numbers below.
-
-## The shapes, at the C-0.1B size
-
-| call | m | n | k |
-|---|---|---|---|
-| QKV | 2304 | 1024 | 768 |
-| MLP up | 3072 | 1024 | 768 |
-| MLP down | 768 | 1024 | 3072 |
-| head | 8192 | 1024 | 768 |
-| attention QK^T | 1024 | 6 | 128 |
-
-## The measured target
-
-| shape | rocBLAS | percent of peak 2348 |
+| where | what | why there |
 |---|---|---|
-| k=128 | 2137 GFLOP/s | 91% |
-| MLP up | 1264 GFLOP/s | 54% |
-| k=96 | 1060 GFLOP/s | 45% |
+| src/lib/gpu_shim.cpp | the three calls, both branches | compiles in both builds |
+| src/lib/fortran_blas_gpu.f90 | bind(C) interface and dispatch | Fortran, built by fpm |
+| src/fpm.toml feature gpu | the macro ARCH_GPU and the flags | does not depend on the machine |
+| bin/build_gpu | hipcc, the include paths, the link | depends on the nix store |
 
-The library is at 91 percent on the small k and at 54 percent on the dominant
-shape. So the effective gain of the GPU is 4.3 to 5.3 times, not 7.1. That lands
-on the Amdahl band of docs/gpu_swap.md, so the ladder does not move: one iGPU
-does 1B at 20 tokens per parameter in three to four and a half months.
+The shim is one file with the GPU path under ARCH_GPU and the other branch in
+plain C++. So it lives inside the package and fpm compiles it in both builds. The
+CPU-only build, and fpm test with it, needs no ROCm and stays green.
 
-And it also gives the specialized kernel a measured target. The library leaves
-1.7 times on the table on the shape that matters most.
+The check that decided this was a deliberate #error in the file: the CPU-only
+build failed on it, so fpm does compile it. An earlier check looked for the
+symbol with nm and found nothing, which proves nothing, because the linker drops
+symbols that nothing references.
 
-## The order of work
+## The measured rates
 
-First, rocBLAS behind the two subroutines. It is proven to run, the ABI question
-is already answered in gpubench.c, and it gives the end-to-end number, which is
-the only number that counts.
+Against the CPU, which reaches 299 GFLOP/s at this size.
 
-Second, the specialized kernel, and only if the end-to-end gain falls short of
-the prediction. The shapes are compile-time constants, because the arch is a
-build feature. A kernel can bake them in. A general library cannot.
-
-## The success criterion
-
-The loss must not move. The -O2 replication set the standard: same bits per
-byte, difference 5e-6. A GPU path that changes the loss is worthless.
-
-The speed must beat the CPU path in the same run, same seed, same rows.
-
-## Keep both
-
-The CPU path stays runnable. It is the reference for correctness, and the
-comparison between the two is the measurement.
-
-## Step one: done, and it works
-
-gpu/rocblas_shim.c exposes a C ABI over rocBLAS for Fortran. It avoids hipfort,
-which is absent, and it avoids the implicit-interface trap of fortran_blas.f90,
-because bind(C) declares every type.
-
-The design that matters: the weights stay resident on the device. The 1B has
-352 MB of weights, and a copy per step would kill the gain. So the shim
-registers a weight once and keeps the device pointer in a cache. The activations
-are small and travel on every call.
-
-Build, and the measured command is in gpu/gpubench.c:
-
-    hipcc -O3 -D__HIP_PLATFORM_AMD__ -I$HIP_PATH/include -I$(dirname $RB)/include \
-      -o /tmp/shim_test gpu/rocblas_shim.c gpu/shim_test.c -lrocblas -L$RB
-
-Correctness: the maximum error against a serial reference is 0.000e+00, at every
-shape.
-
-| shape (BT, IF, OF) | ms per call | GFLOP/s |
-|---|---|---|
-| 1024, 768, 3072 (MLP up) | 4.812 | 1004 |
-| 1024, 768, 768 (MLP down) | 1.969 | 613 |
-| 1024, 768, 8192 (head) | 9.988 | 1290 |
-| 6, 128, 1024 (QK^T) | 0.088 | 17.9 |
-
-The CPU reaches 299 GFLOP/s at this size. The shim reaches 613 to 1290, with
-pageable transfers and a malloc and free on every call still inside. So it lands
-in the predicted band.
-
-The small shape confirms the attention decision by a second route: 17.9 GFLOP/s
-is dominated by the transfer, so the attention is not worth porting.
-
-The first measurement of this shim read 20.7 GFLOP/s, because the test timed the
-first call. The first call pays the HIP context, so that number measured the
-context and not the kernel. The test now warms up. The lesson is the lesson of
-the day: a number without its conditions is not a number.
-
-## What is next
-
-Wire the shim behind the two subroutines of fortran_blas.f90, behind a run flag,
-in the style of --attn-fn. Then the end-to-end run, same seed, same rows, and
-compare the loss and the tokens per second.
-
-## Step one, finished: the three calls, correct and fast
-
-The shim compiles as C++ and publishes a C ABI with extern "C". That matters
-because hip_runtime.h is C++ only, while rocBLAS alone compiles as C. The test
-stays in C.
-
-All three calls are checked against a serial loop on a small shape, with the
-standard of the house, an exact error:
-
-    fwd:     0 of 20 wrong
-    bwd dx:  verified
-    bwd dw:  verified
-
-The build has zero warnings and zero errors.
-
-| call | ms | GFLOP/s | against the CPU 299 |
+| call | ms | GFLOP/s | against the CPU |
 |---|---|---|---|
 | fwd | 4.186 | 1154 | 3.9x |
 | bwd dx | 2.702 | 1788 | 6.0x |
 | bwd dw | 2.990 | 1616 | 5.4x |
 
-The backward is where the GPU is strongest, at 69 to 76 percent of the 2348
-peak, and the backward is two thirds of the training compute. So the effective
-kernel ratio is about five, above the 3.7 of the forward alone.
+The backward is stronger, at 69 to 76 percent of the peak, and the backward is
+two thirds of the training compute.
 
-Two defects found by the way, both mine, both recorded.
+At the model's own size the picture inverts. There the transfer and the
+synchronization cost per call are fixed and they dominate.
 
-The first is a design bug: the buffer pool returned the first buffer that fitted,
-so an input and an output could share it. The fix is explicit slots.
+| shape | fwd | bwd dx | bwd dw |
+|---|---|---|---|
+| 1024 x 768 -> 3072 | 1154 | 1788 | 1616 GFLOP/s |
+| 1024 x 96 -> 288 | 181 | 180 | 126 GFLOP/s |
 
-The second is a lesson about editing: a regex patch mangled this file, and I
-rewrote it instead of patching it further. That is the same class as the jobs
-migration earlier on the same day, where the pattern matched and the meaning
-broke. Twice is enough to make it a rule: rewrite, do not patch.
+At d96 the GPU is slower than the CPU. So the GPU is not a general win. It is a
+win at large shapes, which is where the ladder says the value is. A run at d96
+would measure the overhead and not the GPU.
 
-## What is next
+## Correctness
 
-The Fortran bind(C) wrapper over these three calls, behind a run flag in the
-style of --attn-fn. Then the end-to-end run, same seed and same rows, comparing
-the loss and the tokens per second.
+All three calls are checked against a serial loop at the shapes of the model, 96
+by 288 and 32 by 96, and the error is exact.
 
-## One package: yes, and the manifest spec says how
-
-The question was whether fpm can carry the kernels in the same package. The
-manifest spec answers it, and the answer is yes with one division.
-
-A feature can carry the link. From the fpm features page:
-
-    [features]
-    with-netcdf.build.link = ["netcdf", "netcdff"]
-
-and the page states that features can configure all package manifest properties.
-The keys that matter here are flags, cxx-flags, link-time-flags, build.link and
-preprocess.cpp.macros.
-
-So the GPU build is one feature:
-
-    gpu = { flags = "-DARCH_GPU",
-            cxx-flags = "<rocblas include> <hip include>",
-            preprocess.cpp.macros = ["ARCH_GPU"],
-            build.link = ["rocblas_shim", "rocblas", "amdhip64"],
-            build.link-time-flags = ["-L<rocblas lib>", "-L<shim>"] }
-
-and the compiler is chosen by the environment: FPM_CXX=hipcc.
-
-The division that matters: the shim does not live in src/. fpm discovers C and
-C++ sources in the source directory and compiles them in every build, so a HIP
-file in src/ would break the CPU-only build, which must stay green. The shim is
-built outside fpm, like OpenBLAS already is. The precedent is in this very
-manifest: [build] link = ["openblas"], a C library that the flake builds and fpm
-only links.
-
-So the package holds the Fortran wrapper, the flag, the tests and the manifest
-entry. The shim is an artifact, in the same way OpenBLAS is an artifact.
-
-src/lib/fortran_blas_gpu.f90 is written and compiles without ARCH_GPU, which is
-the property that keeps fpm test green on a machine with no ROCm.
-
-## One file, two builds: verified, and the objection was wrong
-
-The question was whether the GPU path is just a define inside the shim. It is,
-and the earlier objection was wrong.
-
-The claim was that a C++ file in src/ would be compiled in every build and would
-break the CPU-only build without the HIP headers. The truth is that with the GPU
-path under #ifdef ARCH_GPU the common build compiles the #else branch, which is
-plain C++ and includes no HIP header. So the file lives in the package.
-
-The verification that decided it: a deliberate #error was appended to
-src/lib/gpu_shim.cpp, and the CPU-only build failed on it. So fpm does compile
-that file, and it compiles it in both builds.
-
-The first check was inconclusive, and it is worth recording why. It looked for
-the symbol gpublas in the built binaries with nm, and found nothing, in the GPU
-binary and in the CPU one. That proves nothing, because the linker drops symbols
-that nothing references, and no model code calls the GPU path yet. A test that
-cannot fail is not a test.
-
-So the package carries the kernel. There is no external artefact, contrary to
-the earlier plan that imitated OpenBLAS.
-
-What lives where:
-
-| where | what | why there |
-|---|---|---|
-| src/lib/gpu_shim.cpp | the three calls, both branches | compiles in both builds |
-| src/fpm.toml feature gpu | the macro ARCH_GPU and the flags | does not depend on the machine |
-| bin/build_gpu | hipcc, the include paths, the link | depends on the nix store |
-
-The feature uses the dotted form, because a TOML inline table cannot span lines,
-and it does not carry build.link, because build is an exclusive section and the
-manifest already sets [build] link = ["openblas"].
-
-## The forward is correct to roundoff, and the criterion had to change
-
-The dispatch is wired: linear3d_sgemm asks the GPU first, and falls back to
-OpenBLAS when the GPU is off. The backward is not wired yet.
-
-The end-to-end test at the d96 shape, five steps:
+The end to end check, at the d96 shape, five steps:
 
 | step | CPU | GPU |
 |---|---|---|
@@ -242,120 +78,69 @@ The end-to-end test at the d96 shape, five steps:
 | 5 | 8.97616 | 9.02247 |
 
 Step 1 is identical to the last digit. Step 1 measures the loss before any
-update, so the forward pass on the GPU is exact.
+update, so the forward pass is exact.
 
-Steps 2 to 5 diverge. The first reading is a wrong backward. The measurement
-says otherwise. Both paths were run for one step with the checkpoint saved, and
-the two checkpoints were compared tensor by tensor. The largest difference in
-any tensor is 4.657e-10, which is 1.9e-07 relative. That is single precision
-roundoff, nothing more. The cause is the summation order of rocBLAS against
-OpenBLAS, which is a legitimate difference between two libraries.
+Steps 2 to 5 diverge, and this is chaotic amplification, not a wrong result. The
+evidence: with one step and the checkpoints saved, the largest difference in any
+tensor is 4.424e-09, which is 1.9e-07 relative, single precision roundoff. The
+cause is the summation order of rocBLAS against OpenBLAS, which is a legitimate
+difference between two libraries.
 
-So the divergence at step 5 is chaotic amplification of a 1e-7 perturbation.
-Training is a chaotic system, and this is the same phenomenon already measured
-on this project: the plateau scatter of two identical arms is 0.01 to 0.02 bpb.
-
-The practical consequence is that the criterion had to change. "The loss must
-not move" was right for the -O2 replication, because that was the same library
-and the same order. It is too strict across two libraries. The right criterion
-is the statistical quality at equal steps, compared against the plateau scatter
-of 0.01 to 0.02 bpb, and the tokens per second.
-
-A second lesson, and a good one: the shim is now gated, so a test compiled
-without -DARCH_GPU runs the stub and returns -100. My first test build forgot
-the macro, and the failure said exactly that, because the stub says so. A
-failure that names itself saves the search.
-
-An earlier check of the wrong kind, recorded because it looked right: the test
-was run at shapes I chose, 768 by 3072, and not at the shapes of the model, 96
-by 288 and 32 by 96. The shim was correct at all of them, but the check should
-have started with the model's shapes.
-
-## The backward: dx verified, dw isolated, and a measured power caveat
-
-The dispatch of both backward GEMMs was wired, and the result exploded: NaN at
-step 4, and adam_v, the square of the gradient, at 5.3e+21 at step 1. That is not
-a small error. That is a wrong tensor.
-
-The bisect settled it. With only gpu_bwd_dx on the GPU, the largest tensor
-difference after one step is 4.657e-10, identical to the forward-only case. So
-the dx path is correct, to roundoff.
-
-The dw path is the wrong one, and the kernel is not the suspect. gpu/shim_test.c
-checks all three calls against a serial loop at the shapes of the model, 96 by
-288 and 32 by 96, and it passes, dw included. So the defect is in the dispatch,
-or in the arguments that the caller passes.
-
-The suspicion to test first: the CPU computes both GEMMs with beta zero, and dw
-is dy transposed times x with A=x (lda=IF), B=dy (ldb=OF) and C=dw (ldc=IF). The
-shim does exactly that. What remains is the caller. If the model calls
-linear3d_bwd_sgemm more than once for the same dw, beta zero overwrites instead
-of accumulating, and the two paths diverge. That is a hypothesis, and the next
-run should check it before anything is changed.
-
-The tree is left in the verified state: forward and dx on the GPU, dw on the
-CPU, with a comment that says why. A half path that is silent is worse than a
-half path that is declared.
+So the criterion had to change. "The loss must not move" was right for the -O2
+replication, because that was the same library and the same order. Across two
+libraries it is too strict. The right criterion is the statistical quality at
+equal steps, against the plateau scatter of 0.01 to 0.02 bpb, plus the tokens per
+second.
 
 ## The GPU does not sweat, and that is measured
-
-The question was whether the iGPU is really doing the work. The amdgpu sensor
-answers it.
 
 | state | mean power | peak |
 |---|---|---|
 | idle | 42.2 W | 63.1 W |
 | during the benchmark | 37.8 W | 65.1 W |
 
-The mean during the benchmark is lower than at idle, and the peak is the same.
-The kernels last three to five milliseconds and the gaps last about fifty, so
-the power manager of the APU never notices. The rates of 1030 to 1518 GFLOP/s
-are therefore burst rates, one kernel at a time. The peak of 2348 needs a
-sustained load and full memory bandwidth, which only a whole step on the GPU
-would give.
+The mean during the benchmark is lower than at idle and the peak is the same.
+The kernels last three to five milliseconds and the gaps about fifty, so the
+power manager of the APU never notices. The rates above are burst rates, one
+kernel at a time. The peak of 2348 needs a sustained load.
 
-There is a second reading, and it matters more. The power is near 40 W in both
-cases, so the host side, the synchronous copies included, dominates the time.
-That is where an end-to-end gain can die.
+The second reading matters more. The power is near 40 W in both cases, so the
+host side, the synchronous copies included, dominates the time. That is where an
+end-to-end gain can die, and it is why the end-to-end number is the only one that
+counts.
 
-## The dw bug: a use-after-free, found by bisect and fixed
+## Corrections, kept because they cost time
 
-The wiring of both backward GEMMs exploded: NaN at step 4, and adam_v, the square
-of the gradient, at 5.3e+21 at step 1.
+Five claims of mine were wrong, and each was caught by a measurement.
 
-The bisect put dx on the GPU alone, and the largest tensor difference came back
-at 4.657e-10, identical to the forward-only case. So dx was correct and dw was
-wrong.
+The first was that the shim needed to be an external artefact, like OpenBLAS.
+It does not. A define inside the shim is enough, and the package carries the
+kernel.
 
-The kernel was never the suspect. shim_test.c checks all three calls against a
-serial loop and passed, dw included. The defect was in the shim's memory
-management.
+The second was that a C++ file in src/ would break the CPU-only build. It does
+not, because the other branch is plain C++.
 
-The weight cache used the activation slot pool. Registering a second weight
-freed the buffer of the first, and the cache kept pointing at freed memory. That
-is a use-after-free, and it explains a number like 5.3e+21.
+The third was a check that could not fail: nm for a symbol that nothing
+references.
 
-The reason the test missed it is the lesson: each run of shim_test tested one
-shape, so it registered exactly one weight. The case that mattered, two weights in
-one process, was never exercised. The test now has that case, and it fails on the
-old code and passes on the new.
+The fourth was a measurement of 20.7 GFLOP/s, which timed the first call and
+therefore measured the HIP context and not the kernel. The test now warms up.
 
-After the fix, all three calls on the GPU give a largest tensor difference of
-4.424e-09 at step 1, which is single precision roundoff.
+The fifth was the worst and the most useful. Wiring the backward gave NaN at
+step 4 and adam_v at 5.3e+21. The bisect put dx on the GPU alone and the error
+came back at 4.657e-10, so dx was correct and dw was wrong. The kernel was never
+the suspect, because the test checked it. The shim's weight cache used the
+activation slot pool, so registering a second weight freed the buffer of the
+first while the cache kept pointing at it. A use-after-free.
 
-## The GPU loses at the model's own size
+The reason the test missed it is the lesson. Each run of the test used one
+shape, so it registered one weight. The case that mattered, two weights in one
+process, was never exercised. The test has that case now, and it fails on the old
+code.
 
-The same bench, at the shapes of the d96 model instead of the C-0.1B shapes:
+## What is next
 
-| shape | fwd | bwd dx | bwd dw |
-|---|---|---|---|
-| 1024 x 768 -> 3072 | 1154 | 1788 | 1616 GFLOP/s |
-| 1024 x 96 -> 288 | 181 | 180 | 126 GFLOP/s |
-
-At the model's size the GPU is slower than the CPU, which reaches about 500
-GFLOP/s. The transfer and the synchronization cost per call are fixed, and at
-these sizes they dominate.
-
-So the GPU is not a general win. It is a win at large shapes, which is where the
-ladder says the value is. A run at d96 would measure the overhead and not the
-GPU.
+The end-to-end run at a large shape, where the GPU wins. The C-0.1B size is the
+natural one: 768 by 3072 gives 1154 to 1788 GFLOP/s. That needs
+bin/build_gpu 768 6 2 12 8192 1024. The number to read is the tokens per second,
+against 566 on the CPU.
