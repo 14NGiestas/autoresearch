@@ -130,3 +130,42 @@ zero case, S equal to zero, gives a zero row rather than a NaN.
 The gate must gain the mode in the same commit, because the tree has to be green
 at the end of the task, and a forward that knows L1 with a backward that does not
 is exactly the mismatch the FD check exists to catch.
+
+## The first port attempt failed, and the gate caught it in one run
+
+The L1 backward was ported into attn_bwd_sgemm, the gate was taught the mode, and
+the finite difference check failed at once:
+
+    relu/T:  worst |dL/dq - dq| = 0.238E-03     passes, tolerance 2e-3
+    L1:      worst |dL/dq - dq| = 0.542E+00     fails, 271 times the tolerance
+    FAIL: dQ, dK and dV match finite differences
+
+That is the gate doing its job, and it cost one run. Without it, this backward
+would have gone into a training run and produced a wrong gradient, which is the
+class of error that is hardest to see.
+
+The formula is not the suspect. It was re-derived by hand: with P = r/S and
+S = sum r, the Jacobian gives
+
+    ds_k = r'_k / S * ( dP_k - sum_i dP_i P_i )
+
+which is exactly what the code computes, with inv = 1/S and rowsum = sum dP P.
+The derivation in scripts/relu_l1_math.py agrees.
+
+So the defect is in the port, at a place that was not located in this session.
+The first guess was the recomputed sum, because at that point SP already holds P
+and the sum would be 1. Fixing that changed 0.549 to 0.542, which is no change,
+so that was not the cause.
+
+## To reproduce, in one run
+
+Put the mode back in attn_bwd_sgemm and add call test_attn_bwd_sgemm(relu_l1=.true.)
+to test_kernels.f90. Then fpm test fails on dQ, dK and dV. The dQ failure alone
+rules out the atomics, because dq is a plain write.
+
+## The state that was left
+
+The tree is back to the last green commit, which has the mode in both forwards
+and nothing else. The forwards are correct but unexercised, which is declared.
+The plan, the derivation and the verified kernel form are in the repository, and
+the failing port is described above with its numbers.
