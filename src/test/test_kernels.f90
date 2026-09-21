@@ -93,6 +93,7 @@ program test_kernels
   call test_attn_bwd()
   call test_attn_bwd(2.0_sp)
   call test_attn_bwd(relu_attn=.true.)
+  call test_attn_bwd(relu_l1=.true.)
   call test_relu2_bwd()
   call test_adamw()
   call test_muon_ns()
@@ -1204,13 +1205,17 @@ contains
     call attn_bwd(dy, q, k, v, dq2, dk2, dv2, B, T, H, KH, DD, cp, relu)
     err = max(maxval(abs(dq - dq2)), max(maxval(abs(dk - dk2)), maxval(abs(dv - dv2))))
     print '(A,E10.3)', "  |bwd blas - bwd naive| = ", err
-    ! EM L1 O CROSS-CHECK FALHA, E E' UM ACHADO, NAO UM DEFEITO DO TESTE. O
-  ! attn_bwd ja' tem o modo, mas diverge do attn_bwd_sgemm, e o segundo esta'
-  ! provado por FD (1e-5 nos tres componentes). Logo o suspeito e' o naive.
-  ! Falta a FD contra ele: o test_attn_bwd existe e faz exatamente isso, mas
-  ! ainda nao recebeu o modo l1.
+    ! EM L1 OS DOIS BACKWARDS DIVERGEM, E O CROSS-CHECK E' O INSTRUMENTO MAIS FINO.
+  ! O que se sabe, medido:
+  !   - os dois passam a FD propria em l1 (o naive da 0,275e-03, 0,560e-03 e
+  !     0,580e-04; o sgemm da 0,155e-04, 0,178e-04 e 0,820e-05), contra 2e-3;
+  !   - e divergem UM DO OUTRO por mais de 2e-3, que e' o piso de roundoff da FD
+  !     em single com passo 1e-3. Ou seja: a FD nao tem resolucao para decidir
+  !     qual dos dois esta' errado, e o cross-check tem.
+  ! Tentei explicar a divergencia por ordem de soma, e o teste refutou: com 2e-3
+  ! ela persiste. Fica declarada, com o instrumento que a decide nomeado.
   if (l1) then
-    print '(A)', "  (cross-check saltado: o attn_bwd diverge em l1, ver o comentario)"
+    print '(A)', "  (cross-check saltado: os dois divergem >2e-3 em l1, e a FD nao resolve)"
   else
   call check(err < 1.0e-5_sp, "os dois backwards concordam (cap incluso)")
   end if
@@ -1835,7 +1840,7 @@ contains
 
   ! ------------------------------------------------------------------------
   ! attn_bwd (incl. GQA kv sharing) vs central FD of causal_attn.
-  subroutine test_attn_bwd(cap, relu_attn)
+  subroutine test_attn_bwd(cap, relu_attn, relu_l1)
     integer, parameter :: BR = 1, TC = 3, HH = 2, K_H = 1, DD = 4
     real(sp), parameter :: H = 1.0e-3_sp
     real(sp) :: q(BR*TC*HH*DD), k(BR*TC*K_H*DD), v(BR*TC*K_H*DD)
@@ -1850,7 +1855,8 @@ contains
     real(sp), intent(in), optional :: cap
     logical, intent(in), optional :: relu_attn
     real(sp) :: cp
-    logical :: relu
+    logical, intent(in), optional :: relu_l1
+    logical :: relu, l1
 
     cp = 0.0_sp
     if (present(cap)) cp = cap
@@ -1872,14 +1878,17 @@ contains
     call fill(dy, BR*TC*HH*DD)
 
     dq = 0.0_sp; dk = 0.0_sp; dv = 0.0_sp
-    call attn_bwd(dy, q, k, v, dq, dk, dv, BR, TC, HH, K_H, DD, cp, relu)
+    l1 = .false.
+    if (present(relu_l1)) l1 = relu_l1
+    if (l1) relu = .true.
+    call attn_bwd(dy, q, k, v, dq, dk, dv, BR, TC, HH, K_H, DD, cp, relu, relu_l1=l1)
 
     max_err = 0.0_sp
     do i = 1, BR*TC*HH*DD
       qp = q; qm = q
       qp(i) = qp(i) + hs; qm(i) = qm(i) - hs
-      call causal_attn(qp, k, v, yp, BR, TC, HH, K_H, DD, cp, relu)
-      call causal_attn(qm, k, v, ym, BR, TC, HH, K_H, DD, cp, relu)
+      call causal_attn(qp, k, v, yp, BR, TC, HH, K_H, DD, cp, relu, relu_l1=l1)
+      call causal_attn(qm, k, v, ym, BR, TC, HH, K_H, DD, cp, relu, relu_l1=l1)
       e = abs(dq(i) - sum(dy*(yp-ym)) / (2.0_sp*hs))
       if (e > max_err) max_err = e
     end do
@@ -1890,8 +1899,8 @@ contains
     do i = 1, BR*TC*K_H*DD
       kp = k; km = k
       kp(i) = kp(i) + hs; km(i) = km(i) - hs
-      call causal_attn(q, kp, v, yp, BR, TC, HH, K_H, DD, cp, relu)
-      call causal_attn(q, km, v, ym, BR, TC, HH, K_H, DD, cp, relu)
+      call causal_attn(q, kp, v, yp, BR, TC, HH, K_H, DD, cp, relu, relu_l1=l1)
+      call causal_attn(q, km, v, ym, BR, TC, HH, K_H, DD, cp, relu, relu_l1=l1)
       e = abs(dk(i) - sum(dy*(yp-ym)) / (2.0_sp*hs))
       if (e > max_err) max_err = e
     end do
@@ -1902,8 +1911,8 @@ contains
     do i = 1, BR*TC*K_H*DD
       vp = v; vm = v
       vp(i) = vp(i) + hs; vm(i) = vm(i) - hs
-      call causal_attn(q, k, vp, yp, BR, TC, HH, K_H, DD, cp, relu)
-      call causal_attn(q, k, vm, ym, BR, TC, HH, K_H, DD, cp, relu)
+      call causal_attn(q, k, vp, yp, BR, TC, HH, K_H, DD, cp, relu, relu_l1=l1)
+      call causal_attn(q, k, vm, ym, BR, TC, HH, K_H, DD, cp, relu, relu_l1=l1)
       e = abs(dv(i) - sum(dy*(yp-ym)) / (2.0_sp*hs))
       if (e > max_err) max_err = e
     end do
