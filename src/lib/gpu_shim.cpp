@@ -18,6 +18,16 @@
 #ifdef ARCH_GPU
 #include <rocblas/rocblas.h>
 #include <hip/hip_runtime.h>
+#include <mutex>
+
+// POR THREAD, E POR QUE. O modelo chama o BLAS de dentro de regioes OpenMP. Com um
+// unico rocblas_handle partilhado, e um unico pool de buffers, as threads
+// serializavam num futex e esperavam em kfd_wait_on_events: medido na pilha, tres
+// threads em futex_do_wait e duas em kfd_wait_on_events, com um passo a levar mais
+// de dez minutos. O handle do rocBLAS nao e' thread-safe. Entao o handle e os
+// buffers de ativacao sao por thread, e so' o cache de pesos e' partilhado, com um
+// lock, porque os pesos sao os mesmos para todas.
+static std::mutex wlock;
 #define MAXW 1024
 #define MAXB 16
 #define CHK(call) do { if ((call) != hipSuccess) return -5; } while (0)
@@ -25,9 +35,9 @@ typedef struct { const float* host; float* dev; int64_t IF, OF; } WEntry;
 typedef struct { float* d[4]; size_t n[4]; int have[4]; } Slot;
 static WEntry W[MAXW];
 static int NW = 0;
-static Slot S[MAXB];
 static int NS = 0;
-static rocblas_handle H = NULL;
+static thread_local Slot S[MAXB];
+static thread_local rocblas_handle H = NULL;
 static int ensure(void) {
   if (H) return 0;
   if (rocblas_create_handle(&H) != rocblas_status_success) { H = NULL; return -1; }
@@ -38,7 +48,23 @@ static int ensure(void) {
 static float* buff(int set, int pos, size_t n) {
   if (set < 0 || set >= MAXB || pos < 0 || pos > 3) return NULL;
   if (S[set].have[pos] && S[set].n[pos] >= n) return S[set].d[pos];
-  if (S[set].have[pos]) { (void)hipFree(S[set].d[pos]); S[set].have[pos] = 0; }
+  // SO' CRESCE, NUNCA ENCOLHE. A versao anterior libertava o buffer quando um
+  // tamanho MAIOR aparecia. As formas do modelo alternam (8192 na cabeca, 2304 no
+  // QKV, 3072 no MLP), entao ela alocava e libertava em quase toda chamada, e o
+  // hipMalloc e o hipFree sao caros e sincronizam. O passo passou de 13 minutos
+  // sem completar um. Guardar o maior buffer por slot resolve; o custo e' alguns
+  // MB parados, que e' barato.
+  if (S[set].have[pos]) {
+    float* old = S[set].d[pos];
+    float* bigger = NULL;
+    if (hipMalloc((void**)&bigger, n * 4) != hipSuccess) return old;
+    if (hipMemcpy(bigger, old, S[set].n[pos] * 4, hipMemcpyDeviceToDevice) != hipSuccess) {
+      (void)hipFree(bigger); return old;
+    }
+    (void)hipFree(old);
+    S[set].d[pos] = bigger; S[set].n[pos] = n;
+    return bigger;
+  }
   float* d = NULL;
   if (hipMalloc((void**)&d, n * 4) != hipSuccess) return NULL;
   S[set].d[pos] = d; S[set].n[pos] = n; S[set].have[pos] = 1;
@@ -49,6 +75,7 @@ static float* buff(int set, int pos, size_t n) {
 // 352 MB de pesos, e copiar isso por passo mata o ganho.
 static float* weight(const float* w, int64_t IF, int64_t OF) {
   if (!w || IF <= 0 || OF <= 0) return NULL;
+  std::lock_guard<std::mutex> g(wlock);
   for (int i = 0; i < NW; i++)
     if (W[i].host == w && W[i].IF == IF && W[i].OF == OF) return W[i].dev;
   if (NW >= MAXW) return NULL;

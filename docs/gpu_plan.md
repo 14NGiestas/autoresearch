@@ -144,3 +144,40 @@ The end-to-end run at a large shape, where the GPU wins. The C-0.1B size is the
 natural one: 768 by 3072 gives 1154 to 1788 GFLOP/s. That needs
 bin/build_gpu 768 6 2 12 8192 1024. The number to read is the tokens per second,
 against 566 on the CPU.
+
+## The bottleneck is the transfer, and this closes the question
+
+The end-to-end run at the C-0.1B shape, 100 steps, did not finish. The
+investigation gave a number, and the number is the answer.
+
+At one thread, the GPU takes 50 seconds per step. The CPU takes 11 at four
+threads, and 93 tokens per second. At four threads the GPU never finished a step
+in ten minutes, and the thread states said why: three threads in futex_do_wait
+and two in kfd_wait_on_events.
+
+The arithmetic of the transfer explains the 50 seconds. A step at d768 has about
+eighty GEMM calls. The activations are large, and the head alone carries 33 MB,
+because 8192 by 1024 floats is 33 MB. Each call pays two blocking copies, in and
+out. That is about 5.3 GB per step. Pageable, synchronous hipMemcpy moves about
+100 MB per second, so the copies alone cost about 53 seconds. Measured, 50.
+
+So the kernel is not the problem. The microbench reached 1154 to 1788 GFLOP/s
+because it reused one weight and one shape and paid the transfer once. The model
+pays it eighty times per step, and the transfer is a hundred times slower than
+the arithmetic.
+
+Three independent measurements agree. The iGPU busy counter sits at 60 to 65
+percent, the amdgpu power stays near 40 W against 42 W at idle, and the threads
+spend their time in kfd_wait_on_events. The GPU is not sweating because it is
+waiting for memory, not because it is idle.
+
+The consequence is structural. A BLAS swap cannot win, because the interface
+exchanges the activations on every call. To win, the activations must stay on the
+device, which means the whole forward and backward pass moves, not the GEMM
+calls. That is a much larger job than the one the plan assumed, and the measured
+number is what says so.
+
+The intermediate fixes were tried and did not change the picture: growing the
+buffers instead of freeing them, and making the handle and the buffers
+thread-local. Both are correct and both were kept, but neither touches the
+transfer.
