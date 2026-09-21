@@ -7,7 +7,7 @@ program hipfort_gemm
   integer :: BT, IF, OF, ierr, k, reps
   real(c_float), allocatable, target :: x(:), w(:), y(:)
   type(c_ptr) :: dx, dw, dy, h
-  integer(c_int64_t) :: t0, t1, rate
+  integer :: t0, t1, rate   ! o COUNT do system_clock e' integer DEFAULT: com c_int64_t o gfortran nao escreve
   real(c_double) :: ms, fl
   BT = 1024; IF = 768; OF = 3072; reps = 20
   allocate(x(BT*IF), w(OF*IF), y(BT*OF))

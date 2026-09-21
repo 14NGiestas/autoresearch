@@ -18,7 +18,7 @@ program resident_layer
   type(c_ptr) :: dx, dq, dk, dv, dao, dsub, dup
   type(c_ptr) :: wq, wk, wv, wo, wup, wdn
   type(c_ptr) :: h
-  integer(c_int64_t) :: t0, t1, rate
+  integer :: t0, t1, rate   ! o COUNT do system_clock e' integer DEFAULT: com c_int64_t o gfortran nao escreve
   real(c_double) :: ms, fl
   reps = 10
   allocate(hx(T*D)); hx = 0.01_c_float

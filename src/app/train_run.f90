@@ -21,7 +21,7 @@
 
 program train_run
   use iso_c_binding
-  use, intrinsic :: iso_fortran_env, only: int64, real64
+  use, intrinsic :: iso_fortran_env, only: int64, real32, real64
   use fortran_energy_mod
   use fortran_train_mod
   use load_weights_mod, only: load_gpt_weights, save_gpt_weights, &
@@ -85,6 +85,11 @@ program train_run
   integer :: last_save, etrace_u, eios
   logical :: etrace_ok
   real(real64) :: e_w
+  ! Trilha de tempo por fase do passo, ao lado da de energia.
+  integer :: ttrace_u, tios
+  logical :: ttrace_ok
+  real(real32) :: tp_f, tp_b, tp_o
+  integer :: tp_nn
   real(sp) :: theta, ang
 
   lr = 0.0003_sp; t0 = 1; log_every = 1; save_every = 10; start_row = 0
@@ -216,6 +221,20 @@ program train_run
     print '(2A)', 'warning: cannot write the energy trace: ', &
         trim(outdir) // '/energy_trace.csv'
   end if
+  ! Trilha de tempo (tstep,fwd_ms,bwd_ms,opt_ms) a cada log_every. O passo tem
+  ! tres fases e sem esta trilha nao se sabe onde ele gasta o tempo.
+  ttrace_u = -1
+  ttrace_ok = .false.
+  open (newunit=ttrace_u, file=trim(outdir) // '/timing_trace.csv', &
+      status='replace', action='write', iostat=tios)
+  if (tios == 0) then
+    ttrace_ok = .true.
+    write (ttrace_u, '(A)') 'tstep,fwd_ms,bwd_ms,opt_ms'
+    flush (ttrace_u)
+  else
+    print '(2A)', 'warning: cannot write the timing trace: ', &
+        trim(outdir) // '/timing_trace.csv'
+  end if
   do k = 1, nsteps
     if (mod(k, save_every) == 0 .or. k == nsteps) then
       write (ckdir, '(A,I0)') trim(outdir) // '/step_', t0 + k - 1
@@ -313,6 +332,18 @@ program train_run
       print '(A,I0,A,F10.5,A,F8.5)', "step ", tstep, " nll ", nll, &
         " lr ", lr_eff
       flush (6)
+      ! As fases sao o acumulado desde o ultimo log, e depois zeram.
+      call train_phase_ms(tp_f, tp_b, tp_o, tp_nn)
+      print '(A,F10.2,A,F10.2,A,F10.2,A,F10.2,A,I0)', '  fases ms fwd ', tp_f, &
+          ' bwd ', tp_b, ' opt ', tp_o, ' total ', tp_f + tp_b + tp_o, &
+          ' rate ', train_phase_rate()
+      flush (6)
+      if (ttrace_ok) then
+        write (ttrace_u, '(I0,A,F0.3,A,F0.3,A,F0.3)') tstep, ',', tp_f, &
+            ',', tp_b, ',', tp_o
+        flush (ttrace_u)
+      end if
+      call train_phase_reset()
       if (etrace_ok) then
         ! watts = potencia media DESDE A LINHA ANTERIOR (energy_watts mantem o
         ! proprio estado e nao toca no intervalo do checkpoint).

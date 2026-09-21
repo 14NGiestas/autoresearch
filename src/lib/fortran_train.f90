@@ -30,6 +30,19 @@ module fortran_train_mod
   public :: forward_save, compute_grads, train_step, init_state, init_temp, free_temp
   public :: apply_update
   public :: wp
+  public :: train_phase_reset, train_phase_ms, train_phase_rate
+
+  ! Instrumento de tempo por fase do passo. Mesmo espirito do medidor de energia:
+  ! acumula e o chamador escreve a trilha. Existe porque sem ele nao se sabe onde
+  ! o passo gasta o tempo: as GEMMs do d360 correm a 600 GFLOP/s e o passo a 84,
+  ! logo o tempo NAO esta' nas contas, e so' a medicao diz onde esta'.
+  integer :: tp_n = 0
+  real(wp) :: tp_fwd = 0.0_wp, tp_bwd = 0.0_wp, tp_opt = 0.0_wp
+  integer :: tp_rate = 0
+  ! O tipo do COUNT do system_clock tem de ser o integer DEFAULT. Com
+  ! integer(c_int64_t) o gfortran nao escreve o valor e a contagem sai lixo,
+  ! em silencio: o rate vem 1000 e os deltas vem de ordem 1e9.
+  integer :: tp_t0 = 0, tp_t1 = 0
 
   type :: dims_t
     integer :: B, T, V, D, nh, nkv, hd, nl
@@ -616,9 +629,51 @@ contains
     l1_a = .false.
     if (present(relu_l1)) l1_a = relu_l1
     if (l1_a) relu_a = .true.
+    if (tp_rate == 0) call system_clock(tp_t0, tp_rate)
+    call system_clock(tp_t0)
     call forward_save(idx, targets, cos, sin, M, G, C, tmp, nll, useblas, useqk, useqkph, cp, relu_a, relu_l1=relu_l1)
+    call system_clock(tp_t1); tp_fwd = tp_fwd + tp_el(tp_t0, tp_t1)
+    call system_clock(tp_t0)
     call compute_grads(idx, targets, cos, sin, M, G, C, GR, tmp, nll, useblas, useqk, useqkph, cp, relu_a, relu_l1=relu_l1)
+    call system_clock(tp_t1); tp_bwd = tp_bwd + tp_el(tp_t0, tp_t1)
+    call system_clock(tp_t0)
     call apply_update(M, S, GR, tstep, lr, b1, b2, beps, wd, m_opt, lr_mu, G)
+    call system_clock(tp_t1); tp_opt = tp_opt + tp_el(tp_t0, tp_t1)
+    tp_n = tp_n + 1
   end subroutine train_step
+
+  ! Segundos entre dois instantes do system_clock. A divisao e' feita em DUPLA:
+  ! a contagem e' de ordem 1e9 ticks por passo e o wp e' real32, e converter
+  ! primeiro para real32 perde os bits baixos e a escala sai errada.
+  real(wp) function tp_el(a, b) result(r)
+    integer, intent(in) :: a, b
+    if (tp_rate <= 0) then
+      r = 0.0_wp
+    else
+      r = real(real(b - a, c_double) / real(tp_rate, c_double), wp)
+    end if
+  end function tp_el
+
+  subroutine train_phase_reset()
+    tp_n = 0
+    tp_fwd = 0.0_wp
+    tp_bwd = 0.0_wp
+    tp_opt = 0.0_wp
+  end subroutine train_phase_reset
+
+  ! Media por passo, em milissegundos, das tres fases.
+  subroutine train_phase_ms(fwd, bwd, opt, n)
+    real(wp), intent(out) :: fwd, bwd, opt
+    integer, intent(out) :: n
+    n = max(tp_n, 1)
+    fwd = 1000.0_wp * tp_fwd / real(n, wp)
+    bwd = 1000.0_wp * tp_bwd / real(n, wp)
+    opt = 1000.0_wp * tp_opt / real(n, wp)
+  end subroutine train_phase_ms
+
+  ! O rate do relogio, para o chamador conferir a escala do instrumento.
+  integer function train_phase_rate() result(r)
+    r = tp_rate
+  end function train_phase_rate
 
 end module fortran_train_mod
