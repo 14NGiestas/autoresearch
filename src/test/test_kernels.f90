@@ -68,6 +68,7 @@ program test_kernels
   call test_qkhop_sgemm()
   call test_qkhop_ph()
   call test_attn_sgemm()
+  call test_attn_sgemm(relu_attn=.true.)
   call test_attn_bwd_sgemm()
   call test_attn_bwd_sgemm(2.0_sp)
   call test_attn_bwd_sgemm(relu_attn=.true.)
@@ -1200,8 +1201,10 @@ contains
   ! attn_sgemm: BLAS attention must reproduce causal_attn. Different summation
   ! order, so a tolerance rather than bit equality -- but it also has to hold
   ! for the GQA case (H != K_H), which is where a layout mistake would hide.
-  subroutine test_attn_sgemm()
+  subroutine test_attn_sgemm(cap, relu_attn)
     integer, parameter :: B = 1, T = 6, H = 4, KH = 2, D = 4
+    real(sp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
     real(sp) :: q(B*T*H*D), k(B*T*KH*D), v(B*T*KH*D)
     real(sp) :: yref(B*T*H*D), yblas(B*T*H*D)
     real(sp) :: S(T*T)
@@ -1209,12 +1212,15 @@ contains
     integer :: i, rep
 
     print '(A)', "=== test_attn_sgemm (BLAS attention vs causal_attn) ==="
+    if (present(relu_attn)) then
+      if (relu_attn) print '(A)', "  (variante relu)"
+    end if
     call fill(q, B*T*H*D)
     call fill(k, B*T*KH*D)
     call fill(v, B*T*KH*D)
-    call causal_attn(q, k, v, yref, B, T, H, KH, D)
+    call causal_attn(q, k, v, yref, B, T, H, KH, D, cap, relu_attn)
     S = 0.0_sp
-    call attn_sgemm(q, k, v, yblas, B, T, H, KH, D, S)
+    call attn_sgemm(q, k, v, yblas, B, T, H, KH, D, S, cap, relu_attn)
     max_err = 0.0_sp
     do i = 1, B*T*H*D
       e = abs(yref(i) - yblas(i))
@@ -1228,8 +1234,8 @@ contains
     ! tight one and an lda mistake shows up here.
     rep = 2
     call fill(q, B*T*(KH*rep)*D)
-    call causal_attn(q, k, v, yref, B, T, KH*rep, KH, D)
-    call attn_sgemm(q, k, v, yblas, B, T, KH*rep, KH, D, S)
+    call causal_attn(q, k, v, yref, B, T, KH*rep, KH, D, cap, relu_attn)
+    call attn_sgemm(q, k, v, yblas, B, T, KH*rep, KH, D, S, cap, relu_attn)
     max_err = 0.0_sp
     do i = 1, B*T*(KH*rep)*D
       e = abs(yref(i) - yblas(i))
