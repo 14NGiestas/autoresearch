@@ -860,10 +860,6 @@ contains
               dSbuf((ii-1)*TT + jj) = 0.0_wp
             end do
           end do
-          if (ib == 1 .and. kb == 1) then
-            write (*, '(A,3E12.4)') '  ANTES-dQ  dSbuf(1..3)=', &
-                dSbuf(1), dSbuf(2), dSbuf(3)
-          end if
           ! ---- dQ = scale * dS K (unique per query head: plain write) ----
           m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
           lda = int(K_HH*DD, c_int64_t); ldb = int(TT, c_int64_t)
@@ -871,10 +867,6 @@ contains
           call sgemm('N', 'N', m, n, kk, scale, &
                k((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, dSbuf, ldb, &
                0.0_wp, dq((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldc)
-          if (ib == 1 .and. kb == 1) then
-            write (*, '(A,3E12.4)') '  ANTES-dK  dSbuf(1..3)=', &
-                dSbuf(1), dSbuf(2), dSbuf(3)
-          end if
           ! ---- dK += scale * dS^T Q (accumulated over the GQA group) ----
           m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
           lda = int(HH*DD, c_int64_t); ldb = int(TT, c_int64_t)

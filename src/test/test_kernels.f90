@@ -1155,48 +1155,6 @@ contains
     call attn_bwd_sgemm(dy, q, k, v, dq, dk, dv, B, T, H, KH, DD, &
         Swork, dP, dS, dkv, cp, relu, l1)
 
-    ! DIAGNOSTICO: o Swork que o backward devolve e' o P que ele usou. Comparar
-    ! com o P calculado a' mao, da mesma formula, diz se o P do backward e' o
-    ! mesmo do forward. E' a pergunta que a hipotese hyp_dbb711 nomeia.
-    if (T <= 4) then
-      block
-        real(sp) :: sc2(T), sw, sk
-        integer :: c2, s2, d2
-        do c2 = 1, T
-          sw = 0.0_sp
-          do s2 = 1, c2
-            sk = 0.0_sp
-            do d2 = 1, DD
-              sk = sk + q(((c2-1)*H)*DD + d2)*k(((s2-1)*KH)*DD + d2)
-            end do
-            sk = sk/sqrt(real(DD, sp))
-            if (relu) then
-              if (sk < 0.0_sp) sk = 0.0_sp
-              if (l1) then
-                sc2(s2) = sk
-                sw = sw + sk
-              else
-                sc2(s2) = sk/real(T, sp)
-              end if
-            else
-              sc2(s2) = exp(sk)
-            end if
-          end do
-          do s2 = 1, c2
-            if (relu .and. l1) then
-              if (sw > 0.0_sp) then
-                sc2(s2) = sc2(s2)/sw
-              else
-                sc2(s2) = 0.0_sp
-              end if
-            end if
-            write (*, '(A,I0,A,I0,A,E12.4,A,E12.4)') '  P mao c=', c2, ' s=', s2, &
-                ' mao=', sc2(s2), ' backward=', Swork((c2-1)*T + s2)
-          end do
-        end do
-      end block
-    end if
-
     worst = 0.0_sp
     do i = 1, B*T*H*DD
       qp = q; qp(i) = qp(i) + hs
