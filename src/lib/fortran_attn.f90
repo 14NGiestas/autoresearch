@@ -698,7 +698,7 @@ contains
   ! out explicitly. Scratch (caller-owned, reused across layers):
   !   SP, dPbuf, dSbuf : (TT*TT), dkv: (2*TT*K_HH*DD) for the dK/dV accumulators.
   subroutine attn_bwd_sgemm(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, &
-       SP, dPbuf, dSbuf, dkv, cap, relu_attn)
+       SP, dPbuf, dSbuf, dkv, cap, relu_attn, relu_l1)
     integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
     real(wp), intent(in)  :: dy(:), q(:), k(:), v(:)
     real(wp), intent(out) :: dq(:)
@@ -706,13 +706,18 @@ contains
     real(wp), intent(inout) :: SP(:), dPbuf(:), dSbuf(:), dkv(:)
     real(wp), intent(in), optional :: cap
     logical, intent(in), optional :: relu_attn
+    ! relu_l1: relu normalizado pela soma do relu da linha (L1), em vez de por T.
+    logical, intent(in), optional :: relu_l1
     integer :: ia, kb, ib, ii, jj
     integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
     real(wp) :: scale, mx, sm, inv, rowsum, cp
-    logical :: relu_a
+    logical :: relu_a, l1_a
 
     relu_a = .false.
     if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
     cp = 0.0_wp
     if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(DD, wp))
@@ -761,7 +766,19 @@ contains
               end if
             end do
             if (relu_a) then
-              inv = 1.0_wp/real(TT, wp)
+              if (l1_a) then
+                sm = 0.0_wp
+                do jj = 1, ii
+                  sm = sm + SP((ii-1)*TT + jj)
+                end do
+                if (sm > 0.0_wp) then
+                  inv = 1.0_wp/sm
+                else
+                  inv = 0.0_wp
+                end if
+              else
+                inv = 1.0_wp/real(TT, wp)
+              end if
             else
             sm = 0.0_wp
             do jj = 1, ii
@@ -788,13 +805,46 @@ contains
           ! rowsum e sem P -- a derivada do relu e' so' a mascara.
           do ii = 1, TT
             if (relu_a) then
-              do jj = 1, ii
-                if (dSbuf((ii-1)*TT + jj) > 0.0_wp) then
-                  dSbuf((ii-1)*TT + jj) = dPbuf((ii-1)*TT + jj)/real(TT, wp)
-                else
-                  dSbuf((ii-1)*TT + jj) = 0.0_wp
+              if (l1_a) then
+                ! L1: dois termos. Com r_i = P_i*S, o termo do denominador e' S*rowsum,
+                ! e colapsa em (dP - rowsum)/S sobre a mascara do relu.
+                !
+                ! TUDO RECOMPUTADO AQUI, e o motivo e' medido. Este laco do dS e' um
+                ! laco SEPARADO, que corre DEPOIS do laco do P. La' o SP e' sobrescrito
+                ! linha a linha, entao aqui o SP so' contem o P da ULTIMA linha, e o
+                ! inv so' o da ultima. Para o relu/T isso nao se nota (inv = 1/T e' o
+                ! mesmo em todas as linhas), e o softmax recalcula o rowsum localmente.
+                ! O L1 nao pode herdar nada: refaz a linha a partir do dSbuf, que
+                ! guarda o score assinado de TODAS as linhas.
+                sm = 0.0_wp
+                do jj = 1, ii
+                  if (dSbuf((ii-1)*TT + jj) > 0.0_wp) &
+                      sm = sm + dSbuf((ii-1)*TT + jj)
+                end do
+                rowsum = 0.0_wp
+                if (sm > 0.0_wp) then
+                  do jj = 1, ii
+                    if (dSbuf((ii-1)*TT + jj) > 0.0_wp) &
+                        rowsum = rowsum + dPbuf((ii-1)*TT + jj) &
+                                      * (dSbuf((ii-1)*TT + jj)/sm)
+                  end do
                 end if
-              end do
+                do jj = 1, ii
+                  if (sm > 0.0_wp .and. dSbuf((ii-1)*TT + jj) > 0.0_wp) then
+                    dSbuf((ii-1)*TT + jj) = (dPbuf((ii-1)*TT + jj) - rowsum)/sm
+                  else
+                    dSbuf((ii-1)*TT + jj) = 0.0_wp
+                  end if
+                end do
+              else
+                do jj = 1, ii
+                  if (dSbuf((ii-1)*TT + jj) > 0.0_wp) then
+                    dSbuf((ii-1)*TT + jj) = dPbuf((ii-1)*TT + jj)/real(TT, wp)
+                  else
+                    dSbuf((ii-1)*TT + jj) = 0.0_wp
+                  end if
+                end do
+              end if
             else
               rowsum = 0.0_wp
               do jj = 1, ii
@@ -810,6 +860,10 @@ contains
               dSbuf((ii-1)*TT + jj) = 0.0_wp
             end do
           end do
+          if (ib == 1 .and. kb == 1) then
+            write (*, '(A,3E12.4)') '  ANTES-dQ  dSbuf(1..3)=', &
+                dSbuf(1), dSbuf(2), dSbuf(3)
+          end if
           ! ---- dQ = scale * dS K (unique per query head: plain write) ----
           m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
           lda = int(K_HH*DD, c_int64_t); ldb = int(TT, c_int64_t)
@@ -817,6 +871,10 @@ contains
           call sgemm('N', 'N', m, n, kk, scale, &
                k((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, dSbuf, ldb, &
                0.0_wp, dq((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldc)
+          if (ib == 1 .and. kb == 1) then
+            write (*, '(A,3E12.4)') '  ANTES-dK  dSbuf(1..3)=', &
+                dSbuf(1), dSbuf(2), dSbuf(3)
+          end if
           ! ---- dK += scale * dS^T Q (accumulated over the GQA group) ----
           m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
           lda = int(HH*DD, c_int64_t); ldb = int(TT, c_int64_t)
