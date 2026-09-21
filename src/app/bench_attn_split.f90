@@ -22,7 +22,7 @@ program bench_attn_split
   use M_CLI2, only: set_args, iget
   implicit none
   integer :: T, H, K_H, D, REPS
-  integer :: i, jj, ii, rep
+  integer :: jj, ii, rep
   real(wp), allocatable :: q(:), k(:), v(:), y(:), S(:)
   real(wp) :: scale, mx, sm, inv, tmp
   real(real64) :: tg1, tg2, ts, ttot

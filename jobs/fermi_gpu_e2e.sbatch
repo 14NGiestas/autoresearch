@@ -37,7 +37,7 @@ GPU=$(ls /tmp/z768_gpu/*/app/train_run 2>/dev/null | head -1)
 [ -n "$GPU" ] || { echo "SEM BINARIO GPU"; exit 2; }
 echo "cpu=$CPU"; echo "gpu=$GPU"
 
-for M in cpu gpu; do
+for M in ${LEG:-cpu gpu}; do
   B=$CPU; [ "$M" = gpu ] && B=$GPU
   echo "########## $M"
   bin/env_record "antes de $M"
