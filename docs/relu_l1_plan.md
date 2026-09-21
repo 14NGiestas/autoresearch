@@ -95,3 +95,38 @@ has no document-masked implementation.
 
 If the relu family survives the l1 test, the doc path needs it too, and the two
 routines are the places to add it.
+
+## The kernel form, verified, and smaller than the plan predicted
+
+The plan gave the backward as
+
+    ds_k = r'_k * [ dP_k / S  -  (sum_i r_i dP_i) / S^2 ]
+
+Reading the relu/T backward in attn_bwd showed a useful fact. It already
+computes ssum = sum_i dp_i P_i, and since r_i = P_i S, the numerator of the
+second term is S times ssum. So the whole thing collapses to
+
+    ds_k = r'_k / S * ( dP_k - ssum )
+
+One subtraction, and ssum already exists. The kernel form was checked against
+the derivative and against finite differences:
+
+    |kernel - derivative| = 1e-17     |kernel - FD| = 1e-11
+
+which is exact, with the FD noise being the 1e-11.
+
+## So the port is three lines per backward site
+
+The relu branch of attn_bwd and of attn_bwd_sgemm, and the inlined copy in
+fortran_train.f90, each need:
+
+1. dcv(ss) = merge(1/S, 0, sc(ss) > 0)      instead of merge(1/T, 0, ...)
+2. P = relu(S)/S                            instead of relu(S)/T
+3. ds = dcv(ss) * (dpv(ss) - ssum)          instead of dpv(ss)*dcv(ss)
+
+plus the sum S over the causal row, which the replay loop already walks. The
+zero case, S equal to zero, gives a zero row rather than a NaN.
+
+The gate must gain the mode in the same commit, because the tree has to be green
+at the end of the task, and a forward that knows L1 with a backward that does not
+is exactly the mismatch the FD check exists to catch.
