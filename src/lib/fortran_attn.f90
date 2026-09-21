@@ -27,19 +27,26 @@ contains
   ! cap > 0 applies the logit soft cap s = cap*tanh(s/cap) before the mask.
   ! relu_attn replaces the softmax by relu(s)/T (softmax-free attention). The two
   ! are mutually exclusive: use one or the other, never both.
-  subroutine causal_attn(q, k, v, y, B, T, H, K_H, D, cap, relu_attn)
+  subroutine causal_attn(q, k, v, y, B, T, H, K_H, D, cap, relu_attn, relu_l1)
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in)  :: q(:), k(:), v(:)
     real(wp), intent(out) :: y(:)
     real(wp), intent(in), optional :: cap
     logical, intent(in), optional :: relu_attn
+    ! relu_l1: em vez de relu/T, normaliza pela soma do relu da linha, que e' a
+    ! normalizacao L1. A literatura aponta a L1, e nao a exponencial, como o
+    ! componente critico do softmax. relu_l1 implica relu_attn.
+    logical, intent(in), optional :: relu_l1
     integer :: aa, bb, cc, ss, dd, kb, rep
     real(wp) :: scale, sm, inv, acc, cp
     real(wp) :: sc(T), m, val
-    logical :: relu_a
+    logical :: relu_a, l1_a
 
     relu_a = .false.
     if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
     cp = 0.0_wp
     if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(D, wp))
@@ -67,10 +74,27 @@ contains
             end if
           end do
           if (relu_a) then
-            ! Normaliza por T (a sequencia inteira), NAO pelo comprimento da
-            ! linha causal. O backward usa TT, e os dois tem que casar: foi o
-            ! teste de FD que expos a inconsistencia (dq errado por 1,2).
-            inv = 1.0_wp / real(T, wp)
+            if (l1_a) then
+              ! L1: divide pela soma do relu DESTA linha. Se a linha inteira for
+              ! negativa a soma e' zero, e a divisao seria inf ou NaN. A linha
+              ! nula e' a resposta certa: a atencao nao contribui. Este e' o caso
+              ! que a literatura chama de colapso, e aqui ele e' tratado em vez de
+              ! virar NaN.
+              sm = 0.0_wp
+              do ss = 1, cc
+                sm = sm + sc(ss)
+              end do
+              if (sm > 0.0_wp) then
+                inv = 1.0_wp / sm
+              else
+                inv = 0.0_wp
+              end if
+            else
+              ! Normaliza por T (a sequencia inteira), NAO pelo comprimento da
+              ! linha causal. O backward usa TT, e os dois tem que casar: foi o
+              ! teste de FD que expos a inconsistencia (dq errado por 1,2).
+              inv = 1.0_wp / real(T, wp)
+            end if
           else
             sm = 0.0_wp
             do ss = 1, cc
@@ -167,13 +191,17 @@ contains
   ! Per (batch, head): S is a (T,T) scratch the caller owns and we reuse.
   ! Summation order differs from causal_attn, so expect ~1e-6 drift, not bit
   ! equality (asserted in test_attn_sgemm).
-  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap, relu_attn, pos_frac, pos_n)
+  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap, relu_attn, pos_frac, pos_n, relu_l1)
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in)  :: q(:), k(:), v(:)
     real(wp), intent(out) :: y(:)
     real(wp), intent(inout) :: S(:)          ! (T,T) scratch
     real(wp), intent(in), optional :: cap
     logical, intent(in), optional :: relu_attn
+    ! relu_l1: normaliza pela soma do relu da linha, a normalizacao L1, em vez de
+    ! relu/T. A literatura aponta a L1, e nao a exponencial, como o componente
+    ! critico do softmax. relu_l1 implica relu_attn.
+    logical, intent(in), optional :: relu_l1
     ! INSTRUMENTO: fracao de scores POSITIVOS (antes do cap e do relu) por
     ! cabeca. Serve para ver cabeca morta -- o relu pode produzir zero exacto,
     ! e uma fracao de 1% e' morte funcional sem ser zero. Distribuicao, nao
@@ -189,10 +217,13 @@ contains
     integer :: aa, bb, kb, rep, ii, jj
     integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
     real(wp) :: scale, mx, sm, inv, cp
-    logical :: relu_a
+    logical :: relu_a, l1_a
 
     relu_a = .false.
     if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
     cp = 0.0_wp
     if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(D, wp))
@@ -230,7 +261,21 @@ contains
             end if
           end do
           if (relu_a) then
-            inv = 1.0_wp / real(T, wp)
+            if (l1_a) then
+              ! L1: divide pela soma do relu DESTA linha. Soma zero (linha inteira
+              ! negativa) da' linha nula, e nao inf ou NaN.
+              sm = 0.0_wp
+              do jj = 1, ii
+                sm = sm + S((ii-1)*T + jj)
+              end do
+              if (sm > 0.0_wp) then
+                inv = 1.0_wp / sm
+              else
+                inv = 0.0_wp
+              end if
+            else
+              inv = 1.0_wp / real(T, wp)
+            end if
           else
           sm = 0.0_wp
           do jj = 1, ii
