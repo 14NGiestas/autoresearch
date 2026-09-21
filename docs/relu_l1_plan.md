@@ -169,3 +169,33 @@ The tree is back to the last green commit, which has the mode in both forwards
 and nothing else. The forwards are correct but unexercised, which is declared.
 The plan, the derivation and the verified kernel form are in the repository, and
 the failing port is described above with its numbers.
+
+## The forward is proven, so the defect is in the backward
+
+The FD check compares the analytic backward against the finite differences of the
+forward, and the forward it differentiates is causal_attn, while the analytic one
+is attn_bwd_sgemm. So if the two forwards disagreed, the test would fail with a
+perfect backward. That had to be ruled out first.
+
+bench_attn already compares the two forwards and prints the maximum difference.
+It was given relu_l1 for one run, and then reverted:
+
+    L1:  max |y_naive - y_sgemm| = 0.209E-05
+    /T:  max |y_naive - y_sgemm| = 0.274E-05
+
+The two agree to the same tolerance in both modes, and that tolerance is the
+summation order of sgemm. So the L1 forward is correct, in both routines, and the
+defect is in the backward.
+
+That narrows the search to one block of about ten lines in attn_bwd_sgemm.
+
+## A process mistake, recorded
+
+The failing port was reverted with git checkout, and the diff was not saved
+first. So the exact code that failed is gone, and the next attempt has to rebuild
+it from the plan. The isolation above took four minutes; rebuilding the port will
+take longer than saving the diff would have.
+
+The rule for the next time: before a revert, keep the diff, for example with git
+diff > /tmp/port.patch. A revert is a decision to stop, not a reason to lose the
+work that produced the failure.
