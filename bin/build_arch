@@ -55,7 +55,7 @@ if grep -qE "^${TAG} *=" src/fpm.toml; then
 else
   # Fallback: valor arbitrario nao declarado. --flag e' suportado pelo fpm e
   # vale para as dependencias tambem (macros ARCH_* so' sao lidas por nos).
-  MODE="--flag '-cpp -DARCH_D_MODEL=$D -DARCH_N_HEAD=$H -DARCH_N_KV=$KV -DARCH_N_LAYER=$L -DARCH_VOCAB=$V -DARCH_CTX=$C"
+  MODE="--flag '-cpp -DARCH_D_MODEL=$D -DARCH_N_HEAD=$H -DARCH_N_KV=$KV -DARCH_N_LAYER=$L -DARCH_VOCAB=$V -DARCH_CTX=$C'"
   echo "[build_arch] feature $TAG NAO declarada -> fallback --flag -D..."
   echo "[build_arch]   (para o caminho declarativo, adicione a feature em src/fpm.toml)"
 fi
