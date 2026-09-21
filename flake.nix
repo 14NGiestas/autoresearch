@@ -73,7 +73,12 @@
             # não incluir stdenv.cc.cc aqui: sombreava libstdc++ do sistema e quebrava node/pi (CXXABI_1.3.15)
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath rocmLibs}:$LD_LIBRARY_PATH"
             export TORCH_USE_HIP_DSA=1
-            export AMD_SERIALIZE_KERNEL=1
+            # AMD_SERIALIZE_KERNEL ficava aqui com o valor 1. Essa variavel
+            # serializa cada lancamento de kernel e obriga a uma sincronizacao
+            # por kernel. E' de depuracao, para cacar races, e custa ordens de
+            # grandeza. Com ela ligada o host espera a GPU em cada chamada, a
+            # placa da' um spike curto e nao rampa, e toda a medida de tempo da
+            # GPU mede a serializacao em vez da placa.
             export ROCM_VERSION=6.2.3
             export PYTORCH_ROCM_ARCH="gfx1100"
             export GFX_ARCH=gfx1100

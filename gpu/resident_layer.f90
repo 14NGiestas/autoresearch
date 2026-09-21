@@ -14,7 +14,7 @@ program resident_layer
   implicit none
   integer, parameter :: T = 1024, D = 768, HDD = 768, KV = 256, FF = 3072, NHEAD = 6
   integer :: ierr, k, reps
-  real(c_float), allocatable, target :: hx(:)
+  real(c_float), allocatable, target :: hx(:), hw(:)
   type(c_ptr) :: dx, dq, dk, dv, dao, dsub, dup
   type(c_ptr) :: wq, wk, wv, wo, wup, wdn
   type(c_ptr) :: h
@@ -22,6 +22,12 @@ program resident_layer
   real(c_double) :: ms, fl
   reps = 10
   allocate(hx(T*D)); hx = 0.01_c_float
+  ! Os pesos TEM de ser inicializados. O hipMalloc devolve memoria suja, e lixo
+  ! em fp32 da' denormais e NaN, que sao catastroficamente lentos: o mesmo codigo
+  ! passou de minutos para milissegundos so' por isto. Sem esta linha a medida
+  ! nao e' da GPU, e' do lixo.
+  allocate(hw(max(HDD*D, max(KV*D, max(D*HDD, max(FF*D, D*FF))))))
+  hw = 0.01_c_float
   ! activacoes: residentes
   ierr = hipMalloc(dx, int(T*D, c_size_t)*4_c_size_t)
   ierr = hipMalloc(dq, int(T*HDD, c_size_t)*4_c_size_t)
@@ -32,11 +38,17 @@ program resident_layer
   ierr = hipMalloc(dup, int(T*D, c_size_t)*4_c_size_t)
   ! pesos: residentes, uma copia so'
   ierr = hipMalloc(wq, int(HDD*D, c_size_t)*4_c_size_t)
+  ierr = hipMemcpy(wq, c_loc(hw), int(HDD*D, c_size_t)*4_c_size_t, hipMemcpyHostToDevice)
   ierr = hipMalloc(wk, int(KV*D, c_size_t)*4_c_size_t)
+  ierr = hipMemcpy(wk, c_loc(hw), int(KV*D, c_size_t)*4_c_size_t, hipMemcpyHostToDevice)
   ierr = hipMalloc(wv, int(KV*D, c_size_t)*4_c_size_t)
+  ierr = hipMemcpy(wv, c_loc(hw), int(KV*D, c_size_t)*4_c_size_t, hipMemcpyHostToDevice)
   ierr = hipMalloc(wo, int(D*HDD, c_size_t)*4_c_size_t)
+  ierr = hipMemcpy(wo, c_loc(hw), int(D*HDD, c_size_t)*4_c_size_t, hipMemcpyHostToDevice)
   ierr = hipMalloc(wup, int(FF*D, c_size_t)*4_c_size_t)
+  ierr = hipMemcpy(wup, c_loc(hw), int(FF*D, c_size_t)*4_c_size_t, hipMemcpyHostToDevice)
   ierr = hipMalloc(wdn, int(D*FF, c_size_t)*4_c_size_t)
+  ierr = hipMemcpy(wdn, c_loc(hw), int(D*FF, c_size_t)*4_c_size_t, hipMemcpyHostToDevice)
   if (any([ierr] /= 0)) stop 1
   ierr = rocblas_create_handle(h)
   if (ierr /= 0) then; print '(A,I0)', 'create_handle falhou: ', ierr; stop 2; end if
@@ -53,6 +65,9 @@ program resident_layer
     ierr = rocblas_sgemm_handle(1.0_c_float, wdn, dsub, 0.0_c_float, dup, D, FF, T)! MLP down
   end do
   call system_clock(t1, rate)
+  print '(A,I0,A,I0,A,I0)', 'relogio: t0=', t0, ' t1=', t1, ' rate=', rate
+  print '(A,I0,A,F10.3,A)', '  delta=', t1-t0, ' ticks, ou ', &
+      real(t1-t0, c_double)/real(rate, c_double), ' s no total das reps'
   ms = real(t1-t0, c_double)/real(rate, c_double)*1000.0_c_double/real(reps, c_double)
   fl = 2.0_c_double*T*(HDD*D + 2*KV*D + D*HDD + FF*D + D*FF)
   print '(A,F9.3,A)', 'uma camada, tudo residente: ', ms, ' ms'
