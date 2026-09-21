@@ -304,3 +304,41 @@ pass in relu/T and in softmax, and fail only in L1, still has to be explained, a
 that explanation is the missing piece.
 
 The patch with the dQ fix is at /tmp/port_l1_v3.patch.
+
+## Done: the L1 backward in the BLAS path is proven
+
+The finite difference check approves all three components:
+
+    dQ 0.155E-04   dK 0.178E-04   dV 0.820E-05     tolerance 2E-3
+
+Four hypotheses were refuted by measurement, each with its test and its numbers,
+and all are in debug/registry.jsonl. The real cause was in none of them: the FD
+loops for k and v called the forward without the l1 mode, so they compared the L1
+analytic against a relu/T finite difference. dQ passed by accident, because its
+loop did carry the flag.
+
+The lesson, and it is the most useful of the day: a gate can be wrong too, and a
+wrong gate produces a false negative that looks exactly like a kernel bug. What
+unmasked it was refuting every kernel hypothesis by measurement until the only
+piece left was the one I had never read, the test itself.
+
+## What is left, and why it stopped here
+
+The naive backward, attn_bwd, does not know the mode yet. Porting it requires
+reordering: the S of the L1 depends on the whole row, and there the dcv is built
+in a single pass. The test declares the skip, with the reason printed, in the
+style of the doc-masked gap.
+
+Running the probe, softmax against relu/T against relu/L1, needs the mode to be
+reachable from the model, and that is plumbing that was not done. The chain is
+mechanical but it is twelve edits across three files:
+
+  fortran_train.f90   three signatures (relu_attn at 192, 320, 576), each with a
+                      declaration, a local, and a pass-through
+  fortran_blas path   the two model call sites that reach attn_sgemm and
+                      attn_bwd_sgemm, at fortran_train.f90:267 and :417
+  train_run.f90       accept relu_l1 in --attn-fn, at the validation on line 147
+
+It stopped because this is the pattern that failed three times in this session: a
+run of small edits made late, each of which can leave a half-connected path. The
+next attempt does one file, runs the gate, and only then moves to the next.
