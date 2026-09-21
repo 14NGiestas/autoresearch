@@ -192,3 +192,38 @@ entry. The shim is an artifact, in the same way OpenBLAS is an artifact.
 
 src/lib/fortran_blas_gpu.f90 is written and compiles without ARCH_GPU, which is
 the property that keeps fpm test green on a machine with no ROCm.
+
+## One file, two builds: verified, and the objection was wrong
+
+The question was whether the GPU path is just a define inside the shim. It is,
+and the earlier objection was wrong.
+
+The claim was that a C++ file in src/ would be compiled in every build and would
+break the CPU-only build without the HIP headers. The truth is that with the GPU
+path under #ifdef ARCH_GPU the common build compiles the #else branch, which is
+plain C++ and includes no HIP header. So the file lives in the package.
+
+The verification that decided it: a deliberate #error was appended to
+src/lib/gpu_shim.cpp, and the CPU-only build failed on it. So fpm does compile
+that file, and it compiles it in both builds.
+
+The first check was inconclusive, and it is worth recording why. It looked for
+the symbol gpublas in the built binaries with nm, and found nothing, in the GPU
+binary and in the CPU one. That proves nothing, because the linker drops symbols
+that nothing references, and no model code calls the GPU path yet. A test that
+cannot fail is not a test.
+
+So the package carries the kernel. There is no external artefact, contrary to
+the earlier plan that imitated OpenBLAS.
+
+What lives where:
+
+| where | what | why there |
+|---|---|---|
+| src/lib/gpu_shim.cpp | the three calls, both branches | compiles in both builds |
+| src/fpm.toml feature gpu | the macro ARCH_GPU and the flags | does not depend on the machine |
+| bin/build_gpu | hipcc, the include paths, the link | depends on the nix store |
+
+The feature uses the dotted form, because a TOML inline table cannot span lines,
+and it does not carry build.link, because build is an exclusive section and the
+manifest already sets [build] link = ["openblas"].
