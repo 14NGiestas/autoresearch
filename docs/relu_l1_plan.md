@@ -199,3 +199,30 @@ take longer than saving the diff would have.
 The rule for the next time: before a revert, keep the diff, for example with git
 diff > /tmp/port.patch. A revert is a decision to stop, not a reason to lose the
 work that produced the failure.
+
+## The pattern of the failure, and what it points at
+
+The port was rebuilt and the gate was run again. The numbers, with the tolerance
+of 2e-3:
+
+    mode   dQ          dK          dV
+    /T     0.390E-05   0.566E-05   0.526E-05     all pass
+    L1     0.542      0.514       0.229E+01     all fail
+
+All three fail, and by order one, not by a constant factor. So the analytic L1
+gradient is structurally wrong rather than mis-scaled.
+
+The sharpest of the three is dV. Its analytic value is P transposed times dY,
+with dY given, and the forward with the same P was proven correct at 0.209E-05
+against the BLAS forward. So a wrong dV means a wrong P in the backward's own
+replay, which contradicts the forward proof. The difference therefore has to be
+between the two replays, and the backward's replay is the one that writes into
+SP, the caller's scratch, and then reads dSbuf for the mask.
+
+The next instrument is a temporary print inside the L1 branch: sm, inv, rowsum,
+dPbuf and dSbuf for the first row of the first batch, compared against the same
+quantities computed by hand for the test's known fill. That names the term
+instead of guessing at it.
+
+The diff of the failing port is saved at /tmp/port_l1.patch, so the rebuild is
+instant next time. That was the process lesson from the previous attempt.
