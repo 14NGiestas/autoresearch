@@ -266,3 +266,41 @@ scalars: check what dV's gemm reads for P and what dK's gemm reads for dS, and
 whether either reads anything left over from the first loop.
 
 The patch with the dQ fix applied is saved at /tmp/port_l1_v2.patch.
+
+## Three hypotheses, all refuted by measurement, and the clue that is left
+
+Hypothesis one: the formula. Refuted by hand and by scripts/relu_l1_math.py, which
+agrees with the code to 1e-17.
+
+Hypothesis two: the degenerate row. The first row has a zero relu sum, where the
+forward rule returns a zero row and is therefore discontinuous, so the finite
+difference there has no meaning. The test was run with all positive q and k, so
+no row is degenerate. dK and dV still failed, at 0.622 and 2.09. Refuted.
+
+Hypothesis three: something clobbers dSbuf between the dQ gemm and the dK gemm.
+Two prints were placed, one before each gemm, and they are identical:
+
+    ANTES-dQ  dSbuf(1..3) = -0.1085E-01  0.0000E+00  0.0000E+00
+    ANTES-dK  dSbuf(1..3) = -0.1085E-01  0.0000E+00  0.0000E+00
+
+Refuted.
+
+## What that leaves
+
+dQ passes with the L1 fix, at 0.188E-03, and dK fails at 0.622, while both read
+the same dSbuf and the prints prove the buffer is identical for both. So the
+defect is not in dS and not in the buffer.
+
+The difference between the three consumers is what they do with the result:
+
+    dQ  sgemm('N','N', ...)  plain write, 0.0 beta
+    dV  sgemm('N','T', ...)  accumulated,  1.0 beta
+    dK  sgemm('N','T', ...)  accumulated,  1.0 beta
+
+The one that passes is the one that writes. The next thing to check is therefore
+the accumulation into dkv and the fold that follows it, in the loops that were
+never touched by this port and that are the same for every mode. The reason they
+pass in relu/T and in softmax, and fail only in L1, still has to be explained, and
+that explanation is the missing piece.
+
+The patch with the dQ fix is at /tmp/port_l1_v3.patch.
