@@ -40,14 +40,26 @@ The backward is not in that file. It is inlined in src/lib/fortran_train.f90,
 where the attention backward replays the forward. Both places must change
 together, and the FD check is what proves they agree.
 
-## The gate, before anything else
+## The gate: found, and it is in the repository
 
-The FD check that caught the two real bugs of the relu/T work was not located in
-this session. Finding it is the first task, because a port of a backward without
-the check is how the relu/T bugs happened in the first place. The check exists:
-the record says it found (1) the forward dividing by cc against the backward by
-TT, which made dq wrong by 1.2, and (2) the P recomputation in attn_bwd_sgemm not
-converted, which made dv wrong by 1.72.
+The FD check was not lost. It is src/test/test_kernels.f90, and it is part of
+fpm test. The record named it: the commits 0ffd9ed and 6ac7308, "o porteiro pegou
+dois bugs reais" and "o porteiro pegou um bug real", both touch fortran_attn.f90
+and test_kernels.f90.
+
+It already exercises the relu path:
+
+    call test_attn_bwd_sgemm(relu_attn=.true.)
+    call test_attn_bwd(relu_attn=.true.)
+
+and it uses the standard trick, finite differences of L = <dy, y>. The tolerance
+is stated honestly in the file: the sgemm summation order makes it exact only
+before BLAS, so the check is 1e-6.
+
+So the acceptance criterion of the port is fpm test, and the gate is ready. The
+two bugs the porter found for relu/T were the forward dividing by the causal
+length against the backward dividing by T, which made dq wrong by 1.2, and the P
+recomputation in attn_bwd_sgemm left unconverted, which made dv wrong by 1.72.
 
 ## Why this stopped here
 
