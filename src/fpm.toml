@@ -54,6 +54,11 @@ arch_d768_h6_kv2_l12_v8192_c1024 = { flags = "-O2", preprocess = { cpp = { macro
 arch_d216_h6_kv2_l12_v8192_c1024 = { flags = "-O2", preprocess = { cpp = { macros = [
   "ARCH_D_MODEL=216", "ARCH_N_HEAD=6", "ARCH_N_KV=2", "ARCH_N_LAYER=12",
   "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }
+# d288 com o head_dim CONTROLADO: 288/8 = 36, o mesmo do d216 e do d360-hd36.
+# Terceiro ponto da lei de escala, com a forma fixa.
+arch_d288_h8_kv2_l12_v8192_c1024 = { flags = "-O2", preprocess = { cpp = { macros = [
+  "ARCH_D_MODEL=288", "ARCH_N_HEAD=8", "ARCH_N_KV=2", "ARCH_N_LAYER=12",
+  "ARCH_VOCAB=8192", "ARCH_CTX=1024", "ARCH_BOS=8188"] } } }
 # d360 com o head_dim CONTROLADO: 360/10 = 36, o mesmo head_dim do d216. Este
 # ponto separa o efeito de ESCALA do efeito de FORMA no ganho d216 -> d360.
 arch_d360_h10_kv2_l12_v8192_c1024 = { flags = "-O2", preprocess = { cpp = { macros = [
