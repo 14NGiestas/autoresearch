@@ -69,3 +69,29 @@ long session, and the same session had already produced a half-plumbed counter
 that had to be reverted. Doing a second one at that hour, on a backward pass,
 is how a wrong gradient gets committed. The plan is written and the next session
 starts with it.
+
+## The gate, widened, and the limit of the doc-masked path
+
+The gate already covered the relu path in two calls. It now covers two more
+routines, and both are green.
+
+test_causal_attn gained the two branches in its serial reference, which is an
+independent implementation and therefore a stronger check than a cross-check. It
+runs twice now, plain and with relu, and the relu path passes.
+
+test_attn_sgemm gained cap and relu_attn, passed to both the naive and the BLAS
+call, for the GQA and the MHA cases. The maximum error in the relu run is 0 and
+1.1e-7. This matters because a layout mistake in the relu path is exactly where
+the dv error hid before, and that case is now guarded.
+
+Two routines of the attention family do not take relu_attn at all:
+causal_attn_doc and attn_bwd_doc. Their signatures are
+"... docstart, cap)". So the document-masked path does not implement relu.
+
+That is not a silent fallback. The argument does not exist, so a caller cannot
+ask for relu on that path, and the mistake shows up at compile time rather than
+as a wrong number. The limit is real and it is declared here: the relu variant
+has no document-masked implementation.
+
+If the relu family survives the l1 test, the doc path needs it too, and the two
+routines are the places to add it.
