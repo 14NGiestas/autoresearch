@@ -431,7 +431,7 @@ contains
       else
         call attn_bwd(tmp%dao, C%qr(ll*BT*hdd+1:), C%kr(ll*BT*kvd+1:), &
             C%v(ll*BT*kvd+1:), tmp%dq, tmp%dk, tmp%dv, &
-            G%B, G%T, G%nh, G%nkv, G%hd, cp, relu_a)
+            G%B, G%T, G%nh, G%nkv, G%hd, cp, relu_a, relu_l1=l1_a)
       end if
       call rope_4d_bwd(tmp%dq, cos, sin, tmp%dqr, G%B, G%T, G%nh, G%hd)
       call rope_4d_bwd(tmp%dk, cos, sin, tmp%dkr, G%B, G%T, G%nkv, G%hd)

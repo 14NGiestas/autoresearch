@@ -463,7 +463,7 @@ contains
   !   dk_{i,d} += ds_i * q_d / sqrt(D)
   ! dq positions are unique per (b,h,t) (plain writes); kv heads are
   ! shared across each GQA group, so dk/dv use atomics.
-  subroutine attn_bwd(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, cap, relu_attn)
+  subroutine attn_bwd(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, cap, relu_attn, relu_l1)
     integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
     real(wp), intent(in)  :: dy(:)
     real(wp), intent(in)  :: q(:)
@@ -473,19 +473,24 @@ contains
     real(wp), intent(in), optional :: cap
     logical, intent(in), optional :: relu_attn
     integer :: ia, ib, ic, ss, id, kb, rep
-    real(wp) :: scale, sm, ssum, acc, ds, cp
+    real(wp) :: scale, sm, ssum, acc, ds, cp, inv
+    ! relu_l1: relu normalizado pela soma do relu da linha (L1). Implica relu.
+    logical, intent(in), optional :: relu_l1
     real(wp) :: sc(TT), dpv(TT), dcv(TT), m
-    logical :: relu_a
+    logical :: relu_a, l1_a
 
     relu_a = .false.
     if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
     cp = 0.0_wp
     if (present(cap)) cp = cap
     scale = 1.0_wp / sqrt(real(DD, wp))
     rep = HH / K_HH
 
     !$omp parallel do collapse(2) private(ia, ib, ic, ss, id, kb, sc, dpv, dcv, &
-    !$omp& m, sm, ssum, acc, ds)
+    !$omp& m, sm, ssum, acc, ds, inv)
     do ia = 1, BB
       do ib = 1, HH
         kb = (ib - 1) / rep + 1
@@ -503,7 +508,9 @@ contains
             ! ReLU-attention: dS = (S>0) * dP / T, entao dcv guarda a mascara com
             ! o 1/T junto, e o ds la' embaixo nao precisa nem de P nem de ssum.
             if (relu_a) then
-              dcv(ss) = merge(1.0_wp/real(TT, wp), 0.0_wp, sc(ss) > 0.0_wp)
+              ! L1: aqui o dcv guarda so' a mascara. O 1/S entra no ds.
+              dcv(ss) = merge(1.0_wp, 0.0_wp, sc(ss) > 0.0_wp)
+              if (.not. l1_a) dcv(ss) = dcv(ss)/real(TT, wp)
               if (sc(ss) < 0.0_wp) sc(ss) = 0.0_wp
             else
               dcv(ss) = fast_softcap_deriv(sc(ss), cp)
@@ -511,9 +518,24 @@ contains
             end if
           end do
           if (relu_a) then
-            do ss = 1, ic
-              sc(ss) = sc(ss) / real(TT, wp)      ! P = relu(S)/T
-            end do
+            if (l1_a) then
+              sm = 0.0_wp
+              do ss = 1, ic
+                sm = sm + sc(ss)
+              end do
+              if (sm > 0.0_wp) then
+                inv = 1.0_wp/sm
+              else
+                inv = 0.0_wp
+              end if
+              do ss = 1, ic
+                sc(ss) = sc(ss)*inv
+              end do
+            else
+              do ss = 1, ic
+                sc(ss) = sc(ss) / real(TT, wp)      ! P = relu(S)/T
+              end do
+            end if
           else
           sm = 0.0_wp
           do ss = 1, ic
@@ -540,7 +562,11 @@ contains
             acc = 0.0_wp
             do ss = 1, ic
               if (relu_a) then
-                ds = dpv(ss) * dcv(ss)
+                if (l1_a) then
+                  ds = (dpv(ss) - ssum) * dcv(ss) * inv
+                else
+                  ds = dpv(ss) * dcv(ss)
+                end if
               else
                 ds = sc(ss) * (dpv(ss) - ssum) * dcv(ss)
               end if

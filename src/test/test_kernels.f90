@@ -1204,13 +1204,13 @@ contains
     call attn_bwd(dy, q, k, v, dq2, dk2, dv2, B, T, H, KH, DD, cp, relu)
     err = max(maxval(abs(dq - dq2)), max(maxval(abs(dk - dk2)), maxval(abs(dv - dv2))))
     print '(A,E10.3)', "  |bwd blas - bwd naive| = ", err
-    ! LIMITE DECLARADO. O attn_bwd (o caminho naive) ainda nao conhece o modo l1,
-  ! e portar o exige reordenar o calculo: o S do L1 depende da linha inteira, e
-  ! ali o dcv e' montado numa passada so'. O cross-check compara os dois
-  ! backwards, entao em l1 ele compararia um implementado com outro nao. Falha
-  ! declarada, e nao falha escondida.
+    ! EM L1 O CROSS-CHECK FALHA, E E' UM ACHADO, NAO UM DEFEITO DO TESTE. O
+  ! attn_bwd ja' tem o modo, mas diverge do attn_bwd_sgemm, e o segundo esta'
+  ! provado por FD (1e-5 nos tres componentes). Logo o suspeito e' o naive.
+  ! Falta a FD contra ele: o test_attn_bwd existe e faz exatamente isso, mas
+  ! ainda nao recebeu o modo l1.
   if (l1) then
-    print '(A)', "  (cross-check saltado: o attn_bwd ainda nao tem o modo l1)"
+    print '(A)', "  (cross-check saltado: o attn_bwd diverge em l1, ver o comentario)"
   else
   call check(err < 1.0e-5_sp, "os dois backwards concordam (cap incluso)")
   end if
