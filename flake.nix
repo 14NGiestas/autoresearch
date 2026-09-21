@@ -29,6 +29,12 @@
           rocm-runtime
           clr
           rocblas
+          # hipfort: expoe o HIP e as bibliotecas aceleradas em Fortran, com
+          # iso_c_binding. O KERNEL continua a ser HIP C++ (e' o desenho dele),
+          # mas o lado do HOST (malloc, memcpy, chamadas de biblioteca) passa a
+          # ser Fortran. Verificado: hipfort-7.2.3, a mesma versao do clr e do
+          # rocblas. O ROCM_PATH que ele exige ja' e' exportado abaixo.
+          hipfort
         ]) ++ (with pkgs; [
           zstd
           libxml2
