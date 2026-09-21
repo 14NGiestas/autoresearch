@@ -70,3 +70,47 @@ The speed must beat the CPU path in the same run, same seed, same rows.
 
 The CPU path stays runnable. It is the reference for correctness, and the
 comparison between the two is the measurement.
+
+## Step one: done, and it works
+
+gpu/rocblas_shim.c exposes a C ABI over rocBLAS for Fortran. It avoids hipfort,
+which is absent, and it avoids the implicit-interface trap of fortran_blas.f90,
+because bind(C) declares every type.
+
+The design that matters: the weights stay resident on the device. The 1B has
+352 MB of weights, and a copy per step would kill the gain. So the shim
+registers a weight once and keeps the device pointer in a cache. The activations
+are small and travel on every call.
+
+Build, and the measured command is in gpu/gpubench.c:
+
+    hipcc -O3 -D__HIP_PLATFORM_AMD__ -I$HIP_PATH/include -I$(dirname $RB)/include \
+      -o /tmp/shim_test gpu/rocblas_shim.c gpu/shim_test.c -lrocblas -L$RB
+
+Correctness: the maximum error against a serial reference is 0.000e+00, at every
+shape.
+
+| shape (BT, IF, OF) | ms per call | GFLOP/s |
+|---|---|---|
+| 1024, 768, 3072 (MLP up) | 4.812 | 1004 |
+| 1024, 768, 768 (MLP down) | 1.969 | 613 |
+| 1024, 768, 8192 (head) | 9.988 | 1290 |
+| 6, 128, 1024 (QK^T) | 0.088 | 17.9 |
+
+The CPU reaches 299 GFLOP/s at this size. The shim reaches 613 to 1290, with
+pageable transfers and a malloc and free on every call still inside. So it lands
+in the predicted band.
+
+The small shape confirms the attention decision by a second route: 17.9 GFLOP/s
+is dominated by the transfer, so the attention is not worth porting.
+
+The first measurement of this shim read 20.7 GFLOP/s, because the test timed the
+first call. The first call pays the HIP context, so that number measured the
+context and not the kernel. The test now warms up. The lesson is the lesson of
+the day: a number without its conditions is not a number.
+
+## What is next
+
+Wire the shim behind the two subroutines of fortran_blas.f90, behind a run flag,
+in the style of --attn-fn. Then the end-to-end run, same seed, same rows, and
+compare the loss and the tokens per second.
