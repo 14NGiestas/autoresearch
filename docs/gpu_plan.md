@@ -155,3 +155,40 @@ broke. Twice is enough to make it a rule: rewrite, do not patch.
 The Fortran bind(C) wrapper over these three calls, behind a run flag in the
 style of --attn-fn. Then the end-to-end run, same seed and same rows, comparing
 the loss and the tokens per second.
+
+## One package: yes, and the manifest spec says how
+
+The question was whether fpm can carry the kernels in the same package. The
+manifest spec answers it, and the answer is yes with one division.
+
+A feature can carry the link. From the fpm features page:
+
+    [features]
+    with-netcdf.build.link = ["netcdf", "netcdff"]
+
+and the page states that features can configure all package manifest properties.
+The keys that matter here are flags, cxx-flags, link-time-flags, build.link and
+preprocess.cpp.macros.
+
+So the GPU build is one feature:
+
+    gpu = { flags = "-DARCH_GPU",
+            cxx-flags = "<rocblas include> <hip include>",
+            preprocess.cpp.macros = ["ARCH_GPU"],
+            build.link = ["rocblas_shim", "rocblas", "amdhip64"],
+            build.link-time-flags = ["-L<rocblas lib>", "-L<shim>"] }
+
+and the compiler is chosen by the environment: FPM_CXX=hipcc.
+
+The division that matters: the shim does not live in src/. fpm discovers C and
+C++ sources in the source directory and compiles them in every build, so a HIP
+file in src/ would break the CPU-only build, which must stay green. The shim is
+built outside fpm, like OpenBLAS already is. The precedent is in this very
+manifest: [build] link = ["openblas"], a C library that the flake builds and fpm
+only links.
+
+So the package holds the Fortran wrapper, the flag, the tests and the manifest
+entry. The shim is an artifact, in the same way OpenBLAS is an artifact.
+
+src/lib/fortran_blas_gpu.f90 is written and compiles without ARCH_GPU, which is
+the property that keeps fpm test green on a machine with no ROCm.
