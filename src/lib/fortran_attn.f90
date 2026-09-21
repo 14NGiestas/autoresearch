@@ -167,7 +167,7 @@ contains
   ! Per (batch, head): S is a (T,T) scratch the caller owns and we reuse.
   ! Summation order differs from causal_attn, so expect ~1e-6 drift, not bit
   ! equality (asserted in test_attn_sgemm).
-  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap, relu_attn, pos_frac)
+  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap, relu_attn, pos_frac, pos_n)
     integer(c_int), intent(in) :: B, T, H, K_H, D
     real(wp), intent(in)  :: q(:), k(:), v(:)
     real(wp), intent(out) :: y(:)
@@ -182,6 +182,9 @@ contains
     ! intent(inout): o chamador zera UMA vez e acumula entre chamadas. Com
     ! intent(out) o kernel zeraria a cada linha e so' a ultima sobreviveria.
     real(wp), intent(inout), optional :: pos_frac(:)
+    ! Conta as ADICOES. O denominador deixa de ser presumido: com ele, a fracao
+    ! fica correcta por construcao, seja qual for o aninhamento dos lacos.
+    integer, intent(inout), optional :: pos_n(:)
     integer :: npos
     integer :: aa, bb, kb, rep, ii, jj
     integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
@@ -244,8 +247,12 @@ contains
           end do
         end do
         if (present(pos_frac)) then
-          ! denominador: os pares causais por cabeca = T*(T+1)/2
+          ! O denominador era T*(T+1)/2, presumido. A fracao saia 4,6, maior que 1,
+          ! o que e' impossivel. Agora o denominador e' CONTADO no mesmo laco que
+          ! conta os positivos, entao o valor fica certo por construcao. pos_n diz
+          ! quantas adicoes houve, e a razao pos_frac/pos_n e' a fracao media.
           pos_frac(bb) = pos_frac(bb) + real(npos, wp)/real(T*(T + 1)/2, wp)
+          if (present(pos_n)) pos_n(bb) = pos_n(bb) + 1
         end if
         ! ---- Y = P V ----
         m = int(D, c_int64_t); n = int(T, c_int64_t); kk = int(T, c_int64_t)

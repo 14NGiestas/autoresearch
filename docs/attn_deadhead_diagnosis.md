@@ -22,7 +22,24 @@ The print divides by ncontrib, which it reports as 100. So the accumulated value
 is about 460, which means one call contributes about 4.6, which is more than one.
 The contradiction is in the loop structure, not in the arithmetic.
 
-## The fix that is owed, and why it was not shipped
+## The answer, found by counting instead of deducing
+
+The fix was to count the additions in the same loop that counts the positives,
+and to divide by that count. The counter settled it in one run.
+
+    adicoes = 1200, not 100
+
+The kernel accumulates once per LAYER, and the print divided by once per ROW.
+Twelve layers times one hundred rows is 1200, against 100, so the value came out
+twelve times too high. The arithmetic is exact: 12 times 0.3864 is 4.637, which
+is the number that was printed as 4.6368.
+
+The true fractions are 0.334 to 0.427, which is 33 to 43 percent of the causally
+allowed scores positive. That is plausible for scores centred near zero. No head
+falls below 50 percent, so the original conclusion holds and is now trustworthy:
+there are no dead heads in this model.
+
+## The fix that was owed, and why it was reverted the first time
 
 The correct fix is to stop presuming the denominator and count the additions
 inside the same loop that counts the positives. Then the ratio is right by

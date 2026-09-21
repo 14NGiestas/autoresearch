@@ -57,7 +57,7 @@ contains
        outp, &
        BB, TT, vocab_size, d_model, &
        n_head, n_kv_head, head_dim, &
-       n_layer, eps, attn_blas, attn_qk, pos_frac)
+       n_layer, eps, attn_blas, attn_qk, pos_frac, pos_n)
 
     integer(c_int), intent(in) :: BB, TT, vocab_size, d_model
     integer(c_int), intent(in) :: n_head, n_kv_head, head_dim, n_layer
@@ -69,6 +69,7 @@ contains
     ! numbers comparable (see eval_bpb --attn).
     logical, intent(in), optional :: attn_blas, attn_qk
     real(wp), intent(inout), optional :: pos_frac(:)
+    integer, intent(inout), optional :: pos_n(:)
     logical :: useblas, useqk
     real(wp), allocatable :: Satt(:), Sqk(:), h1qk(:)
 
@@ -158,7 +159,7 @@ contains
             n_kv_head, head_dim)
       else if (useblas) then
         call attn_sgemm(qrot, krot, v, attn_out, BB, TT, n_head, n_kv_head, &
-            head_dim, Satt, pos_frac=pos_frac)
+            head_dim, Satt, pos_frac=pos_frac, pos_n=pos_n)
       else
         call causal_attn(qrot, krot, v, attn_out, BB, TT, n_head, n_kv_head, &
             head_dim)

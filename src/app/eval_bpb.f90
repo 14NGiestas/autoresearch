@@ -45,6 +45,7 @@ program eval_bpb
   logical :: attn_qk = .false.
   logical :: attn_stats = .false.
   real(wp), allocatable :: posf(:)
+  integer, allocatable :: posc(:)
   integer :: jh, nstats = 0, ncontrib = 0
   integer :: base
   ! npy rows: single (N,TT+1) Fortran-order int32 file, zero text parsing.
@@ -76,6 +77,7 @@ program eval_bpb
   attn_blas = trim(sget('attn')) == 'blas'
   attn_stats = specified('attn-stats')
   if (attn_stats) allocate (posf(N_HEAD), source=0.0_wp)
+  if (attn_stats) allocate (posc(N_HEAD), source=0)
   attn_qk = trim(sget('attn')) == 'qkhop'
   batchstr = trim(sget('batch'))
   read (batchstr, *, iostat=ios) nbatch
@@ -154,7 +156,7 @@ program eval_bpb
     call gpt_forward(idx(1:nb*TT), cos_b, sin_b, &
         wte, c_q, c_k, c_v, c_pr, c_fc, c_pr2, lm, &
         outp(1:nb*TT*VV), nb, TT, VV, D, N_HEAD, N_KV, HD, N_LAYER, 1.0e-5_sp, &
-        attn_blas=attn_blas, attn_qk=attn_qk, pos_frac=posf)
+        attn_blas=attn_blas, attn_qk=attn_qk, pos_frac=posf, pos_n=posc)
     nstats = nstats + 1
     ncontrib = ncontrib + nb      ! o kernel soma por (batch, cabeca)
 
@@ -193,14 +195,15 @@ program eval_bpb
 
   if (attn_stats) then
     write (*, '(A)') "=== atencao: fracao de scores POSITIVOS por cabeca"
-    write (*, '(A)') "  AVISO: o divisor esta ERRADO (o valor sai ~4,6x alto). A comparacao"
-    write (*, '(A)') "  RELATIVA entre cabecas e entre modelos ainda vale: cabeca morta aparece"
-    write (*, '(A)') "  como valor proximo de zero contra ~4,6 das vivas. Corrigir o divisor e'"
-    write (*, '(A)') "  a primeira tarefa de quem pegar isto. Declarado, nao escondido."
+    write (*, '(A)') "  O divisor e' CONTADO (adicoes), nao presumido. O bug antigo: o kernel"
+    write (*, '(A)') "  acumulava uma vez por CAMADA, e o print dividia por uma vez por linha."
+    write (*, '(A)') "  Eram 12 camadas x 100 linhas = 1200 contra 100, e dai o valor sair 12x"
+    write (*, '(A)') "  alto (4,637 = 12 x 0,386, exacto). Uma fracao nao pode passar de 1."
       write (*, '(A,I0,A,I0,A)') "media sobre ", nstats, " chamadas, ", ncontrib, " contribuicoes (batch x cabeca)"
       write (*, '(A)') "cabeca   fracao"
       do jh = 1, size(posf)
-        write (*, '(I5,F11.4)') jh, posf(jh)/real(max(1, ncontrib), wp)
+        write (*, '(I5,F11.4,A,I0,A,F11.4)') jh, posf(jh)/real(max(1, posc(jh)), wp), &
+            '  adicoes=', posc(jh), '  soma=', posf(jh)
       end do
     write (*, '(A,I0,A,I0,A,I0)') "  cabeças com fracao < 1%: ", &
         count(posf/real(max(1, ncontrib), wp) < 0.01_wp), "   < 10%: ", &
