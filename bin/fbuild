@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# fbuild — build do lab (flags do dia a dia). Para o gate ESTRITO use fstrict.
+#
+#   bin/fbuild                 # build normal (-Wall -Wextra -fcheck=all -fbacktrace)
+#   bin/fbuild --werror        # DELEGA para bin/fstrict (ver nota abaixo)
+#   FPM_FLAGS="..." bin/fbuild # override das flags
+#   NIX_SHELL=.#default bin/fbuild   # override do shell do flake
+#
+# Por que --werror delega: o `--flag` do fpm vai tambem para as DEPENDENCIAS
+# (stdlib, safetensors, M_CLI2). Com -Werror global o build morre em aviso de
+# terceiro (medido 2026-09-18: stdlib emite compare-reals 104x, conversion 93x,
+# unused-dummy-argument 20x), o que obrigaria a uma lista de excecoes que
+# enfraqueceria o gate para o NOSSO codigo. O bin/fstrict faz o certo: compila
+# tudo normal e RECOMPILA so' os nossos fontes com -Werror.
+set -eu
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+if [ "${1:-}" = "--werror" ]; then
+  exec "$(dirname "${BASH_SOURCE[0]}")/fstrict" "${@:2}"
+fi
+
+FLAGS="${FPM_FLAGS:--Wall -Wextra -fcheck=all -fbacktrace}"
+# Shell do flake: `.#inference` (gfortran + fpm + openblas, SEM ROCm; mesmo
+# nixpkgs rev do .default via flake.lock). O `.default` inclui rocmLibs --
+# multi-GB e inutil para codigo Fortran, e numa maquina que nao seja a fermi
+# vira download de minutos (aconteceu na halfbeast, 2026-09-18). Mapa:
+#   fermi (GPU AMD)          -> .#default serve, mas .#inference basta
+#   halfbeast (Intel, CPU)   -> .#inference (nunca .#default)
+SHELL_REF=${NIX_SHELL:-.#cpu-only}
+exec nix develop "$SHELL_REF" --command bash -c "cd src && fortran-fpm build --flag '$FLAGS' $*"

@@ -1,0 +1,919 @@
+! Attention and activation kernels — pure Fortran.
+!
+! Implements:
+!   causal_attn:  scaled dot-product causal attention
+!   relu2:        ReLU squared activation  (y = max(0, x)^2)
+!
+! All arrays are row-major flat real(wp) buffers.
+! Parallelized with OpenMP.
+!
+! Causal attention mirrors train.py's IS_ROCM branch:
+!   q = q.transpose(1,2); k = k.transpose(1,2); v = v.transpose(1,2)
+!   y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+!   y = y.transpose(1,2).contiguous().view(B, T, -1)
+!
+! With causal mask (only attend to positions <= t) and scale = 1/sqrt(D).
+
+module fortran_attn_mod
+  use iso_c_binding
+  use fortran_kinds_mod, only: wp
+  use fortran_blas_mod, only: sgemm
+  use fortran_math_mod, only: fast_softcap, fast_softcap_deriv
+  implicit none
+contains
+
+  ! Causal scaled dot-product attention
+  ! q, k, v: (B, T, H, D)  out: (B, T, H, D)
+  ! cap > 0 applies the logit soft cap s = cap*tanh(s/cap) before the mask.
+  ! relu_attn replaces the softmax by relu(s)/T (softmax-free attention). The two
+  ! are mutually exclusive: use one or the other, never both.
+  subroutine causal_attn(q, k, v, y, B, T, H, K_H, D, cap, relu_attn, relu_l1)
+    integer(c_int), intent(in) :: B, T, H, K_H, D
+    real(wp), intent(in)  :: q(:), k(:), v(:)
+    real(wp), intent(out) :: y(:)
+    real(wp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
+    ! relu_l1: em vez de relu/T, normaliza pela soma do relu da linha, que e' a
+    ! normalizacao L1. A literatura aponta a L1, e nao a exponencial, como o
+    ! componente critico do softmax. relu_l1 implica relu_attn.
+    logical, intent(in), optional :: relu_l1
+    integer :: aa, bb, cc, ss, dd, kb, rep
+    real(wp) :: scale, sm, inv, acc, cp
+    real(wp) :: sc(T), m, val
+    logical :: relu_a, l1_a
+
+    relu_a = .false.
+    if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
+    scale = 1.0_wp / sqrt(real(D, wp))
+    rep = H / K_H   ! GQA group size: q head bb attends kv head (bb-1)/rep + 1
+
+    !$omp parallel do collapse(2) private(aa, bb, cc, ss, dd, kb, sc, m, sm, inv, acc, val)
+    do aa = 1, B
+      do bb = 1, H
+        kb = (bb - 1) / rep + 1
+        do cc = 1, T
+          m = -huge(1.0_wp)
+          do ss = 1, cc
+            acc = 0.0_wp
+            do dd = 1, D
+              acc = acc + q(((aa-1)*T + (cc-1))*H*D + (bb-1)*D + dd) &
+                         * k(((aa-1)*T + (ss-1))*K_H*D + (kb-1)*D + dd)
+            end do
+            sc(ss) = fast_softcap(acc*scale, cp)
+            ! ReLU-attention: relu(S)/T. Sem exp, sem max, sem soma de linha -- e
+            ! a normalizacao e' constante (1/T), entao nem precisa de reducao.
+            if (relu_a) then
+              if (sc(ss) < 0.0_wp) sc(ss) = 0.0_wp
+            else
+              if (sc(ss) > m) m = sc(ss)
+            end if
+          end do
+          if (relu_a) then
+            if (l1_a) then
+              ! L1: divide pela soma do relu DESTA linha. Se a linha inteira for
+              ! negativa a soma e' zero, e a divisao seria inf ou NaN. A linha
+              ! nula e' a resposta certa: a atencao nao contribui. Este e' o caso
+              ! que a literatura chama de colapso, e aqui ele e' tratado em vez de
+              ! virar NaN.
+              sm = 0.0_wp
+              do ss = 1, cc
+                sm = sm + sc(ss)
+              end do
+              if (sm > 0.0_wp) then
+                inv = 1.0_wp / sm
+              else
+                inv = 0.0_wp
+              end if
+            else
+              ! Normaliza por T (a sequencia inteira), NAO pelo comprimento da
+              ! linha causal. O backward usa TT, e os dois tem que casar: foi o
+              ! teste de FD que expos a inconsistencia (dq errado por 1,2).
+              inv = 1.0_wp / real(T, wp)
+            end if
+          else
+            sm = 0.0_wp
+            do ss = 1, cc
+              sc(ss) = exp(sc(ss) - m)
+              sm = sm + sc(ss)
+            end do
+            inv = 1.0_wp / sm
+          end if
+          do dd = 1, D
+            acc = 0.0_wp
+            do ss = 1, cc
+              acc = acc + sc(ss) * inv * v(((aa-1)*T + (ss-1))*K_H*D + (kb-1)*D + dd)
+            end do
+            y(((aa-1)*T + (cc-1))*H*D + (bb-1)*D + dd) = acc
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine causal_attn
+
+  ! Document-masked causal attention. Identical to causal_attn except that a
+  ! query only attends to positions >= docstart(query): our rows are packed
+  ! token streams where BOS separates documents, and without this mask the
+  ! model spends most of its attention budget on pairs that never co-occur at
+  ! inference (measured on math_reasoning.txt: ~12.5 docs/row, only 8.1% of
+  ! causal pairs are within-document). docstart is (B,T) flat, 1-based.
+  ! With docstart == 1 everywhere this must equal causal_attn bit-exactly
+  ! (same accumulation order), which is what test_causal_attn_doc asserts.
+  subroutine causal_attn_doc(q, k, v, y, B, T, H, K_H, D, docstart, cap)
+    integer(c_int), intent(in) :: B, T, H, K_H, D
+    real(wp), intent(in)  :: q(:), k(:), v(:)
+    integer(c_int), intent(in) :: docstart(:)
+    real(wp), intent(out) :: y(:)
+    real(wp), intent(in), optional :: cap
+    integer :: aa, bb, cc, ss, dd, kb, rep, s0
+    real(wp) :: scale, sm, inv, acc, cp
+    real(wp) :: sc(T), m
+
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
+    scale = 1.0_wp / sqrt(real(D, wp))
+    rep = H / K_H
+
+    !$omp parallel do collapse(2) private(bb, cc, ss, dd, kb, s0, sc, m, sm, inv, acc)
+    do aa = 1, B
+      do bb = 1, H
+        kb = (bb - 1) / rep + 1
+        do cc = 1, T
+          s0 = docstart((aa-1)*T + cc)
+          m = -huge(1.0_wp)
+          do ss = s0, cc
+            acc = 0.0_wp
+            do dd = 1, D
+              acc = acc + q(((aa-1)*T + (cc-1))*H*D + (bb-1)*D + dd) &
+                         * k(((aa-1)*T + (ss-1))*K_H*D + (kb-1)*D + dd)
+            end do
+            sc(ss) = fast_softcap(acc*scale, cp)
+            if (sc(ss) > m) m = sc(ss)
+          end do
+          sm = 0.0_wp
+          do ss = s0, cc
+            sc(ss) = exp(sc(ss) - m)
+            sm = sm + sc(ss)
+          end do
+          inv = 1.0_wp / sm
+          do dd = 1, D
+            acc = 0.0_wp
+            do ss = s0, cc
+              acc = acc + sc(ss) * inv &
+                  * v(((aa-1)*T + (ss-1))*K_H*D + (kb-1)*D + dd)
+            end do
+            y(((aa-1)*T + (cc-1))*H*D + (bb-1)*D + dd) = acc
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine causal_attn_doc
+
+  ! BLAS-backed causal attention (forward). Same math as causal_attn, but both
+  ! matmuls go through sgemm instead of hand-written loops. Motivation,
+  ! measured on this codebase: the naive kernels run at ~6 GFLOP/s where sgemm
+  ! reaches ~50+, and attention is ~30% of a training step's flops (155 GFLOP
+  ! forward + 309 backward at B=1,T=2048,L=12) while being the dominant cost of
+  ! eval_bpb (a 60-row bpb pass takes ~20 min per checkpoint). The linears were
+  ! already BLAS; this is the same fix the chunked prefill applied (11.8x).
+  !
+  ! Layout note (same trick as linear3d_sgemm): our buffers are row-major, so a
+  ! row-major (T,D) buffer IS the column-major matrix (D,T). Therefore
+  !   S = Q K^T  is computed as  S^T = K Q^T  ->  sgemm('T','N', T,T,D, K, Q)
+  ! and the resulting row-major S(i,j) is exactly score(query i, key j).
+  !   Y = P V    is computed as  Y^T = V^T P^T  ->  sgemm('N','N', D,T,T, V, P)
+  ! Per (batch, head): S is a (T,T) scratch the caller owns and we reuse.
+  ! Summation order differs from causal_attn, so expect ~1e-6 drift, not bit
+  ! equality (asserted in test_attn_sgemm).
+  subroutine attn_sgemm(q, k, v, y, B, T, H, K_H, D, S, cap, relu_attn, pos_frac, pos_n, relu_l1)
+    integer(c_int), intent(in) :: B, T, H, K_H, D
+    real(wp), intent(in)  :: q(:), k(:), v(:)
+    real(wp), intent(out) :: y(:)
+    real(wp), intent(inout) :: S(:)          ! (T,T) scratch
+    real(wp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
+    ! relu_l1: normaliza pela soma do relu da linha, a normalizacao L1, em vez de
+    ! relu/T. A literatura aponta a L1, e nao a exponencial, como o componente
+    ! critico do softmax. relu_l1 implica relu_attn.
+    logical, intent(in), optional :: relu_l1
+    ! INSTRUMENTO: fracao de scores POSITIVOS (antes do cap e do relu) por
+    ! cabeca. Serve para ver cabeca morta -- o relu pode produzir zero exacto,
+    ! e uma fracao de 1% e' morte funcional sem ser zero. Distribuicao, nao
+    ! binario: e' o que separa 'o relu mudou por causa do exp' de 'o relu
+    ! matou cabecas'.
+    ! intent(inout): o chamador zera UMA vez e acumula entre chamadas. Com
+    ! intent(out) o kernel zeraria a cada linha e so' a ultima sobreviveria.
+    real(wp), intent(inout), optional :: pos_frac(:)
+    ! Conta as ADICOES. O denominador deixa de ser presumido: com ele, a fracao
+    ! fica correcta por construcao, seja qual for o aninhamento dos lacos.
+    integer, intent(inout), optional :: pos_n(:)
+    integer :: npos
+    integer :: aa, bb, kb, rep, ii, jj
+    integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
+    real(wp) :: scale, mx, sm, inv, cp
+    logical :: relu_a, l1_a
+
+    relu_a = .false.
+    if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
+    scale = 1.0_wp / sqrt(real(D, wp))
+    rep = H / K_H
+
+    do aa = 1, B
+      do bb = 1, H
+        kb = (bb - 1) / rep + 1
+        ! ---- S = Q K^T (scaled), one sgemm per (batch, head) ----
+        m = int(T, c_int64_t); n = int(T, c_int64_t); kk = int(D, c_int64_t)
+        lda = int(K_H*D, c_int64_t); ldb = int(H*D, c_int64_t)
+        ldc = int(T, c_int64_t)
+        call sgemm('T', 'N', m, n, kk, scale, &
+             k((aa-1)*T*K_H*D + (kb-1)*D + 1:), lda, &
+             q((aa-1)*T*H*D + (bb-1)*D + 1:), ldb, &
+             0.0_wp, S, ldc)
+        ! ---- causal mask + softmax, row by row ----
+        npos = 0
+        do ii = 1, T
+          mx = -huge(1.0_wp)
+          do jj = 1, ii
+            ! conta ANTES do cap e do relu: e' o sinal do score do modelo
+            if (present(pos_frac)) then
+              if (S((ii-1)*T + jj) > 0.0_wp) npos = npos + 1
+            end if
+            ! cap before the mask: a masked position must not reach the softmax
+            S((ii-1)*T + jj) = fast_softcap(S((ii-1)*T + jj), cp)
+            ! ReLU-attention: relu(S)/T. Normaliza por T (a sequencia inteira),
+            ! igual ao par naive e ao backward. O FD foi quem expos a
+            ! inconsistencia quando forward e backward discordavam.
+            if (relu_a) then
+              if (S((ii-1)*T + jj) < 0.0_wp) S((ii-1)*T + jj) = 0.0_wp
+            else
+              if (S((ii-1)*T + jj) > mx) mx = S((ii-1)*T + jj)
+            end if
+          end do
+          if (relu_a) then
+            if (l1_a) then
+              ! L1: divide pela soma do relu DESTA linha. Soma zero (linha inteira
+              ! negativa) da' linha nula, e nao inf ou NaN.
+              sm = 0.0_wp
+              do jj = 1, ii
+                sm = sm + S((ii-1)*T + jj)
+              end do
+              if (sm > 0.0_wp) then
+                inv = 1.0_wp / sm
+              else
+                inv = 0.0_wp
+              end if
+            else
+              inv = 1.0_wp / real(T, wp)
+            end if
+          else
+          sm = 0.0_wp
+          do jj = 1, ii
+            S((ii-1)*T + jj) = exp(S((ii-1)*T + jj) - mx)
+            sm = sm + S((ii-1)*T + jj)
+          end do
+          inv = 1.0_wp / sm
+          end if
+          do jj = 1, ii
+            S((ii-1)*T + jj) = S((ii-1)*T + jj) * inv
+          end do
+          do jj = ii + 1, T
+            S((ii-1)*T + jj) = 0.0_wp
+          end do
+        end do
+        if (present(pos_frac)) then
+          ! O denominador era T*(T+1)/2, presumido. A fracao saia 4,6, maior que 1,
+          ! o que e' impossivel. Agora o denominador e' CONTADO no mesmo laco que
+          ! conta os positivos, entao o valor fica certo por construcao. pos_n diz
+          ! quantas adicoes houve, e a razao pos_frac/pos_n e' a fracao media.
+          pos_frac(bb) = pos_frac(bb) + real(npos, wp)/real(T*(T + 1)/2, wp)
+          if (present(pos_n)) pos_n(bb) = pos_n(bb) + 1
+        end if
+        ! ---- Y = P V ----
+        m = int(D, c_int64_t); n = int(T, c_int64_t); kk = int(T, c_int64_t)
+        lda = int(K_H*D, c_int64_t); ldb = int(T, c_int64_t)
+        ldc = int(H*D, c_int64_t)
+        call sgemm('N', 'N', m, n, kk, 1.0_wp, &
+             v((aa-1)*T*K_H*D + (kb-1)*D + 1:), lda, S, ldb, &
+             0.0_wp, y((aa-1)*T*H*D + (bb-1)*D + 1:), ldc)
+      end do
+    end do
+  end subroutine attn_sgemm
+
+  ! Single-query attention over a KV cache (decoding step).
+  ! q: (B, H, D) current query (already RoPE'd)  K, V: (B, Tc, K_H, D)
+  ! y: (B, H, D). No causal mask: the cache holds only past positions.
+  ! Must match causal_attn's last row bit-exactly (same op order).
+  subroutine attn_step(q, K, V, y, BB, HH, K_HH, DD, TC, cap)
+    integer(c_int), intent(in) :: BB, HH, K_HH, DD, TC
+    real(wp), intent(in)  :: q(:)
+    real(wp), intent(in)  :: K(:), V(:)
+    real(wp), intent(out) :: y(:)
+    real(wp), intent(in), optional :: cap
+    integer :: ia, ib, ss, id, kb, rep
+    real(wp) :: scale, sm, inv, acc, cp
+    real(wp) :: sc(TC), m
+
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
+    scale = 1.0_wp / sqrt(real(DD, wp))
+    rep = HH / K_HH
+
+    !$omp parallel do collapse(2) private(ia, ib, ss, id, kb, sc, m, sm, inv, acc)
+    do ia = 1, BB
+      do ib = 1, HH
+        kb = (ib - 1) / rep + 1
+        m = -huge(1.0_wp)
+        do ss = 1, TC
+          acc = 0.0_wp
+          do id = 1, DD
+            acc = acc + q(((ia-1)*HH + (ib-1))*DD + id) &
+                       * K(((ia-1)*TC + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+          end do
+          sc(ss) = fast_softcap(acc*scale, cp)
+          if (sc(ss) > m) m = sc(ss)
+        end do
+        sm = 0.0_wp
+        do ss = 1, TC
+          sc(ss) = exp(sc(ss) - m)
+          sm = sm + sc(ss)
+        end do
+        inv = 1.0_wp / sm
+        do id = 1, DD
+          acc = 0.0_wp
+          do ss = 1, TC
+            acc = acc + sc(ss) * inv * V(((ia-1)*TC + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+          end do
+          y(((ia-1)*HH + (ib-1))*DD + id) = acc
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine attn_step
+
+  ! Chunked cached attention: TB queries against a KV cache that already
+  ! contains the chunk's own K/V entries (caller appends them first).
+  !   q, y: (B, TB, H, D)
+  !   K, V: cache slice from the layer base, contiguous positions 1..TCPREV+TB
+  !         (B=1 layout, as in attn_step — the batch stride is not carried)
+  ! Query at chunk position iq (1-based) attends to cache positions
+  ! 1..TCPREV+iq: full past, causal inside the chunk.
+  ! Equivalences (both asserted in src/test/test_kernels.f90):
+  !   TB=1          -> attn_step(..., TC=TCPREV+1)
+  !   TCPREV=0      -> causal_attn on the same rows (same op order)
+  ! This is the prefill/spec-verify kernel: chunked passes replace one call
+  ! per token, turning T=1 GEMVs into T=TB GEMMs at identical semantics.
+  subroutine attn_chunk(q, K, V, y, BB, HH, K_HH, DD, TC_PREV, TB, cap)
+    integer(c_int), intent(in) :: BB, HH, K_HH, DD, TC_PREV, TB
+    real(wp), intent(in)  :: q(:)
+    real(wp), intent(in)  :: K(:), V(:)
+    real(wp), intent(out) :: y(:)
+    real(wp), intent(in), optional :: cap
+    integer :: ia, iq, ib, nvalid, ss, id, kb, rep
+    real(wp) :: scale, sm, inv, acc, m, cp
+    real(wp) :: sc(TC_PREV + TB)
+
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
+    scale = 1.0_wp / sqrt(real(DD, wp))
+    rep = HH / K_HH
+
+    !$omp parallel do collapse(2) private(iq, ib, nvalid, ss, id, kb, sc, m, sm, inv, acc)
+    do ia = 1, BB
+      do iq = 1, TB
+        nvalid = TC_PREV + iq
+        do ib = 1, HH
+          kb = (ib - 1) / rep + 1
+          m = -huge(1.0_wp)
+          do ss = 1, nvalid
+            acc = 0.0_wp
+            do id = 1, DD
+              acc = acc + q(((ia-1)*TB + (iq-1))*HH*DD + (ib-1)*DD + id) &
+                  * K(((ss-1)*K_HH + (kb-1))*DD + id)
+            end do
+            sc(ss) = fast_softcap(acc*scale, cp)
+            if (sc(ss) > m) m = sc(ss)
+          end do
+          sm = 0.0_wp
+          do ss = 1, nvalid
+            sc(ss) = exp(sc(ss) - m)
+            sm = sm + sc(ss)
+          end do
+          inv = 1.0_wp / sm
+          do id = 1, DD
+            acc = 0.0_wp
+            do ss = 1, nvalid
+              acc = acc + sc(ss) * inv &
+                  * V(((ss-1)*K_HH + (kb-1))*DD + id)
+            end do
+            y(((ia-1)*TB + (iq-1))*HH*DD + (ib-1)*DD + id) = acc
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine attn_chunk
+
+  ! ---------------------------------------------------------------------------
+  ! TODO(next session): attn_bwd_sgemm -- the missing half of the attention work.
+  !
+  ! Why it is the big prize: attn_bwd is a hand-written O(T^2) loop with
+  ! !$omp atomic on dk/dv, and it is ~309 GFLOP of a training step's ~1.5 TFLOP
+  ! (B=1,T=2048,L=12) at ~8 GFLOP/s, where the forward's attn_sgemm runs at
+  ! ~103 GFLOP/s. Forward alone: ~20 s/step -> ~1.5 s. Both: step ~46 s ->
+  ! ~10-15 s, i.e. every future phase gets ~3-4x cheaper.
+  !
+  ! Formulation, with S = Q K^T (unscaled), P = softmax(scale*S + causal mask),
+  ! Y = P V, and per (batch, kv-head):
+  !   dV   = P^T dY                 sgemm('T','N', D,T,T, P, dY)
+  !   dP   = dY V^T                 sgemm('N','T', T,T,D, dY, V)
+  !   dS   = P * (dP - rowsum(P*dP))      elementwise, O(T^2) memory-bound
+  !   dQ   = scale * dS K           sgemm('N','N', T,D,T, dS, K)
+  !   dK   = scale * dS^T Q         sgemm('T','N', T,D,T, dS, Q)
+  ! remembering the codebase's row-major-as-column-major trick: a row-major
+  ! (T,D) buffer IS the column-major matrix (D,T), so every operand above needs
+  ! its transposed view spelled out the way attn_sgemm does it.
+  !
+  ! GQA: with H > K_H several query heads share a kv head. The naive kernel
+  ! uses atomics; do NOT copy that -- accumulate the rep heads' dK/dV into a
+  ! scratch per kv head and add once, which is both faster and deterministic.
+  !
+  ! Verification is already scaffolded: test_attn_bwd does finite differences on
+  ! the naive kernel. Mirror it for the sgemm twin: same tolerances, plus the
+  ! T=1 and no-GQA cases, and only then wire it behind an explicit switch
+  ! (never swap attention kernels under a live phase -- the last-bit drift would
+  ! silently invalidate the val curve and the bpb self-check).
+  !
+  ! SDPA backward with GQA (recomputes scores/softmax: checkpoint style).
+  ! Forward per (b,h,t): s_i = (q_t.k_i)/sqrt(D), i<=t; p = softmax(s);
+  !   y_d = sum_i p_i * v_{i,d}.
+  !   dv_{i,d} += p_i * dy_d
+  !   ds_i = p_i * (dp_i - sum_j dp_j*p_j),  dp_i = sum_d dy_d*v_{i,d}
+  !   dq_d = sum_i ds_i * k_{i,d} / sqrt(D)
+  !   dk_{i,d} += ds_i * q_d / sqrt(D)
+  ! dq positions are unique per (b,h,t) (plain writes); kv heads are
+  ! shared across each GQA group, so dk/dv use atomics.
+  subroutine attn_bwd(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, cap, relu_attn, relu_l1)
+    integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
+    real(wp), intent(in)  :: dy(:)
+    real(wp), intent(in)  :: q(:)
+    real(wp), intent(in)  :: k(:), v(:)
+    real(wp), intent(out) :: dq(:)
+    real(wp), intent(inout) :: dk(:), dv(:)
+    real(wp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
+    integer :: ia, ib, ic, ss, id, kb, rep
+    real(wp) :: scale, sm, ssum, acc, ds, cp, inv
+    ! relu_l1: relu normalizado pela soma do relu da linha (L1). Implica relu.
+    logical, intent(in), optional :: relu_l1
+    real(wp) :: sc(TT), dpv(TT), dcv(TT), m
+    logical :: relu_a, l1_a
+
+    relu_a = .false.
+    if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
+    scale = 1.0_wp / sqrt(real(DD, wp))
+    rep = HH / K_HH
+
+    !$omp parallel do collapse(2) private(ia, ib, ic, ss, id, kb, sc, dpv, dcv, &
+    !$omp& m, sm, ssum, acc, ds, inv)
+    do ia = 1, BB
+      do ib = 1, HH
+        kb = (ib - 1) / rep + 1
+        do ic = 1, TT
+          ! forward replay: scores + softmax for query row ic
+          m = -huge(1.0_wp)
+          do ss = 1, ic
+            acc = 0.0_wp
+            do id = 1, DD
+              acc = acc + q(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) &
+                         * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+            end do
+            sc(ss) = fast_softcap(acc*scale, cp)
+            ! the score array becomes p below, so keep the derivative now.
+            ! ReLU-attention: dS = (S>0) * dP / T, entao dcv guarda a mascara com
+            ! o 1/T junto, e o ds la' embaixo nao precisa nem de P nem de ssum.
+            if (relu_a) then
+              ! L1: aqui o dcv guarda so' a mascara. O 1/S entra no ds.
+              dcv(ss) = merge(1.0_wp, 0.0_wp, sc(ss) > 0.0_wp)
+              if (.not. l1_a) dcv(ss) = dcv(ss)/real(TT, wp)
+              if (sc(ss) < 0.0_wp) sc(ss) = 0.0_wp
+            else
+              dcv(ss) = fast_softcap_deriv(sc(ss), cp)
+              if (sc(ss) > m) m = sc(ss)
+            end if
+          end do
+          if (relu_a) then
+            if (l1_a) then
+              sm = 0.0_wp
+              do ss = 1, ic
+                sm = sm + sc(ss)
+              end do
+              if (sm > 0.0_wp) then
+                inv = 1.0_wp/sm
+              else
+                inv = 0.0_wp
+              end if
+              do ss = 1, ic
+                sc(ss) = sc(ss)*inv
+              end do
+            else
+              do ss = 1, ic
+                sc(ss) = sc(ss) / real(TT, wp)      ! P = relu(S)/T
+              end do
+            end if
+          else
+          sm = 0.0_wp
+          do ss = 1, ic
+            sc(ss) = exp(sc(ss) - m)
+            sm = sm + sc(ss)
+          end do
+          do ss = 1, ic
+            sc(ss) = sc(ss) / sm
+          end do
+          end if
+          ! dp_i = dy . v_i  (reused as dpv), S = sum dp*p
+          ssum = 0.0_wp
+          do ss = 1, ic
+            acc = 0.0_wp
+            do id = 1, DD
+              acc = acc + dy(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) &
+                         * v(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+            end do
+            dpv(ss) = acc
+            ssum = ssum + acc * sc(ss)
+          end do
+          ! dq (unique: plain write) + dk/dv (shared: atomics)
+          do id = 1, DD
+            acc = 0.0_wp
+            do ss = 1, ic
+              if (relu_a) then
+                if (l1_a) then
+                  ds = (dpv(ss) - ssum) * dcv(ss) * inv
+                else
+                  ds = dpv(ss) * dcv(ss)
+                end if
+              else
+                ds = sc(ss) * (dpv(ss) - ssum) * dcv(ss)
+              end if
+              acc = acc + ds * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+              !$omp atomic
+              dk(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) = &
+                  dk(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) + &
+                  ds * q(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) * scale
+              !$omp end atomic
+              !$omp atomic
+              dv(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) = &
+                  dv(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) + &
+                  sc(ss) * dy(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id)
+              !$omp end atomic
+            end do
+            dq(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) = acc * scale
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine attn_bwd
+
+  ! attn_bwd_doc: naive attention backward with a document mask. Mirrors
+  ! attn_bwd exactly, except query row ic replays/accumulates keys ss from
+  ! s0 = docstart(row) instead of 1 -- the same restriction causal_attn_doc
+  ! applies forward. With docstart == 1 everywhere this agrees with attn_bwd
+  ! to ~1e-6 under -ffast-math (same codegen caveat as the forward pair:
+  ! bit-exact without fast-math). FD-verified by test_attn_bwd_doc.
+  subroutine attn_bwd_doc(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, docstart, cap)
+    integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
+    real(wp), intent(in)  :: dy(:)
+    real(wp), intent(in)  :: q(:)
+    real(wp), intent(in)  :: k(:), v(:)
+    real(wp), intent(out) :: dq(:)
+    real(wp), intent(inout) :: dk(:), dv(:)
+    integer(c_int), intent(in) :: docstart(:)
+    real(wp), intent(in), optional :: cap
+    integer :: ia, ib, ic, ss, id, kb, rep, s0
+    real(wp) :: scale, sm, ssum, acc, ds, cp
+    real(wp) :: sc(TT), dpv(TT), dcv(TT), m
+
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
+    scale = 1.0_wp / sqrt(real(DD, wp))
+    rep = HH / K_HH
+
+    !$omp parallel do collapse(2) private(ia, ib, ic, ss, id, kb, s0, sc, dpv, &
+    !$omp& dcv, m, sm, ssum, acc, ds)
+    do ia = 1, BB
+      do ib = 1, HH
+        kb = (ib - 1) / rep + 1
+        do ic = 1, TT
+          s0 = docstart((ia-1)*TT + ic)
+          ! forward replay: scores + softmax for query row ic
+          m = -huge(1.0_wp)
+          do ss = s0, ic
+            acc = 0.0_wp
+            do id = 1, DD
+              acc = acc + q(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) &
+                         * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+            end do
+            sc(ss) = fast_softcap(acc*scale, cp)
+            dcv(ss) = fast_softcap_deriv(sc(ss), cp)
+            if (sc(ss) > m) m = sc(ss)
+          end do
+          sm = 0.0_wp
+          do ss = s0, ic
+            sc(ss) = exp(sc(ss) - m)
+            sm = sm + sc(ss)
+          end do
+          do ss = s0, ic
+            sc(ss) = sc(ss) / sm
+          end do
+          ! dp_i = dy . v_i  (reused as dpv), S = sum dp*p
+          ssum = 0.0_wp
+          do ss = s0, ic
+            acc = 0.0_wp
+            do id = 1, DD
+              acc = acc + dy(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) &
+                         * v(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+            end do
+            dpv(ss) = acc
+            ssum = ssum + acc * sc(ss)
+          end do
+          ! dq (unique: plain write) + dk/dv (shared: atomics)
+          do id = 1, DD
+            acc = 0.0_wp
+            do ss = s0, ic
+              ds = sc(ss) * (dpv(ss) - ssum) * dcv(ss)
+              acc = acc + ds * k(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id)
+              !$omp atomic
+              dk(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) = &
+                  dk(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) + &
+                  ds * q(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) * scale
+              !$omp end atomic
+              !$omp atomic
+              dv(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) = &
+                  dv(((ia-1)*TT + (ss-1))*K_HH*DD + (kb-1)*DD + id) + &
+                  sc(ss) * dy(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id)
+              !$omp end atomic
+            end do
+            dq(((ia-1)*TT + (ic-1))*HH*DD + (ib-1)*DD + id) = acc * scale
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine attn_bwd_doc
+  ! ReLU^2 backward: y = max(0,x)^2  ->  dx = 2*max(0,x) * dy.
+  subroutine relu2_bwd(dy, x, dx, N)
+    integer(c_int), intent(in) :: N
+    real(wp), intent(in)  :: dy(:), x(:)
+    real(wp), intent(out) :: dx(:)
+    integer :: ii
+    real(wp) :: aa
+
+    !$omp parallel do private(aa)
+    do ii = 1, N
+      aa = x(ii)
+      if (aa < 0.0_wp) aa = 0.0_wp
+      dx(ii) = 2.0_wp * aa * dy(ii)
+    end do
+    !$omp end parallel do
+  end subroutine relu2_bwd
+
+  ! ReLU^2 activation:  y = max(0, x)^2
+  subroutine relu2(x, N)
+    integer(c_int), intent(in) :: N
+    real(wp), intent(inout) :: x(:)
+    integer :: ii
+    real(wp) :: aa
+
+    !$omp parallel do private(aa)
+    do ii = 1, N
+      aa = x(ii)
+      if (aa < 0.0_wp) aa = 0.0_wp
+      x(ii) = aa * aa
+    end do
+    !$omp end parallel do
+  end subroutine relu2
+
+  ! BLAS-backed backward of the attention (gradient of the forward in
+  ! attn_sgemm). Same math as attn_bwd, but the four matmuls go through sgemm;
+  ! the softmax backward is the only O(T^2) elementwise part, and GQA heads are
+  ! ACCUMULATED in scratch instead of using !$omp atomic (deterministic, and
+  ! the naive kernel's atomics serialise).
+  !   dV = P^T dY           sgemm('N','T', D,T,T, dY, P, beta=1)
+  !   dP = dY V^T           sgemm('T','N', T,T,D, V,  dY)
+  !   dS = P*(dP - rowsum(P*dP))     masked to j <= i, scaled inside
+  !   dQ = scale*dS K       sgemm('N','N', D,T,T, K,  dS, beta=0)
+  !   dK = scale*dS^T Q     sgemm('N','T', D,T,T, Q,  dS, beta=1)
+  ! Layout: as everywhere else in this file, a row-major (T,D) buffer IS the
+  ! column-major matrix (D,T), so each operand's transposed view is spelled
+  ! out explicitly. Scratch (caller-owned, reused across layers):
+  !   SP, dPbuf, dSbuf : (TT*TT), dkv: (2*TT*K_HH*DD) for the dK/dV accumulators.
+  subroutine attn_bwd_sgemm(dy, q, k, v, dq, dk, dv, BB, TT, HH, K_HH, DD, &
+       SP, dPbuf, dSbuf, dkv, cap, relu_attn, relu_l1)
+    integer(c_int), intent(in) :: BB, TT, HH, K_HH, DD
+    real(wp), intent(in)  :: dy(:), q(:), k(:), v(:)
+    real(wp), intent(out) :: dq(:)
+    real(wp), intent(inout) :: dk(:), dv(:)
+    real(wp), intent(inout) :: SP(:), dPbuf(:), dSbuf(:), dkv(:)
+    real(wp), intent(in), optional :: cap
+    logical, intent(in), optional :: relu_attn
+    ! relu_l1: relu normalizado pela soma do relu da linha (L1), em vez de por T.
+    logical, intent(in), optional :: relu_l1
+    integer :: ia, kb, ib, ii, jj
+    integer(c_int64_t) :: m, n, kk, lda, ldb, ldc
+    real(wp) :: scale, mx, sm, inv, rowsum, cp
+    logical :: relu_a, l1_a
+
+    relu_a = .false.
+    if (present(relu_attn)) relu_a = relu_attn
+    l1_a = .false.
+    if (present(relu_l1)) l1_a = relu_l1
+    if (l1_a) relu_a = .true.
+    cp = 0.0_wp
+    if (present(cap)) cp = cap
+    scale = 1.0_wp / sqrt(real(DD, wp))
+
+    do ia = 1, BB
+      do kb = 1, K_HH
+        ! zero this kv head's accumulators (strided: one head of every token)
+        do ii = 1, TT
+          do jj = 1, DD
+            dkv((ii-1)*K_HH*DD + (kb-1)*DD + jj) = 0.0_wp
+            dkv(TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) = 0.0_wp
+          end do
+        end do
+        do ib = (kb-1)*(HH/K_HH) + 1, kb*(HH/K_HH)
+          ! ---- dP = dY V^T ----  (independent of P: computed first, so that
+          ! dSbuf is free to hold the capped scores for the derivative below)
+          m = int(TT, c_int64_t); n = int(TT, c_int64_t); kk = int(DD, c_int64_t)
+          lda = int(K_HH*DD, c_int64_t); ldb = int(HH*DD, c_int64_t)
+          ldc = int(TT, c_int64_t)
+          call sgemm('T', 'N', m, n, kk, 1.0_wp, &
+               v((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, &
+               dy((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldb, &
+               0.0_wp, dPbuf, ldc)
+          ! ---- P = softmax(cap(scale*Q K^T)) with the causal mask (row-major) ----
+          m = int(TT, c_int64_t); n = int(TT, c_int64_t); kk = int(DD, c_int64_t)
+          lda = int(K_HH*DD, c_int64_t); ldb = int(HH*DD, c_int64_t)
+          ldc = int(TT, c_int64_t)
+          call sgemm('T', 'N', m, n, kk, scale, &
+               k((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, &
+               q((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldb, &
+               0.0_wp, SP, ldc)
+          do ii = 1, TT
+            mx = -huge(1.0_wp)
+            do jj = 1, ii
+              ! cap before the mask: a masked position must not reach the softmax
+              SP((ii-1)*TT + jj) = fast_softcap(SP((ii-1)*TT + jj), cp)
+              ! dSbuf guarda a score ASSINADA: o bloco de dS le' dali a mascara do
+              ! relu (e, no caminho softmax, a derivada do cap). Guardar depois do
+              ! clamp perderia o sinal e o dv sairia errado -- foi o que o
+              ! cross-check pegou.
+              dSbuf((ii-1)*TT + jj) = SP((ii-1)*TT + jj)   ! kept for the derivative
+              if (relu_a) then
+                if (SP((ii-1)*TT + jj) < 0.0_wp) SP((ii-1)*TT + jj) = 0.0_wp
+              else
+                if (SP((ii-1)*TT + jj) > mx) mx = SP((ii-1)*TT + jj)
+              end if
+            end do
+            if (relu_a) then
+              if (l1_a) then
+                sm = 0.0_wp
+                do jj = 1, ii
+                  sm = sm + SP((ii-1)*TT + jj)
+                end do
+                if (sm > 0.0_wp) then
+                  inv = 1.0_wp/sm
+                else
+                  inv = 0.0_wp
+                end if
+              else
+                inv = 1.0_wp/real(TT, wp)
+              end if
+            else
+            sm = 0.0_wp
+            do jj = 1, ii
+              SP((ii-1)*TT + jj) = exp(SP((ii-1)*TT + jj) - mx)
+              sm = sm + SP((ii-1)*TT + jj)
+            end do
+            inv = 1.0_wp/sm
+            end if
+            do jj = 1, ii
+              SP((ii-1)*TT + jj) = SP((ii-1)*TT + jj)*inv
+            end do
+            do jj = ii + 1, TT
+              SP((ii-1)*TT + jj) = 0.0_wp
+            end do
+          end do
+          ! ---- dV += P^T dY ----
+          m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
+          lda = int(HH*DD, c_int64_t); ldb = int(TT, c_int64_t)
+          ldc = int(K_HH*DD, c_int64_t)
+          call sgemm('N', 'T', m, n, kk, 1.0_wp, &
+               dy((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), lda, SP, ldb, &
+               1.0_wp, dkv(TT*K_HH*DD + (kb-1)*DD + 1:), ldc)
+          ! ---- dS (mascarado). Softmax: P*(dP - rowsum). ReLU: (S>0)*dP/T, sem
+          ! rowsum e sem P -- a derivada do relu e' so' a mascara.
+          do ii = 1, TT
+            if (relu_a) then
+              if (l1_a) then
+                ! L1: dois termos. Com r_i = P_i*S, o termo do denominador e' S*rowsum,
+                ! e colapsa em (dP - rowsum)/S sobre a mascara do relu.
+                !
+                ! TUDO RECOMPUTADO AQUI, e o motivo e' medido. Este laco do dS e' um
+                ! laco SEPARADO, que corre DEPOIS do laco do P. La' o SP e' sobrescrito
+                ! linha a linha, entao aqui o SP so' contem o P da ULTIMA linha, e o
+                ! inv so' o da ultima. Para o relu/T isso nao se nota (inv = 1/T e' o
+                ! mesmo em todas as linhas), e o softmax recalcula o rowsum localmente.
+                ! O L1 nao pode herdar nada: refaz a linha a partir do dSbuf, que
+                ! guarda o score assinado de TODAS as linhas.
+                sm = 0.0_wp
+                do jj = 1, ii
+                  if (dSbuf((ii-1)*TT + jj) > 0.0_wp) &
+                      sm = sm + dSbuf((ii-1)*TT + jj)
+                end do
+                rowsum = 0.0_wp
+                if (sm > 0.0_wp) then
+                  do jj = 1, ii
+                    if (dSbuf((ii-1)*TT + jj) > 0.0_wp) &
+                        rowsum = rowsum + dPbuf((ii-1)*TT + jj) &
+                                      * (dSbuf((ii-1)*TT + jj)/sm)
+                  end do
+                end if
+                do jj = 1, ii
+                  if (sm > 0.0_wp .and. dSbuf((ii-1)*TT + jj) > 0.0_wp) then
+                    dSbuf((ii-1)*TT + jj) = (dPbuf((ii-1)*TT + jj) - rowsum)/sm
+                  else
+                    dSbuf((ii-1)*TT + jj) = 0.0_wp
+                  end if
+                end do
+              else
+                do jj = 1, ii
+                  if (dSbuf((ii-1)*TT + jj) > 0.0_wp) then
+                    dSbuf((ii-1)*TT + jj) = dPbuf((ii-1)*TT + jj)/real(TT, wp)
+                  else
+                    dSbuf((ii-1)*TT + jj) = 0.0_wp
+                  end if
+                end do
+              end if
+            else
+              rowsum = 0.0_wp
+              do jj = 1, ii
+                rowsum = rowsum + SP((ii-1)*TT + jj)*dPbuf((ii-1)*TT + jj)
+              end do
+              do jj = 1, ii
+                dSbuf((ii-1)*TT + jj) = SP((ii-1)*TT + jj) &
+                    * (dPbuf((ii-1)*TT + jj) - rowsum) &
+                    * fast_softcap_deriv(dSbuf((ii-1)*TT + jj), cp)
+              end do
+            end if
+            do jj = ii + 1, TT
+              dSbuf((ii-1)*TT + jj) = 0.0_wp
+            end do
+          end do
+          ! ---- dQ = scale * dS K (unique per query head: plain write) ----
+          m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
+          lda = int(K_HH*DD, c_int64_t); ldb = int(TT, c_int64_t)
+          ldc = int(HH*DD, c_int64_t)
+          call sgemm('N', 'N', m, n, kk, scale, &
+               k((ia-1)*TT*K_HH*DD + (kb-1)*DD + 1:), lda, dSbuf, ldb, &
+               0.0_wp, dq((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), ldc)
+          ! ---- dK += scale * dS^T Q (accumulated over the GQA group) ----
+          m = int(DD, c_int64_t); n = int(TT, c_int64_t); kk = int(TT, c_int64_t)
+          lda = int(HH*DD, c_int64_t); ldb = int(TT, c_int64_t)
+          ldc = int(K_HH*DD, c_int64_t)
+          call sgemm('N', 'T', m, n, kk, scale, &
+               q((ia-1)*TT*HH*DD + (ib-1)*DD + 1:), lda, dSbuf, ldb, &
+               1.0_wp, dkv((kb-1)*DD + 1:), ldc)
+        end do
+        ! ---- fold the accumulated dK/dV of this kv head into the outputs ----
+        do ii = 1, TT
+          do jj = 1, DD
+            dk((ia-1)*TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) = &
+                dk((ia-1)*TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) &
+                + dkv((kb-1)*DD + (ii-1)*K_HH*DD + jj)
+            dv((ia-1)*TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) = &
+                dv((ia-1)*TT*K_HH*DD + (ii-1)*K_HH*DD + (kb-1)*DD + jj) &
+                + dkv(TT*K_HH*DD + (kb-1)*DD + (ii-1)*K_HH*DD + jj)
+          end do
+        end do
+      end do
+    end do
+  end subroutine attn_bwd_sgemm
+
+end module fortran_attn_mod

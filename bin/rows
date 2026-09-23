@@ -1,0 +1,5 @@
+#!/bin/sh
+# bin/rows — traduz rows para texto sem precisar passar parâmetro
+# Uso: bin/rows              # 3 rows de /tmp/train10k_rows.txt
+#      bin/rows --n 5 --rows /tmp/train48_rows.txt
+exec /home/pauli/autoresearch/.venv-numpy/bin/python /home/pauli/autoresearch/scripts/decode_rows.py "$@"

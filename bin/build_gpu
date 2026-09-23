@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# build_gpu -- constroi a arch com o caminho GPU ligado.
+#
+# Uso: bin/build_gpu D H KV L V C [BUILD_DIR]
+#
+# O QUE FICA NO MANIFESTO, E O QUE VEM DAQUI. A feature `gpu` do src/fpm.toml
+# carrega o que nao depende da maquina: a macro ARCH_GPU e o nome da biblioteca
+# `rocblas`. Este script carrega o que depende: o COMPILADOR C++ (hipcc) e os
+# CAMINHOS do nix store, que envelhecem e por isso nao entram no repositorio.
+#
+# O arquivo src/lib/gpu_shim.cpp compila nos dois casos, porque o caminho GPU
+# esta' sob a macro e o outro ramo e' C++ puro. E' isso que deixa o shim morar
+# dentro do pacote, e que mantem o fpm test verde sem ROCm.
+#
+# Roda no shell rocm:  nix develop .#rocm --command bin/build_gpu 96 6 2 12 8192 1024 /tmp/bg
+set -eu
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+[ "$#" -ge 6 ] || { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+D=$1; H=$2; KV=$3; L=$4; V=$5; C=$6
+BD=${7:-/tmp/build_gpu_d${1}_h${2}_kv${3}_l${4}_v${5}_c${6}}
+TAG="arch_d${D}_h${H}_kv${KV}_l${L}_v${V}_c${C}"
+
+RB=$(printf '%s' "${LD_LIBRARY_PATH:-}" | tr ':' '\n' | grep rocblas | head -1)
+[ -n "$RB" ] || { echo "build_gpu: rocblas nao esta' no LD_LIBRARY_PATH. Rode no .#rocm."; exit 2; }
+PREFIX=$(dirname "$RB")
+HIPI="${HIP_PATH:-}/include"
+[ -d "$HIPI" ] || HIPI="$(dirname "$(dirname "$(command -v hipcc)")")/include"
+[ -d "$HIPI" ] || { echo "build_gpu: includes do HIP nao achados"; exit 2; }
+
+echo "[build_gpu] d=$D heads=$H kv=$KV layers=$L vocab=$V ctx=$C  (head_dim=$((D/H)))"
+echo "[build_gpu] rocblas: $PREFIX"
+echo "[build_gpu] hip:     $HIPI"
+echo "[build_gpu] build:   $BD"
+
+# FPM_CXX=hipcc: o fpm chama o hipcc para o C++, e o hipcc traz o rocblas.
+# --cxx-flag: os includes, que dependem do store.
+# --link-flag: os -L e as bibliotecas que a feature nao nomeia.
+export FPM_CXX="${FPM_CXX:-hipcc}"
+OUT=$(nix develop "${NIX_SHELL:-.#rocm}" --command bash -c \
+  "cd src && fortran-fpm build --features '$TAG,gpu' \
+     --cxx-flag '-DARCH_GPU -I$HIPI -I$PREFIX/include' \
+     --link-flag '-lrocblas -lamdhip64 -L$RB' \
+     --build-dir '$BD'" 2>&1) || {
+  echo "[build_gpu] BUILD FALHOU. Ultimas 12 linhas:"
+  printf '%s\n' "$OUT" | tail -12 | sed 's/^/  /'
+  exit 5
+}
+printf '%s\n' "$OUT" | tail -1 | sed 's/^/  /'
+APPS=$(ls -d "$BD"/*/app 2>/dev/null | grep . || true)
+N=$(printf '%s' "$APPS" | grep -c . || true)
+if [ "$N" = "1" ]; then
+  for P in "$APPS"/*; do
+    [ -x "$P" ] || continue
+    case "$P" in *.o|*.mod|*.smod) continue ;; esac
+    echo "[build_gpu] app $(basename "$P") $P"
+  done
+elif [ "$N" = "0" ]; then
+  echo "[build_gpu] nenhum dir app em $BD (build falhou?)"; exit 5
+else
+  echo "[build_gpu] AMBIGUO: $N dirs app em $BD"; exit 3
+fi

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# bin/submit_job -- constroi o que faltar e submete, com o build dir amarrado.
+#
+# Uso:  bin/submit_job JOBFILE BUILD_DIR [argumentos do sbatch...]
+#
+# Por que existe: o submit nao deve adivinhar nada. A arch vive no arch.txt que o
+# build_arch gravou no build dir, e este script passa esse dir e o commit do
+# codigo para dentro do job, via --export. Assim o job nao deriva a arch do nome
+# de um diretorio, e o log diz qual build e qual commit rodaram.
+set -eu
+[ "$#" -ge 2 ] || { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+JOB=$1; BD=$2; shift 2
+[ -f "$JOB" ] || { echo "submit_job: $JOB nao existe"; exit 2; }
+[ -f "$BD/arch.txt" ] || {
+  echo "submit_job: $BD/arch.txt nao existe."
+  echo "  Construa primeiro: bin/build_arch D H KV L V C $BD"
+  exit 2
+}
+SHA=$(git rev-parse --short=16 HEAD 2>/dev/null || echo sem-git)
+D=$(sed -n 's/^d_model *= *\([0-9]*\).*/\1/p' "$BD/arch.txt" | head -1)
+H=$(sed -n 's/^n_head *= *\([0-9]*\).*/\1/p'  "$BD/arch.txt" | head -1)
+L=$(sed -n 's/^n_layer *= *\([0-9]*\).*/\1/p' "$BD/arch.txt" | head -1)
+echo "[submit_job] job=$JOB"
+echo "[submit_job] build=$BD  arch=d$D h$H l$L  commit=$SHA"
+sbatch --export=ALL,BUILD_DIR="$BD",SRC_HASH="$SHA" "$@" "$JOB"

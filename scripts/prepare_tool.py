@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""
+Phase 2 curriculum: tool-use trajectories (curl, fetch, python -c, grep, read).
+Mixed with the Python code corpus for diversity.
+
+Each row: BOS + tool-interaction transcript, e.g.
+    ### Instruction:
+    Fetch the homepage of example.com using curl.
+    ### Response:
+    $ curl -fsSL https://example.com
+    <response>...</response>
+
+Output: ~/.cache/autoresearch/tool_trajectories.txt
+Each row: space-separated token IDs (BOS=8188 + transcript tokens).
+
+Usage:
+    python scripts/prepare_tool.py
+"""
+
+import os, sys, json, time, urllib.request, hashlib, random
+
+BOS = 8188
+
+# CANONICAL cross-phase encoder (2026-09-07): ASCII -> raw byte (0-127),
+# non-ASCII -> 256+b per UTF-8 byte. Matches code_python.txt, which Phase 1
+# already trained on. ALL prepare scripts must use exactly this mapping.
+# No BPE preference: a per-script BPE silently retokens identical text
+# into unseen ids and breaks every later phase.
+class FallbackEncoder:
+    def encode(self, text):
+        ids = []
+        for ch in text:
+            if ord(ch) < 256:
+                ids.append(ord(ch))
+            else:
+                for b in ch.encode("utf-8"):
+                    ids.append(256 + b)
+        return ids
+
+enc = FallbackEncoder()
+
+CACHE = os.path.expanduser("~/.cache/autoresearch")
+OUT = os.path.join(CACHE, "tool_trajectories.txt")
+
+# ---------------------------------------------------------------------------
+# Synthetic tool trajectories (no auth needed)
+# ---------------------------------------------------------------------------
+
+TOOL_TEMPLATES = [
+    {
+        "instruction": "Use curl to fetch the headers from https://httpbin.org/get",
+        "command": "curl -sI https://httpbin.org/get",
+        "response": "HTTP/2 200\nserver: nginx\ndate: Thu, 01 Jan 2025 00:00:00 GMT",
+    },
+    {
+        "instruction": "Download a JSON file from the public API https://api.github.com/repos/python/cpython",
+        "command": "curl -fsSL https://api.github.com/repos/python/cpython",
+        "response": '{"name": "cpython", "full_name": "python/cpython", "description": "The Python programming language"}',
+    },
+
+    {
+        "instruction": "Fetch the first 100 bytes of example.com homepage",
+        "command": "curl -fsSL --max-time 10 -r 0-99 https://example.com",
+        "response": "<!doctype html><html><head>\n    <title>Example Domain</title>",
+    },
+    {
+        "instruction": "Use grep to find all lines containing 'ERROR' in /var/log/syslog",
+        "command": "grep ERROR /var/log/syslog | head -10",
+        "response": "Jan  1 00:00:01 hostname kernel: ERROR: out of memory\nJan  1 00:01:23 hostname sshd[123]: ERROR: Connection refused",
+    },
+    {
+        "instruction": "Find all Python files modified in the last 7 days",
+        "command": "find . -name '*.py' -mtime -7 -print",
+        "response": "./scripts/train.py\n./src/model.py\n./tests/test_gpt.py",
+    },
+    {
+        "instruction": "Count the number of lines in all .txt files recursively",
+        "command": "find . -name '*.txt' -exec wc -l {} + | tail -1",
+        "response": "  12345 total",
+    },
+
+
+    {
+        "instruction": "List files in /tmp modified in the last hour",
+        "command": "find /tmp -type f -mmin -60 -ls 2>/dev/null | head -5",
+        "response": "  -rw------- 1 user user  4096 Jan  1 00:30 /tmp/session.log\n  -rw-r--r-- 1 user user  8192 Jan  1 00:45 /tmp/cache.tmp",
+    },
+    {
+        "instruction": "Use curl to POST JSON data to httpbin.org",
+        "command": "curl -fsSL -X POST https://httpbin.org/post -H 'Content-Type: application/json' -d '{\"key\": \"value\"}'",
+        "response": '{"url": "https://httpbin.org/post", "json": {"key": "value"}}',
+    },
+
+
+    {
+        "instruction": "Use awk to print the second column of a CSV file",
+        "command": "awk -F, '{print $2}' data.csv | head -5",
+        "response": "Alice\nBob\nCharlie\nDavid\nEve",
+    },
+    {
+        "instruction": "Check the current git branch",
+        "command": "git branch --show-current",
+        "response": "main",
+    },
+]
+
+def expand_template(t):
+    inst = t["instruction"]
+    cmd = t["command"]
+    resp = t["response"]
+    return (
+        f"### Instruction:\n{inst}\n\n"
+        f"### Response:\n"
+        f"$ {cmd}\n"
+        f"{resp}\n"
+    )
+
+# NOTE (2026-09-07): the old make_trajectories blindly .replace()d numbers
+# and domains across inst/cmd/resp independently: sum cmds computed X but
+# resps reported unrelated Y, prime resps were wrong ~50% (and answered
+# "has-divisor" instead of "is-prime"), domain swaps produced nonsense
+# URLs (api.api.github.com, posts to example.com answered by httpbin),
+# and cascades mangled ("1001" -> "8711", re-replaced random digits).
+# Every parameterized trajectory below samples ONCE and COMPUTES a
+# consistent (inst, cmd, resp). No .replace() anywhere in this file.
+def traj_sum():
+    n = random.randint(500, 5000)
+    return (f"Run a Python one-liner to compute the sum of 1 to {n}",
+            f'python3 -c "print(sum(range(1, {n + 1})))"',
+            str(n * (n + 1) // 2))
+
+def traj_prime():
+    n = random.randint(100, 9999)
+    is_p = n >= 2 and all(n % i != 0 for i in range(2, int(n ** 0.5) + 1))
+    return (f"Use python to check if {n} is prime",
+            f'python3 -c "n={n}; print(all(n % i != 0 for i in range(2, int(n**0.5)+1)))"',
+            "True" if is_p else "False")
+
+def traj_du():
+    g = random.randint(5, 200)
+    return ("Check the disk usage of the home directory",
+            "du -sh $HOME | cut -f1", f"{g}G")
+
+def traj_ip():
+    ip = (f"{random.randint(100, 255)}.{random.randint(0, 255)}."
+          f"{random.randint(0, 255)}.{random.randint(1, 254)}")
+    return ("Get your public IP address using curl",
+            "curl -fsSL https://ifconfig.me", ip)
+
+def traj_timeout():
+    t = random.randint(1, 30)
+    return (f"Check if a URL is up using curl with a timeout of {t} seconds",
+            f"curl -fsSL --max-time {t} -o /dev/null -w '%{{http_code}}' "
+            "https://httpbin.org/status/200",
+            "200")
+
+DYN_TRAJS = [traj_sum, traj_prime, traj_du, traj_ip, traj_timeout]
+
+def make_trajectories(n=2000):
+    rows = []
+    used = set()
+    attempts = 0
+    while len(rows) < n and attempts < n * 5:
+        attempts += 1
+        if random.random() < 0.7:
+            inst, cmd, resp = random.choice(DYN_TRAJS)()
+        else:
+            t = random.choice(TOOL_TEMPLATES)
+            inst, cmd, resp = t["instruction"], t["command"], t["response"]
+        text = (
+            f"### Instruction:\n{inst}\n\n"
+            f"### Response:\n"
+            f"$ {cmd}\n"
+            f"{resp}\n"
+        )
+        h = hashlib.sha256(text.encode()).hexdigest()[:16]
+        if h in used:
+            continue
+        used.add(h)
+        rows.append(text)
+    return rows
+
+# ---------------------------------------------------------------------------
+# Write
+# ---------------------------------------------------------------------------
+
+def write(rows, out, limit=0):
+    seen = set()
+    n_kept = 0
+    t0 = time.time()
+    tmp = out + ".tmp"
+    try: os.remove(tmp)
+    except OSError: pass
+    try:
+        f = open(tmp, "w")
+    except OSError as e:
+        print(f"Cannot open {tmp}: {e}"); return 0
+    with f:
+        for text in rows:
+            h = hashlib.sha256(text.encode()).hexdigest()[:16]
+            if h in seen: continue
+            seen.add(h)
+            try:
+                ids = enc.encode(text)
+                ids = [BOS] + list(ids)
+                f.write(" ".join(str(i) for i in ids) + "\n")
+                n_kept += 1
+            except Exception as e:
+                print(f"  err: {e}")
+            if limit and n_kept >= limit: break
+            if n_kept % 500 == 0:
+                print(f"  kept {n_kept:,}  {n_kept/(time.time()-t0+1e-9):.0f}/s")
+    try:
+        os.rename(tmp, out)
+    except OSError as e:
+        print(f"Cannot rename: {e}")
+        return 0
+    size = os.path.getsize(out) / 1e6
+    print(f"Wrote {n_kept:,} → {out} ({size:.1f} MB)")
+    return n_kept
+
+def main():
+    try: os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    except OSError as e: print(f"Cannot mkdir: {e}"); sys.exit(1)
+
+    rows = make_trajectories(2000)
+    print(f"Generated {len(rows):,} tool trajectories")
+    n = write(rows, OUT)
+    if n == 0: sys.exit(1)
+    print(f"\n✓ Phase 2 ready: {n} rows")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="520" style="background:#0b0e14">
+<circle cx="187" cy="273" r="9" fill="#7dd3fc"/><text x="198" y="277" fill="#e5e7eb" font-size="13">f0</text>
+<circle cx="280" cy="40" r="7" fill="#86efac"/><text x="291" y="44" fill="#e5e7eb" font-size="13">drop</text>
+<circle cx="337" cy="240" r="7" fill="#f87171"/><text x="348" y="244" fill="#e5e7eb" font-size="13">sq</text>
+<circle cx="480" cy="245" r="9" fill="#fbbf24"/><text x="491" y="249" fill="#e5e7eb" font-size="13">neg</text>
+<circle cx="346" cy="480" r="7" fill="#c084fc"/><text x="357" y="484" fill="#e5e7eb" font-size="13">shuf</text>
+<circle cx="260" cy="266" r="7" fill="#fb7185"/><text x="271" y="270" fill="#e5e7eb" font-size="13">s05</text>
+<circle cx="40" cy="287" r="7" fill="#ef4444"/><text x="51" y="291" fill="#e5e7eb" font-size="13">s20</text>
+<circle cx="187" cy="273" r="7" fill="#a5b4fc"/><text x="198" y="277" fill="#e5e7eb" font-size="13">n001</text>
+<circle cx="178" cy="286" r="7" fill="#f472b6"/><text x="189" y="290" fill="#e5e7eb" font-size="13">n01</text>
+</svg>

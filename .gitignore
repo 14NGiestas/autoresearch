@@ -7,7 +7,7 @@ wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.venv*
 worktrees/
 results/
 queue/
@@ -21,3 +21,44 @@ dev/
 
 # Results file
 results.tsv
+
+# Big/generated artifacts (never commit)
+checkpoints/
+*.pt
+logs/
+*.log
+node_modules/
+.ruff_cache/
+.direnv/
+.envrc
+.base_done
+.ft_done
+
+# Secrets / local config
+.env
+.env.*
+
+# Hoarded AI-chat training data (downloaded third-party artifacts; not source code)
+hoard/
+hoard_multi/
+hoard_v2/
+ai_chat_hoarder/hoard/
+**/raw/*.html
+**/raw/*.json
+
+# Local fpm binary copy (see README)
+/fpm
+
+# compiler artifacts leaked to repo root
+*.mod
+# third-party PDF->md conversions (not ours to redistribute)
+src/docs/
+tools/
+
+# biblioteca extraida para repo proprio (github.com/14NGiestas/safetensors-fortran)
+safetensors-fortran/
+
+# Projeto fpm MPI (mpi/): build proprio (mpif90) e scratch dos testes
+# (mpi/tests_ddp.sh). O fonte (mpi/fpm.toml, mpi/app/, mpi/tests_*.sh) e' versionado.
+mpi/build/
+mpi/scratch_*/

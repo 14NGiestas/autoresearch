@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# bin/check_eval_threads — o eval NAO pode depender do numero de threads.
+#
+# Por que existe: em 2026-09-20 o eval_bpb deu 2,340146 com OMP=1 e 4,661770 com
+# OMP=16. A causa era `base` fora da clausula private de um !$omp parallel do, ou
+# seja uma variavel COMPARTILHADA que cada thread sobrescrevia. O bug contaminou
+# a varredura de arquitetura e o inventario de tamanho, e ficou invisivel ate' o
+# mesmo eval ser rodado duas vezes com contagens de thread diferentes.
+#
+# Duas afirmacoes, checadas contra a MESMA rodada:
+#   1. INVARIANCIA: OMP=1 e OMP=8 dao o mesmo bpb.
+#   2. REGRESSAO: o valor bate com o gravado para este checkpoint (2,331826).
+#
+# Um teste que nao falha no codigo velho nao serve. Este foi rodado contra o
+# binario COM o bug (guarda em /tmp/aq/build_h6_kv1, anterior ao fix) e ele
+# FALHA, como deve.
+#
+# Uso: bin/check_eval_threads [CKPT] [ESPERADO] [DIR_BUILD]
+set -u
+CK="${1:-/tmp/dl/122/round16_common}"
+WANT="${2:-2.331826}"
+BD="${3:-/tmp/evalthreadchk}"
+TOL=1e-5
+
+[ -d "$CK" ] || { echo "check_eval_threads: sem checkpoint em $CK"; exit 2; }
+[ -f "$CK/arch.txt" ] || { echo "check_eval_threads: sem arch.txt em $CK"; exit 2; }
+
+# a arch sai do proprio checkpoint, e o binario sai do build_arch (que publica
+# o caminho). Nada de glob: foi glob com tail -1 que quebrou o job 155.
+rd() { sed -n "s/.*$1 *= *\([0-9]*\).*/\1/p" "$CK/arch.txt" | head -1; }
+D=$(rd d_model); H=$(rd n_head); KV=$(rd n_kv); L=$(rd n_layer); V=$(rd vocab); C=$(rd ctx)
+[ -z "$D" ] && { echo "check_eval_threads: arch.txt sem numeros"; exit 2; }
+
+# EVB_OVERRIDE aponta para um binario especifico. E' o que permite provar que
+# este teste FALHA no codigo com o bug -- um teste que nao falha no codigo velho
+# nao serve para nada.
+if [ -n "${EVB_OVERRIDE:-}" ]; then
+  EVB="$EVB_OVERRIDE"
+else
+  EVB=$(bin/build_arch "$D" "$H" "$KV" "$L" "$V" "$C" "$BD" 2>&1 \
+        | sed -n 's/^\[build_arch\] app eval_bpb //p')
+fi
+[ -n "$EVB" ] || { echo "check_eval_threads: build_arch nao publicou o eval_bpb"; exit 2; }
+echo "check_eval_threads: ckpt=$(basename "$CK") arch=d${D}_h${H}_kv${KV} evb=$EVB"
+
+run() {  # threads
+  OMP_NUM_THREADS=$1 OPENBLAS_NUM_THREADS=$1 \
+    .venv-numpy/bin/python3 scripts/eval_bpb_dir.py --eval "$EVB" --ckpt "$CK" 2>&1 | tail -1
+}
+
+B1=$(run 1)
+B8=$(run 8)
+echo "  OMP=1  bpb=$B1"
+echo "  OMP=8  bpb=$B8"
+
+FAIL=0
+awk -v a="$B1" -v b="$B8" -v t="$TOL" 'BEGIN{d=a-b; if(d<0)d=-d; exit !(d<=t)}' \
+  || { echo "  FALHOU: a bpb depende do numero de threads (invariância)"; FAIL=1; }
+awk -v a="$B1" -v w="$WANT" -v t="$TOL" 'BEGIN{d=a-w; if(d<0)d=-d; exit !(d<=t)}' \
+  || { echo "  FALHOU: $B1 != gravado $WANT (regressao)"; FAIL=1; }
+
+[ "$FAIL" = "0" ] && echo "  ok: invariante entre threads e igual ao gravado"
+exit "$FAIL"

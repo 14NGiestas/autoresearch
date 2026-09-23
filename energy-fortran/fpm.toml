@@ -1,0 +1,40 @@
+name = "fortran_energy"
+version = "0.1.0"
+license = "MIT"
+author = "autoresearch lab"
+maintainer = "autoresearch lab"
+copyright = "Copyright 2026, autoresearch lab"
+description = "Pure-Fortran in-process measurement of energy, CPU time, IO and phases: J, W, cpu_s, cores_busy per run and per phase, straight from /sys and /proc, with no external wrapper and no dependencies."
+keywords = ["energy", "power", "rapl", "hwmon", "profiling", "hpc", "fortran", "sustainability"]
+categories = ["io", "os", "tools"]
+# No dependencies at all: not even stdlib. The kernel is the interface
+# (/sys/class/powercap, /sys/class/hwmon, /proc/self/{stat,status,io}) and libc is
+# used only through iso_c_binding for readdir, because pure Fortran has no glob
+# and shelling out for a directory listing would be worse (fork + quoting).
+dependencies = {}
+
+[build]
+auto-executables = false
+auto-examples = false
+auto-tests = false
+
+[fortran]
+implicit-typing = false
+implicit-external = false
+source-form = "free"
+
+[library]
+source-dir = "src"
+
+[[test]]
+name = "test_energy"
+source-dir = "test"
+main = "test_energy.f90"
+
+[[example]]
+name = "measure_run"
+source-dir = "examples"
+main = "measure_run.f90"
+
+[install]
+library = true

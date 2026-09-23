@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# bin/job_env -- um lugar para o que TODO job precisa antes de rodar.
+#
+# Uso:  bin/job_env D H KV L V C BUILD_DIR [--commit SHA] [simbolo:arquivo ...]
+#       bin/job_env --build-dir DIR [--commit SHA] [simbolo:arquivo ...]
+#
+# No modo --build-dir, a arch sai do arquivo arch.txt que o build_arch gravou no
+# proprio build dir. O nome do diretorio NAO e' lido: nome e' convencao, e quem o
+# renomeia muda o significado em silencio. O arquivo e' o contrato, e o formato e'
+# o mesmo do arch.txt do checkpoint.
+#
+# COM --commit: faz fetch do remoto local (~/autoresearch.git, que a fermi empurra
+# por ssh porque o halfbeast nao alcanca a fermi por causa do NAT) e faz checkout
+# do SHA pedido. Assim o job roda um commit EXATO e nao uma copia que envelheceu.
+#
+# O que ele faz, nesta ordem, e para alto em qualquer falha:
+#   1. PREFLIGHT: confere que a fonte tem os simbolos que o job usa. A copia de
+#      uma maquina remota envelhece em silencio, e um train_run velho imprime a
+#      tabela de argumentos e sai sem dizer por que.
+#   2. HASH DA FONTE: grava um sha256 do conteudo de src/. E' o "commit-especifico"
+#      que funciona aqui, porque nao ha' git clone nas maquinas remotas e o repo
+#      nao esta' publicado. Todo log passa a dizer QUAL fonte rodou.
+#   3. BUILD: chama bin/build_arch, que constroi com fpm e publica o caminho.
+#   4. CAMINHO: sai da linha publicada pelo builder. NUNCA de glob com tail -1,
+#      que foi o que quebrou o job 155.
+#
+# Escreve $BUILD_DIR/job_env.sh, que o job carrega com `. "$BD/job_env.sh"`.
+# As variaveis sao TRAIN_RUN, EVAL_BPB e SRC_HASH.
+set -u
+if [ "${1:-}" = "--build-dir" ]; then
+  BD=${2:-}; [ -n "$BD" ] || { echo "uso: bin/job_env --build-dir DIR"; exit 2; }
+  shift 2
+  A="$BD/arch.txt"
+  [ -f "$A" ] || { echo "ARCH: $A nao existe."
+    echo "  O build dir precisa ter sido construido por bin/build_arch, que grava"
+    echo "  o arch.txt. Construa primeiro, ou passe os 6 parametros."
+    exit 2; }
+  rd() { sed -n "s/^$1 *= *\([0-9]*\).*/\1/p" "$A" | head -1; }
+  D=$(rd d_model); H=$(rd n_head); KV=$(rd n_kv)
+  L=$(rd n_layer); V=$(rd vocab); C=$(rd ctx)
+  for X in D H KV L V C; do eval "Z=\$$X"
+    [ -n "$Z" ] || { echo "ARCH: nao li $X de $A"; exit 2; }; done
+else
+  [ "$#" -ge 7 ] || { echo "uso: bin/job_env D H KV L V C BUILD_DIR [simbolo:arquivo ...]"; exit 2; }
+  D=$1; H=$2; KV=$3; L=$4; V=$5; C=$6; BD=$7; shift 7
+fi
+cd "$(dirname "$0")/.." || exit 2
+
+# --commit SHA: fixa o commit antes de qualquer coisa
+WANT=""
+if [ "${1:-}" = "--commit" ]; then WANT=${2:-}; shift 2; fi
+if [ -n "$WANT" ]; then
+  if [ -d .git ]; then
+    git fetch -q "$(git config --get remote.hb.url || echo "$HOME/autoresearch.git")" 2>/dev/null || true
+    git checkout -q "$WANT" || { echo "GIT: nao consegui checkout $WANT"; exit 2; }
+  else
+    echo "GIT: esta arvore nao e' um repo; --commit ignorado"; exit 2
+  fi
+fi
+
+# 0. ARVORE PROIBIDA. A regra 1 do AGENTS.md: nunca escrever em src/build nem em
+# energy-fortran/build. Aqueles binarios sao dependencia de jobs agendados, e o
+# caminho e' resolvido so' no momento da execucao. Construir la' mata job na fila.
+case "$BD" in
+  src/build*|*/src/build*|energy-fortran/build*|*/energy-fortran/build*)
+    echo "RECUSO: $BD esta' na arvore PROIBIDA (AGENTS.md regra 1)."
+    echo "  Escolha outro build dir, por exemplo /tmp/<seu_nome>/bd."
+    exit 4;;
+esac
+
+# A CAMADA DO TAG. O driver (fedavg_rounds.pick) procura
+#   $BD/<tag>/<hash>/app/<app>
+# e o build_arch constroi direto em $BD/<hash>/app/. Entao o build dir PRECISA
+# terminar no tag da arch. Sem isso o binario existe e o driver nao o encontra, e
+# a mensagem que aparece e' "train_run nao buildado para arch_...", que aponta para
+# o lugar errado. Verificado em 2026-09-21, e o custo foi um job inteiro perdido.
+TAG="arch_d${D}_h${H}_kv${KV}_l${L}_v${V}_c${C}"
+case "$BD" in
+  */"$TAG"|"$TAG") : ;;
+  *) echo "BUILD DIR SEM O TAG DA ARCH."
+     echo "  recebido: $BD"
+     echo "  o driver procura em: $BD/$TAG/<hash>/app/"
+     echo "  use:      $BD/$TAG"
+     exit 2;;
+esac
+
+# 1. PREFLIGHT
+for NEED in "$@"; do
+  PAT="${NEED%%:*}"; F="${NEED##*:}"
+  if [ ! -f "$F" ]; then echo "PREFLIGHT: $F nao existe"; exit 2; fi
+  if ! grep -q "$PAT" "$F"; then
+    echo "PREFLIGHT FALHOU: $F nao tem '$PAT'"
+    echo "  A fonte desta maquina esta' velha. Rode o rsync de src/ e bin/."
+    exit 2
+  fi
+done
+[ -x bin/build_arch ] || { echo "PREFLIGHT: bin/build_arch ausente"; exit 2; }
+
+# 2. COMMIT: o sha do git quando ha' repo, senao um sha256 de src/
+if [ -d .git ]; then
+  SRC_HASH=$(git rev-parse --short=16 HEAD)
+else
+  SRC_HASH=$(find src -type f \( -name '*.f90' -o -name '*.F90' -o -name '*.toml' \) \
+    -exec sha256sum {} + | sort -k2 | sha256sum | cut -c1-16)
+fi
+
+# 3. BUILD
+LOG=$(bin/build_arch "$D" "$H" "$KV" "$L" "$V" "$C" "$BD" 2>&1) || {
+  echo "$LOG" | tail -12; echo "BUILD FALHOU"; exit 3; }
+
+# 4. CAMINHO PUBLICADO
+TR=$(printf '%s\n' "$LOG" | sed -n 's/^\[build_arch\] app train_run //p')
+EV=$(printf '%s\n' "$LOG" | sed -n 's/^\[build_arch\] app eval_bpb //p')
+[ -n "$TR" ] || { echo "BUILD nao publicou train_run"; exit 3; }
+
+mkdir -p "$BD"
+{
+  echo "SRC_HASH=$SRC_HASH"
+  echo "TRAIN_RUN=$TR"
+  echo "EVAL_BPB=$EV"
+} > "$BD/job_env.sh"
+echo "SRC_HASH $SRC_HASH"
+echo "BIN train_run $TR"
+[ -n "$EV" ] && echo "BIN eval_bpb $EV"
+exit 0

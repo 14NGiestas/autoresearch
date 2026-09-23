@@ -4,8 +4,12 @@ version = "0.1.0"
 description = "Autonomous pretraining research swarm"
 readme = "README.md"
 requires-python = ">=3.10"
+# torch NAO entra aqui. Este repo e' torch-free: o treino e' Fortran puro, e os
+# scripts usam numpy/pyarrow/tiktoken/matplotlib. O torch vinha do fork de
+# origem e fazia qualquer `uv run` que resolvesse o projeto baixar GBs de CUDA,
+# alem de trocar o .venv da raiz. Se uma ferramenta especifica precisa de torch,
+# ela declara isso no ambiente dela, nao no do repo.
 dependencies = [
-    "kernels>=0.11.7",
     "matplotlib>=3.10.8",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
@@ -13,15 +17,4 @@ dependencies = [
     "requests>=2.32.0",
     "rustbpe>=0.1.0",
     "tiktoken>=0.11.0",
-    "torch==2.9.1",
 ]
-
-[tool.uv.sources]
-torch = [
-    { index = "pytorch-cu128" },
-]
-
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# bin/hep — wrapper do hep-protocol (JS, arXiv:2607.09195v1).
+#
+# O hep.py (Python) foi aposentado: a implementacao de referencia do lab virou o
+# pacote packages/hep-js (npm: hep-protocol). Este wrapper prefere o build local
+# (offline, pinado no repo) e so cai para npx se o dist nao existir.
+set -eu
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CLI="$ROOT/packages/hep-js/dist/cli.js"
+if [ -f "$CLI" ]; then
+  exec node "$CLI" "$@"
+fi
+exec npx --yes hep-protocol@0.1.2 "$@"

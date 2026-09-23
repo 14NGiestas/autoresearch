@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec env -u LD_LIBRARY_PATH /nix/store/rvscgw7b3zdw2j02pghpspq33fq09mad-tmux-3.6a/bin/tmux "$@"
